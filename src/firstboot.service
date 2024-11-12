@@ -1,0 +1,14 @@
+[Unit]
+Description=FirstBoot
+Wants=time-sync.target
+Before=rc-local.service
+After=network.target time-sync.target apt-daily.service apt-daily-upgrade.service 
+ConditionFileNotEmpty=/root/setup.sh
+
+[Service]
+ExecStart=/root/setup.sh
+Type=oneshot
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
