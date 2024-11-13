@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# deploy native patch
+mkdir -vp /home/pi/Documents/templates/
+cp -v /root/native.vcv /home/pi/Documents/templates/native.vcv
+chown -R pi:pi /home/pi/Documents/templates/
+
 # upgrade system
 apt-get update
 apt-get upgrade -y
@@ -14,11 +19,6 @@ echo "SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", MODE=\"0666\"" > /etc/ud
 apt-get install ufw -y
 ufw allow ssh
 ufw enable
-
-# deploy native patch
-mkdir -vp /home/pi/Documents/templates/
-cp -v /root/native.vcv /home/pi/Documents/templates/native.vcv
-chown -R pi:pi /home/pi/Documents/templates/
 
 # cleanup
 mv /root/setup.sh /root/setup.sh.done

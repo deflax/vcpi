@@ -47,6 +47,7 @@ wget https://github.com/DISTRHO/Cardinal/releases/download/24.09/Cardinal-linux-
 tar -xzvf /tmp/rpi-img/opt/Cardinal/Cardinal-linux-aarch64.tar.gz -C /tmp/rpi-img/opt/Cardinal/ CardinalNative
 
 # setup GUI payload
+cp -v ./src/payload.service /tmp/rpi-img/lib/systemd/system/payload.service
 ln -v -s /lib/systemd/system/payload.service /tmp/rpi-img/etc/systemd/system/graphical.target.wants
 
 echo "] press enter to write the image"
