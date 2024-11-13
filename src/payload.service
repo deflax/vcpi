@@ -1,0 +1,16 @@
+[Unit]
+Description=Start GUI Payload
+
+[Service]
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+User=pi
+Group=pi
+ExecStart=/opt/Cardinal/CardinalNative
+Restart=always
+RestartSec=10s
+KillMode=process
+TimeoutSec=infinity
+
+[Install]
+WantedBy=graphical.target
