@@ -49,7 +49,7 @@ tar -xzvf /tmp/rpi-img/opt/Cardinal/Cardinal-linux-aarch64.tar.gz -C /tmp/rpi-im
 ln -v -s /lib/systemd/system/payload.service /tmp/rpi-img/etc/systemd/system/graphical.target.wants
 
 # deploy native patch
-cp -v ./patch/native.vcv /home/pi/Documents/templates/native.vcv
+cp -v ./patch/native.vcv /tmp/rpi-img/home/pi/Documents/templates/native.vcv
 
 echo "] press enter to write the image"
 read
