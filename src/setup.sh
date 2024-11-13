@@ -15,6 +15,11 @@ apt-get install ufw -y
 ufw allow ssh
 ufw enable
 
+# deploy native patch
+mkdir -vp /home/pi/Documents/templates/
+cp -v /root/native.vcv /home/pi/Documents/templates/native.vcv
+chown -R pi:pi /home/pi/Documents/templates/
+
 # cleanup
 mv /root/setup.sh /root/setup.sh.done
 chmod -x /root/setup.sh.done

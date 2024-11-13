@@ -27,8 +27,9 @@ mkdir /tmp/rpi-img/home/pi/.ssh
 chown 1000:1000 /tmp/rpi-img/home/pi/.ssh
 chown 1000:1000 /tmp/rpi-img/home/pi/.ssh/authorized_keys
 
-#provision scripts
+#provision files
 cp -v ./src/setup.sh /tmp/rpi-img/root/setup.sh
+cp -v ./patch/native.vcv /tmp/rpi-img/root/native.vcv
 
 #enable systemd-time-wait-sync
 ln -v -s /lib/systemd/system/systemd-time-wait-sync.service /tmp/rpi-img/etc/systemd/system/sysinit.target.wants/systemd-time-wait-sync.service
@@ -47,9 +48,6 @@ tar -xzvf /tmp/rpi-img/opt/Cardinal/Cardinal-linux-aarch64.tar.gz -C /tmp/rpi-im
 
 # setup GUI payload
 ln -v -s /lib/systemd/system/payload.service /tmp/rpi-img/etc/systemd/system/graphical.target.wants
-
-# deploy native patch
-cp -v ./patch/native.vcv /tmp/rpi-img/home/pi/Documents/templates/native.vcv
 
 echo "] press enter to write the image"
 read
