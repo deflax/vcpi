@@ -37,6 +37,12 @@ ln -v -s /lib/systemd/system/firstboot.service /tmp/rpi-img/etc/systemd/system/m
 #enable systemd-time-wait-sync
 ln -v -s /lib/systemd/system/systemd-time-wait-sync.service /tmp/rpi-img/etc/systemd/system/sysinit.target.wants/systemd-time-wait-sync.service
 
+# disable built-in audio
+sed -i 's/^dtparam=audio=on/#&/' /tmp/rpi-img/boot/firmware/config.txt
+
+echo "] press enter to write the image
+read
+
 sync
 
 #cleanup
