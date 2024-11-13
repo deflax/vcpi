@@ -38,7 +38,7 @@ ln -v -s /lib/systemd/system/firstboot.service /tmp/rpi-img/etc/systemd/system/m
 ln -v -s /lib/systemd/system/systemd-time-wait-sync.service /tmp/rpi-img/etc/systemd/system/sysinit.target.wants/systemd-time-wait-sync.service
 
 # disable built-in audio
-sed -i 's/^dtparam=audio=on/#&/' /tmp/rpi-img/boot/firmware/config.txt
+sed -i 's/^dtparam=audio=on/#&/' /tmp/rpi-img/boot/config.txt
 
 echo "] press enter to write the image"
 read
@@ -52,5 +52,4 @@ umount /tmp/rpi-img
 rmdir -v /tmp/rpi-img
 
 #write image
-xz -v -T 0 -z src.img
-mv -v src.img.xz vcpi.img.xz
+mv -v src.img vcpi.img
