@@ -6,12 +6,12 @@ Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/pi/.Xauthority
 User=pi
 Group=pi
+ExecStartPre=/bin/sleep 60
 ExecStart=/opt/Cardinal/CardinalNative
 Restart=always
 RestartSec=10s
 KillMode=process
 TimeoutSec=infinity
-ConditionFileNotEmpty=/home/pi/Documents/templates/native.vcv
 
 [Install]
 WantedBy=graphical.target
