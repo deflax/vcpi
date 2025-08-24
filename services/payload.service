@@ -7,7 +7,7 @@ Environment=XAUTHORITY=/home/pi/.Xauthority
 User=pi
 Group=pi
 ExecStartPre=/bin/sleep 60
-ExecStart=/opt/Cardinal/CardinalNative
+ExecStart=/opt/sonic-pi/bin/sonic-pi
 Restart=always
 RestartSec=10s
 KillMode=process
