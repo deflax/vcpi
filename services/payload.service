@@ -6,8 +6,8 @@ Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/pi/.Xauthority
 User=pi
 Group=pi
-ExecStartPre=/bin/sleep 60
-ExecStart=/opt/sonic-pi/bin/sonic-pi
+ExecStartPre=/bin/sleep 30
+ExecStart/usr/bin/plugdata /home/pi/init.pd
 Restart=always
 RestartSec=10s
 KillMode=process
