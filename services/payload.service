@@ -7,7 +7,7 @@ Environment=XAUTHORITY=/home/pi/.Xauthority
 User=pi
 Group=pi
 ExecStartPre=/bin/sleep 30
-ExecStart/usr/bin/plugdata /home/pi/Documents/plugdata/autorun.pd
+ExecStart=/usr/bin/plugdata /home/pi/Documents/plugdata/autorun.pd
 Restart=always
 RestartSec=10s
 KillMode=process
