@@ -46,7 +46,7 @@ ln -v -s /lib/systemd/system/payload.service /tmp/rpi-img/etc/systemd/system/gra
 
 #provision project files
 cp -v ./src/setup.sh /tmp/rpi-img/root/setup.sh
-cp -v ./patch/init.pd /tmp/rpi-img/root/init.pd
+cp -v ./patch/autorun.pd /tmp/rpi-img/root/autorun.pd
 
 echo "] press enter to write the image"
 read

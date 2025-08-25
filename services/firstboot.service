@@ -1,5 +1,5 @@
 [Unit]
-Description=FirstBoot
+Description=Run on first boot once
 Wants=time-sync.target
 Before=rc-local.service
 After=network.target time-sync.target apt-daily.service apt-daily-upgrade.service 

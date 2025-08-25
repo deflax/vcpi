@@ -11,6 +11,9 @@ apt-get upgrade -y
 # setup apps
 apt-get install htop wget curl -y
 
+# setup dev packages
+apt-get install puredata-dev libwebkit2dgtk-4.0-dev libcurl4-gnutls-dev libasound2-dev -y
+
 # setup plugdata
 apt-get install plugdata
 
@@ -23,9 +26,9 @@ ufw allow ssh
 ufw enable
 
 # deploy patch
-mkdir -vp /home/pi/
-mv -v /root/init.pd /home/pi/init.pd
-chown pi:pi /home/pi/init.pd
+mkdir -vp /home/pi/Documents/plugdata/
+mv -v /root/autorun.pd /home/pi/Documents/plugdata/autorun.pd
+chown pi:pi -R /home/pi/Documents/plugdata
 
 # cleanup
 mv /root/setup.sh /root/setup.sh.done
