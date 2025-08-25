@@ -12,10 +12,11 @@ apt-get upgrade -y
 apt-get install htop wget curl -y
 
 # setup dev packages
-apt-get install puredata-dev libwebkit2dgtk-4.0-dev libcurl4-gnutls-dev libasound2-dev -y
+apt-get install puredata-dev libjack-jackd2-dev libwebkit2dgtk-4.0-dev libcurl4-openssl-dev libasound2-dev -y
 
 # setup plugdata
-apt-get install plugdata
+#apt-get install plugdata
+# disabled until 0.9.2
 
 # setup udev
 echo "SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", MODE=\"0666\"" > /etc/udev/rules.d/50-udev-default.rules
