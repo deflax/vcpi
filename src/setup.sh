@@ -23,17 +23,13 @@ apt-get install \
   libasound2-dev \
   libreadline-dev \
   libxkbcommon-dev \
+  libqt6widgets6 \
   jackd2 -y
   # Accept realtime permissions for jackd when asked
 
-# apt-get install \
-#   qt6-base-dev \
-#   qt6-svg-dev \
-#   qt6-tools-dev \
-#   qt6-wayland \
-#   qt6-websockets-dev -y
-
-# apt-get install qt6-webengine-dev -y
+# setup sonic-pi
+wget https://sonic-pi.net/files/releases/v4.6.0/sonic-pi_4.6.0_1_bookworm.arm64.deb
+dpkg -i sonic-pi_4.6.0_1_bookworm.arm64.deb
 
 # setup udev
 echo "SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", MODE=\"0666\"" > /etc/udev/rules.d/50-udev-default.rules
@@ -42,10 +38,6 @@ echo "SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", MODE=\"0666\"" > /etc/ud
 apt-get install ufw -y
 ufw allow ssh
 ufw enable
-
-# setup sonic-pi
-wget https://sonic-pi.net/files/releases/v4.6.0/sonic-pi_4.6.0_1_bookworm.arm64.deb
-dpkg -i sonic-pi_4.6.0_1_bookworm.arm64.deb
 
 # #build supercolider
 # echo "building in:"
