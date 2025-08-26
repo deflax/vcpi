@@ -1,1 +1,0 @@
-s.waitForBoot{ {SinOsc.ar([400, 404])}.play }

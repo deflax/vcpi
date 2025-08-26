@@ -9,7 +9,7 @@ Environment=JACK_NO_AUDIO_RESERVATION=1
 User=pi
 Group=pi
 ExecStartPre=/bin/sleep 10
-ExecStart=/usr/local/bin/sclang /home/pi/autorun.scd
+ExecStart=/opt/sonic-pi/bin/sonic-pi /home/pi/autorun.rb
 Restart=always
 RestartSec=10s
 KillMode=process
