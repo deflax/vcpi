@@ -55,7 +55,7 @@ ufw enable
 echo /usr/bin/jackd -P75 -p16 -dalsa -dhw:0 -p1024 -n3 > /home/pi/.jackdrc
 
 # deploy patch
-mv -v /root/autorun.rb /home/pi/.sonic-pi/config/init.rb
+mv -v /root/main.rb /home/pi/.sonic-pi/config/init.rb
 chown -R pi:pi /home/pi/.sonic-pi
 
 # cleanup

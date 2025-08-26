@@ -46,7 +46,7 @@ ln -v -s /lib/systemd/system/payload.service /tmp/rpi-img/etc/systemd/system/gra
 
 #provision project files
 cp -v ./src/setup.sh /tmp/rpi-img/root/setup.sh
-cp -v ./patch/init.rb /tmp/rpi-img/root/init.rb
+cp -v ./patch/main.rb /tmp/rpi-img/root/main.rb
 
 sync
 
