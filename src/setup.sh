@@ -6,6 +6,7 @@ apt-get upgrade -y
 
 # setup apps
 apt-get install htop \
+  wget \
   curl \
   cpufrequtils -y
 
