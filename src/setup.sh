@@ -44,8 +44,8 @@ ufw allow ssh
 ufw enable
 
 # setup sonic-pi
-wget https://sonic-pi.net/files/releases/v4.6.0/sonic-pi_4.6.0_1_bookworm.arm64.deb -o sonicpi.deb
-dpkg -i sonicpi.deb
+wget https://sonic-pi.net/files/releases/v4.6.0/sonic-pi_4.6.0_1_bookworm.arm64.deb
+dpkg -i sonic-pi_4.6.0_1_bookworm.arm64.deb
 
 # #build supercolider
 # echo "building in:"
