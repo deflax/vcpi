@@ -8,6 +8,7 @@ apt-get upgrade -y
 apt-get install htop \
   wget \
   curl \
+  vim \
   cpufrequtils -y
 
 # setup packages
