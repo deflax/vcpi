@@ -1,22 +1,38 @@
 #!/bin/bash
 
-# set opensuse raspbian repo for plugdata
-echo 'deb http://download.opensuse.org/repositories/home:/plugdata/Raspbian_12/ /' | tee /etc/apt/sources.list.d/home:plugdata.list
-curl -fsSL https://download.opensuse.org/repositories/home:plugdata/Raspbian_12/Release.key | gpg --dearmor | tee /etc/apt/trusted.gpg.d/home_plugdata.gpg > /dev/null
-
 # upgrade system
 apt-get update
 apt-get upgrade -y
 
 # setup apps
-apt-get install htop wget curl -y
+apt-get install htop \
+  curl \
+  cpufrequtils -y
 
-# setup dev packages
-apt-get install puredata-dev libjack-jackd2-dev libwebkit2dgtk-4.0-dev libcurl4-openssl-dev libasound2-dev -y
+# setup packages
+apt-get install \
+  build-essential \
+  cmake \
+  libjack-jackd2-dev \
+  libsndfile1-dev \
+  libfftw3-dev \
+  libxt-dev \
+  libavahi-client-dev \
+  libudev-dev \
+  libasound2-dev \
+  libreadline-dev \
+  libxkbcommon-dev \
+  jackd2 -y
+  # Accept realtime permissions for jackd when asked
 
-# setup plugdata
-#apt-get install plugdata
-# disabled until 0.9.2
+apt-get install \
+  qt6-base-dev \
+  qt6-svg-dev \
+  qt6-tools-dev \
+  qt6-wayland \
+  qt6-websockets-dev -y
+
+apt-get install qt6-webengine-dev -y
 
 # setup udev
 echo "SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", MODE=\"0666\"" > /etc/udev/rules.d/50-udev-default.rules
@@ -26,10 +42,24 @@ apt-get install ufw -y
 ufw allow ssh
 ufw enable
 
+#build supercolider
+echo "building in:"
+pwd
+git clone --branch main --recurse-submodules https://github.com/supercollider/supercollider.git
+cd supercollider
+mkdir build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release -DSUPERNOVA=OFF -DSC_EL=OFF -DSC_VIM=ON -DNATIVE=ON ..
+make -j3
+make install
+ldconfig
+
+#setup jack
+echo /usr/bin/jackd -P75 -p16 -dalsa -dhw:0 -p1024 -n3 > /home/pi/.jackdrc
+
+
 # deploy patch
-mkdir -vp /home/pi/Documents/plugdata/
-mv -v /root/autorun.pd /home/pi/Documents/plugdata/autorun.pd
-chown pi:pi -R /home/pi/Documents/plugdata
+mv -v /root/autorun.scd /home/pi/autorun.scd
+chown pi:pi -R /home/pi/autorun.scd
 
 # cleanup
 mv /root/setup.sh /root/setup.sh.done
@@ -37,6 +67,5 @@ chmod -x /root/setup.sh.done
 
 echo "done :)"
 
-# reboot and exit
-reboot
+# reboot
 exit 0

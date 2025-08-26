@@ -4,10 +4,12 @@ Description=Autorun GUI payload
 [Service]
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/pi/.Xauthority
+Environment=QT_QPA_PLATFORM=offscreen
+Environment=JACK_NO_AUDIO_RESERVATION=1
 User=pi
 Group=pi
-ExecStartPre=/bin/sleep 30
-ExecStart=/usr/bin/plugdata /home/pi/Documents/plugdata/autorun.pd
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/local/bin/sclang /home/pi/autorun.scd
 Restart=always
 RestartSec=10s
 KillMode=process
