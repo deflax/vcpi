@@ -21,6 +21,9 @@ mount /dev/loop8p1 /tmp/rpi-img/boot
 touch /tmp/rpi-img/boot/ssh
 cp -v userconf.txt /tmp/rpi-img/boot/userconf
 
+#wifi
+cp -v wpa_supplicant.conf /tmp/rpi-img/boot/wpa_supplicant.conf
+
 # pi user keys
 mkdir /tmp/rpi-img/home/pi/.ssh
 #echo "" > /tmp/rpi-img/home/pi/.ssh/authorized_keys

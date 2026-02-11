@@ -33,17 +33,19 @@ synchronisation, designed for use with an **Arturia Beatstep Pro** and an
 
 ### Build the Image
 
-1. Execute the `prepare-image.sh [image]` script as `root` where `[image]` is the url to raspiOS.
+1. Edit `wpa_supplicant.conf` with your WiFi network name and password.
 
-2. Flash the `vcpi.img` to SD card. You can use Rpi Imager to set additional settings like wifi.
+2. Execute the `prepare-image.sh [image]` script as `root` where `[image]` is the url to raspiOS.
+
+3. Flash the `vcpi.img` to SD card.
 
 ### First Boot
 
-3. Boot Rpi on DHCP enabled network. The boot script should run `setup.sh` on first boot and reboot the system when its done.
+4. Boot Rpi on DHCP enabled network. The boot script should run `setup.sh` on first boot and reboot the system when its done.
 
-4. Login using user: `pi` pass: `vcpi`
+5. Login using user: `pi` pass: `vcpi`
 
-5. After reboot, the `vcpi` payload service starts automatically and runs LinkVST.
+6. After reboot, the `vcpi` payload service starts automatically and runs LinkVST.
 
 ### Debugging
 
