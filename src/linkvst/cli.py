@@ -40,9 +40,20 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 """
     prompt = "linkvst> "
 
-    def __init__(self, host: VSTHost):
-        super().__init__()
+    def __init__(self, host: VSTHost, stdout=None, owns_host: bool = True):
+        super().__init__(stdout=stdout)
         self.host = host
+        # When True, quit/exit will call host.shutdown().
+        # Set to False when running behind the socket server (the server
+        # manages the host lifecycle).
+        self._owns_host = owns_host
+
+    # -- helper for redirectable output --------------------------------------
+
+    def _print(self, *args, **kwargs):
+        """Print to self.stdout so output is captured in server mode."""
+        kwargs.setdefault("file", self.stdout)
+        print(*args, **kwargs)
 
     # -- plugins -------------------------------------------------------------
 
@@ -50,26 +61,26 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         """Load instrument: load <slot 1-8> <path> [name]"""
         parts = arg.strip().split(maxsplit=2)
         if len(parts) < 2:
-            print("Usage: load <slot 1-8> <path> [name]")
+            self._print("Usage: load <slot 1-8> <path> [name]")
             return
         try:
             idx = _slot_to_internal(int(parts[0]))
         except ValueError as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
             return
         path = parts[1]
         name = parts[2] if len(parts) > 2 else None
         try:
             slot = self.host.load_instrument(idx, path, name)
-            print(f"  slot {parts[0]} = {slot.name}")
+            self._print(f"  slot {parts[0]} = {slot.name}")
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     def do_load_fx(self, arg):
         """Load effect: load_fx <path> [slot 1-8|master] [name]"""
         parts = arg.strip().split(maxsplit=2)
         if not parts:
-            print("Usage: load_fx <path> [slot 1-8|master] [name]")
+            self._print("Usage: load_fx <path> [slot 1-8|master] [name]")
             return
         path = parts[0]
         target = parts[1] if len(parts) > 1 else "master"
@@ -77,30 +88,30 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         try:
             slot_idx = None if target == "master" else _slot_to_internal(int(target))
         except ValueError as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
             return
         try:
             self.host.load_effect(path, slot_idx, name)
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     def do_remove_fx(self, arg):
         """Remove effect: remove_fx <slot 1-8|master> <fx_index>"""
         parts = arg.strip().split()
         if len(parts) < 2:
-            print("Usage: remove_fx <slot 1-8|master> <fx_index>")
+            self._print("Usage: remove_fx <slot 1-8|master> <fx_index>")
             return
         try:
             slot_idx = None if parts[0] == "master" else _slot_to_internal(int(parts[0]))
         except ValueError as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
             return
         fx_idx = int(parts[1])
         try:
             self.host.remove_effect(slot_idx, fx_idx)
-            print("  Removed.")
+            self._print("  Removed.")
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     def do_slots(self, arg):
         """Show all 8 instrument slots."""
@@ -108,7 +119,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         for i, slot in enumerate(self.host.engine.slots):
             display_num = i + 1
             if slot is None:
-                print(f"  [{display_num}] (empty)")
+                self._print(f"  [{display_num}] (empty)")
                 continue
             flags = []
             if slot.muted:
@@ -118,21 +129,21 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             chs = ",".join(str(c + 1) for c in sorted(slot.midi_channels)) or "-"
             audible = (not slot.muted) and (not any_solo or slot.solo)
             aud_mark = " " if audible else "x"
-            print(f"  [{display_num}] {aud_mark} {slot.name:<20} ch={chs:<8} "
-                  f"gain={slot.gain:.2f}  {''.join(flags)}")
+            self._print(f"  [{display_num}] {aud_mark} {slot.name:<20} ch={chs:<8} "
+                        f"gain={slot.gain:.2f}  {''.join(flags)}")
             for j, fx in enumerate(slot.effects):
-                print(f"        fx[{j + 1}] {Path(fx.path_to_plugin_file).stem}")
+                self._print(f"        fx[{j + 1}] {Path(fx.path_to_plugin_file).stem}")
         if self.host.engine.master_effects:
-            print("  master bus:")
+            self._print("  master bus:")
             for j, fx in enumerate(self.host.engine.master_effects):
-                print(f"    fx[{j + 1}] {Path(fx.path_to_plugin_file).stem}")
-        print(f"  master gain: {self.host.engine.master_gain:.2f}")
+                self._print(f"    fx[{j + 1}] {Path(fx.path_to_plugin_file).stem}")
+        self._print(f"  master gain: {self.host.engine.master_gain:.2f}")
 
     def do_params(self, arg):
         """Show params: params <slot 1-8>  or  params master <fx_index>"""
         parts = arg.strip().split()
         if not parts:
-            print("Usage: params <slot 1-8> | params master <fx_index>")
+            self._print("Usage: params <slot 1-8> | params master <fx_index>")
             return
         if parts[0] == "master":
             fx_idx = int(parts[1]) - 1 if len(parts) > 1 else 0
@@ -141,26 +152,26 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             try:
                 idx = _slot_to_internal(int(parts[0]))
             except ValueError as e:
-                print(f"Error: {e}")
+                self._print(f"Error: {e}")
                 return
             slot = self.host.engine.slots[idx]
             if slot is None:
-                print("  Empty slot")
+                self._print("  Empty slot")
                 return
             plugin = slot.plugin
         for name in plugin.parameters:
             try:
                 val = getattr(plugin, name)
                 rng = plugin.parameters[name].range
-                print(f"  {name} = {val}  (range {rng[0]:.3f} .. {rng[1]:.3f})")
+                self._print(f"  {name} = {val}  (range {rng[0]:.3f} .. {rng[1]:.3f})")
             except Exception:
-                print(f"  {name} = ???")
+                self._print(f"  {name} = ???")
 
     def do_set(self, arg):
         """Set param: set <slot 1-8> <name> <value>  or  set master <fx> <name> <value>"""
         parts = arg.strip().split()
         if len(parts) < 3:
-            print("Usage: set <slot 1-8> <name> <value>")
+            self._print("Usage: set <slot 1-8> <name> <value>")
             return
         if parts[0] == "master":
             fx_idx = int(parts[1]) - 1
@@ -170,11 +181,11 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             try:
                 idx = _slot_to_internal(int(parts[0]))
             except ValueError as e:
-                print(f"Error: {e}")
+                self._print(f"Error: {e}")
                 return
             slot = self.host.engine.slots[idx]
             if slot is None:
-                print("  Empty slot")
+                self._print("  Empty slot")
                 return
             plugin = slot.plugin
             pname, pval = parts[1], parts[2]
@@ -185,9 +196,9 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
                 pval = pval.lower() == "true"
         try:
             setattr(plugin, pname, pval)
-            print(f"  {pname} = {pval}")
+            self._print(f"  {pname} = {pval}")
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     # -- gain / mute / solo --------------------------------------------------
 
@@ -195,46 +206,46 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         """Set slot gain: gain <slot 1-8> <0.0-1.0>"""
         parts = arg.strip().split()
         if len(parts) < 2:
-            print("Usage: gain <slot 1-8> <value>")
+            self._print("Usage: gain <slot 1-8> <value>")
             return
         try:
             idx = _slot_to_internal(int(parts[0]))
         except ValueError as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
             return
         slot = self.host.engine.slots[idx]
         if slot:
             slot.gain = float(parts[1])
-            print(f"  gain = {slot.gain:.2f}")
+            self._print(f"  gain = {slot.gain:.2f}")
 
     def do_mute(self, arg):
         """Toggle mute: mute <slot 1-8>"""
         try:
             idx = _slot_to_internal(int(arg.strip()))
         except ValueError as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
             return
         slot = self.host.engine.slots[idx]
         if slot:
             slot.muted = not slot.muted
-            print(f"  {slot.name}: {'MUTED' if slot.muted else 'unmuted'}")
+            self._print(f"  {slot.name}: {'MUTED' if slot.muted else 'unmuted'}")
 
     def do_solo(self, arg):
         """Toggle solo: solo <slot 1-8>"""
         try:
             idx = _slot_to_internal(int(arg.strip()))
         except ValueError as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
             return
         slot = self.host.engine.slots[idx]
         if slot:
             slot.solo = not slot.solo
-            print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
+            self._print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
 
     def do_master(self, arg):
         """Set master gain: master <0.0-1.0>"""
         if not arg.strip():
-            print(f"  master gain = {self.host.engine.master_gain:.2f}")
+            self._print(f"  master gain = {self.host.engine.master_gain:.2f}")
             return
         self.host.engine.master_gain = float(arg.strip())
 
@@ -244,36 +255,36 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         """Route MIDI channel to slot: route <ch 1-16> <slot 1-8>"""
         parts = arg.strip().split()
         if len(parts) < 2:
-            print("Usage: route <channel 1-16> <slot 1-8>")
+            self._print("Usage: route <channel 1-16> <slot 1-8>")
             return
         try:
             ch = _ch_to_internal(int(parts[0]))
             idx = _slot_to_internal(int(parts[1]))
         except ValueError as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
             return
         self.host.route(ch, idx)
-        print(f"  ch {parts[0]} -> slot {parts[1]}")
+        self._print(f"  ch {parts[0]} -> slot {parts[1]}")
 
     def do_unroute(self, arg):
         """Unroute MIDI channel: unroute <ch 1-16>"""
         try:
             ch = _ch_to_internal(int(arg.strip()))
         except ValueError as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
             return
         self.host.unroute(ch)
 
     def do_routing(self, arg):
         """Show MIDI routing."""
         if not self.host._channel_map:
-            print("  No routes.")
+            self._print("  No routes.")
             return
         for ch in sorted(self.host._channel_map):
             idx = self.host._channel_map[ch]
             slot = self.host.engine.slots[idx]
             name = slot.name if slot else "(empty)"
-            print(f"  ch {ch + 1} -> slot {idx + 1} ({name})")
+            self._print(f"  ch {ch + 1} -> slot {idx + 1} ({name})")
 
     # -- audio ---------------------------------------------------------------
 
@@ -285,7 +296,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         try:
             self.host.start_audio(dev)
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     def do_audio_stop(self, arg):
         """Stop audio."""
@@ -294,9 +305,9 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
     def do_devices(self, arg):
         """List audio devices."""
         if HAS_SOUNDDEVICE:
-            print(sd.query_devices())
+            self._print(sd.query_devices())
         else:
-            print("  sounddevice not installed")
+            self._print("  sounddevice not installed")
 
     # -- MIDI ports ----------------------------------------------------------
 
@@ -304,10 +315,10 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         """List MIDI input ports."""
         ports = MidiPort.list_ports()
         if not ports:
-            print("  No MIDI input ports found.")
+            self._print("  No MIDI input ports found.")
             return
         for i, name in enumerate(ports):
-            print(f"  [{i}] {name}")
+            self._print(f"  [{i}] {name}")
 
     def do_midi_seq(self, arg):
         """Open Beatstep Pro MIDI: midi_seq <port_index>"""
@@ -315,28 +326,28 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         try:
             self.host.open_sequencer_midi(int(a) if a else None)
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     def do_midi_mix(self, arg):
         """Open Akai MIDI Mix: midi_mix <port_index>"""
         if not arg.strip():
-            print("Usage: midi_mix <port_index>")
+            self._print("Usage: midi_mix <port_index>")
             return
         try:
             self.host.open_mixer_midi(int(arg.strip()))
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     def do_note(self, arg):
         """Test note: note <slot 1-8> <midi_note> [vel] [dur_ms]"""
         parts = arg.strip().split()
         if len(parts) < 2:
-            print("Usage: note <slot 1-8> <note> [velocity] [dur_ms]")
+            self._print("Usage: note <slot 1-8> <note> [velocity] [dur_ms]")
             return
         try:
             idx = _slot_to_internal(int(parts[0]))
         except ValueError as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
             return
         n = int(parts[1])
         v = int(parts[2]) if len(parts) > 2 else 100
@@ -351,7 +362,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         try:
             self.host.start_link(bpm)
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     def do_unlink(self, arg):
         """Disable Link."""
@@ -361,7 +372,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         """Get/set tempo: tempo [bpm]"""
         if arg.strip():
             self.host.link.bpm = float(arg.strip())
-        print(f"  {self.host.link.bpm:.1f} BPM")
+        self._print(f"  {self.host.link.bpm:.1f} BPM")
 
     # -- session -------------------------------------------------------------
 
@@ -371,7 +382,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         try:
             self.host.save_session(path)
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     def do_restore(self, arg):
         """Restore session: restore [path]"""
@@ -379,24 +390,24 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         try:
             self.host.restore_session(path)
         except Exception as e:
-            print(f"Error: {e}")
+            self._print(f"Error: {e}")
 
     # -- status --------------------------------------------------------------
 
     def do_status(self, arg):
         """Overall status."""
-        print("=== LinkVST Status ===")
-        print(f"  Audio  : {'RUNNING' if self.host.engine.running else 'STOPPED'}"
-              f"  (sr={self.host.sample_rate} buf={self.host.buffer_size})")
-        print(f"  BSP    : {self.host.midi_seq.name or 'closed'}")
-        print(f"  MIDIMix: {self.host.midi_mix.name or 'closed'}")
-        print(f"  Session: {self.host.session_path}")
+        self._print("=== LinkVST Status ===")
+        self._print(f"  Audio  : {'RUNNING' if self.host.engine.running else 'STOPPED'}"
+                    f"  (sr={self.host.sample_rate} buf={self.host.buffer_size})")
+        self._print(f"  BSP    : {self.host.midi_seq.name or 'closed'}")
+        self._print(f"  MIDIMix: {self.host.midi_mix.name or 'closed'}")
+        self._print(f"  Session: {self.host.session_path}")
         lk = self.host.link
         if lk.enabled:
-            print(f"  Link  : {lk.bpm:.1f} BPM  ({lk.num_peers} peers)")
+            self._print(f"  Link  : {lk.bpm:.1f} BPM  ({lk.num_peers} peers)")
         else:
-            print("  Link  : disabled")
-        print()
+            self._print("  Link  : disabled")
+        self._print()
         self.do_slots("")
 
     def do_deps(self, arg):
@@ -404,11 +415,12 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         for name, ok in [("pedalboard", HAS_PEDALBOARD), ("aalink", HAS_LINK),
                          ("python-rtmidi", HAS_RTMIDI), ("mido", HAS_MIDO),
                          ("sounddevice", HAS_SOUNDDEVICE)]:
-            print(f"  {name}: {'OK' if ok else 'MISSING'}")
+            self._print(f"  {name}: {'OK' if ok else 'MISSING'}")
 
     def do_quit(self, arg):
-        """Exit."""
-        self.host.shutdown()
+        """Exit (disconnect from server, or shutdown in local mode)."""
+        if self._owns_host:
+            self.host.shutdown()
         return True
 
     do_exit = do_quit
