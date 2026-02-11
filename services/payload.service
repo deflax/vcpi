@@ -1,19 +1,18 @@
 [Unit]
-Description=Autorun GUI payload
+Description=Autorun vcpi payload
+After=sound.target
 
 [Service]
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/pi/.Xauthority
-Environment=QT_QPA_PLATFORM=offscreen
 Environment=JACK_NO_AUDIO_RESERVATION=1
 User=pi
 Group=pi
+WorkingDirectory=/home/pi/vcpi
 ExecStartPre=/bin/sleep 10
-ExecStart=/opt/sonic-pi/bin/sonic-pi /home/pi/autorun.rb
+ExecStart=/home/pi/vcpi/venv/bin/python vst_host.py
 Restart=always
 RestartSec=10s
 KillMode=process
 TimeoutSec=infinity
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target

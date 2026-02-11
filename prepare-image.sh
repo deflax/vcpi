@@ -40,13 +40,15 @@ sed -i 's/^dtparam=audio=on/#&/' /tmp/rpi-img/boot/config.txt
 # disable hdmi audio
 sed -i 's/dtoverlay=vc4-kms-v3d/dtoverlay=vc4-kms-v3d,noaudio/' /tmp/rpi-img/boot/config.txt
 
-# setup GUI payload
+# setup vcpi payload
 cp -v ./services/payload.service /tmp/rpi-img/lib/systemd/system/payload.service
-ln -v -s /lib/systemd/system/payload.service /tmp/rpi-img/etc/systemd/system/graphical.target.wants
+ln -v -s /lib/systemd/system/payload.service /tmp/rpi-img/etc/systemd/system/multi-user.target.wants
 
 #provision project files
 cp -v ./src/setup.sh /tmp/rpi-img/root/setup.sh
-cp -v ./patch/main.rb /tmp/rpi-img/root/main.rb
+cp -rv ./src/linkvst /tmp/rpi-img/root/linkvst
+cp -v ./src/vst_host.py /tmp/rpi-img/root/vst_host.py
+cp -v ./src/requirements.txt /tmp/rpi-img/root/requirements.txt
 
 sync
 

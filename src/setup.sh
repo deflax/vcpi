@@ -17,20 +17,15 @@ apt-get install \
   cmake \
   libjack-jackd2-dev \
   libsndfile1-dev \
-  libfftw3-dev \
-  libxt-dev \
   libavahi-client-dev \
   libudev-dev \
   libasound2-dev \
   libreadline-dev \
-  libxkbcommon-dev \
-  libqt6widgets6 \
+  libportaudio2 \
+  portaudio19-dev \
+  python3-pip \
+  python3-venv \
   jackd2 -y
-  # Accept realtime permissions for jackd when asked
-
-# setup sonic-pi
-wget https://sonic-pi.net/files/releases/v4.6.0/sonic-pi_4.6.0_1_bookworm.arm64.deb
-dpkg -i sonic-pi_4.6.0_1_bookworm.arm64.deb
 
 # setup udev
 echo "SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", MODE=\"0666\"" > /etc/udev/rules.d/50-udev-default.rules
@@ -40,23 +35,21 @@ apt-get install ufw -y
 ufw allow ssh
 ufw enable
 
-# #build supercolider
-# echo "building in:"
-# pwd
-# git clone --branch main --recurse-submodules https://github.com/supercollider/supercollider.git
-# cd supercollider
-# mkdir build && cd build
-# cmake -DCMAKE_BUILD_TYPE=Release -DSUPERNOVA=OFF -DSC_EL=OFF -DSC_VIM=ON -DNATIVE=ON ..
-# make -j3
-# make install
-# ldconfig
-
 #setup jack
 echo /usr/bin/jackd -P75 -p16 -dalsa -dhw:0 -p1024 -n3 > /home/pi/.jackdrc
 
-# deploy patch
-mv -v /root/main.rb /home/pi/.sonic-pi/config/init.rb
-chown -R pi:pi /home/pi/.sonic-pi
+# deploy vcpi
+VCPI_DIR=/home/pi/vcpi
+mkdir -p "$VCPI_DIR"
+mv -v /root/linkvst "$VCPI_DIR/linkvst"
+mv -v /root/vst_host.py "$VCPI_DIR/vst_host.py"
+mv -v /root/requirements.txt "$VCPI_DIR/requirements.txt"
+
+python3 -m venv "$VCPI_DIR/venv"
+"$VCPI_DIR/venv/bin/pip" install --upgrade pip
+"$VCPI_DIR/venv/bin/pip" install -r "$VCPI_DIR/requirements.txt"
+
+chown -R pi:pi "$VCPI_DIR"
 
 # cleanup
 mv /root/setup.sh /root/setup.sh.done
