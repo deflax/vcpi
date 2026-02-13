@@ -1,14 +1,49 @@
 #!/bin/bash
 #
 
-if [ -z "$1" ]
-  then
-    echo "No image name provided"
-    exit
+REFRESH_CACHE=0
+
+if [ "$1" = "--refresh" ] || [ "$1" = "-r" ]; then
+  REFRESH_CACHE=1
+  shift
 fi
 
-#download source
-curl $1 --output src.img.xz
+if [ -z "$1" ]; then
+  echo "Usage: $0 [--refresh|-r] <image-url>"
+  exit 1
+fi
+
+IMAGE_URL="$1"
+CACHE_DIR="${IMAGE_CACHE_DIR:-.image-cache}"
+mkdir -p "$CACHE_DIR"
+
+IMAGE_FILENAME=$(basename "${IMAGE_URL%%\?*}")
+if [ -z "$IMAGE_FILENAME" ]; then
+  IMAGE_FILENAME="source.img.xz"
+fi
+
+CACHED_IMAGE="$CACHE_DIR/$IMAGE_FILENAME"
+TMP_DOWNLOAD="$CACHED_IMAGE.part"
+
+# download source once and reuse cache
+if [ "$REFRESH_CACHE" -eq 1 ] && [ -f "$CACHED_IMAGE" ]; then
+  echo "Refreshing cached image: $CACHED_IMAGE"
+  rm -f "$CACHED_IMAGE"
+fi
+
+if [ ! -f "$CACHED_IMAGE" ]; then
+  echo "Downloading image to cache: $CACHED_IMAGE"
+  if ! curl -fL "$IMAGE_URL" --output "$TMP_DOWNLOAD"; then
+    rm -f "$TMP_DOWNLOAD"
+    echo "ERROR: image download failed"
+    exit 1
+  fi
+  mv -f "$TMP_DOWNLOAD" "$CACHED_IMAGE"
+else
+  echo "Using cached image: $CACHED_IMAGE"
+fi
+
+cp -v "$CACHED_IMAGE" src.img.xz
 xz -v -T 0 -d src.img.xz
 
 #setup

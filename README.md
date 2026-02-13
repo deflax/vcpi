@@ -49,7 +49,24 @@ network={
 
 `prepare-image.sh` reads this file and writes a NetworkManager profile into the image for Raspberry Pi OS Bookworm+.
 
-2. Execute the `prepare-image.sh [image]` script as `root` where `[image]` is the url to raspiOS.
+2. Execute `prepare-image.sh` with `sudo` (it needs root for `losetup`, `mount`, and `umount`) where `[image]` is the URL to Raspberry Pi OS.
+
+   ```bash
+   sudo ./prepare-image.sh [image]
+   ```
+
+   The downloaded archive is cached in `.image-cache/` so repeated runs do not download again.
+   Use `--refresh` (or `-r`) to force re-download and overwrite the cached archive:
+
+   ```bash
+   sudo ./prepare-image.sh --refresh [image]
+   ```
+
+   Optionally set `IMAGE_CACHE_DIR` to use a different cache directory:
+
+   ```bash
+   sudo IMAGE_CACHE_DIR=/var/cache/vcpi ./prepare-image.sh [image]
+   ```
 
 3. Flash the `vcpi.img` to SD card.
 
