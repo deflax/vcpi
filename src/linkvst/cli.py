@@ -106,7 +106,14 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         except ValueError as e:
             self._print(f"Error: {e}")
             return
-        fx_idx = int(parts[1])
+        try:
+            fx_idx = int(parts[1]) - 1
+        except ValueError:
+            self._print("Error: fx_index must be a positive integer")
+            return
+        if fx_idx < 0:
+            self._print("Error: fx_index must be >= 1")
+            return
         try:
             self.host.remove_effect(slot_idx, fx_idx)
             self._print("  Removed.")
@@ -146,7 +153,20 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print("Usage: params <slot 1-8> | params master <fx_index>")
             return
         if parts[0] == "master":
-            fx_idx = int(parts[1]) - 1 if len(parts) > 1 else 0
+            if len(parts) > 2:
+                self._print("Usage: params master <fx_index>")
+                return
+            if not self.host.engine.master_effects:
+                self._print("  No master effects loaded")
+                return
+            try:
+                fx_idx = int(parts[1]) - 1 if len(parts) > 1 else 0
+            except ValueError:
+                self._print("Error: fx_index must be a positive integer")
+                return
+            if not 0 <= fx_idx < len(self.host.engine.master_effects):
+                self._print("Error: fx_index out of range")
+                return
             plugin = self.host.engine.master_effects[fx_idx]
         else:
             try:
@@ -170,14 +190,27 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
     def do_set(self, arg):
         """Set param: set <slot 1-8> <name> <value>  or  set master <fx> <name> <value>"""
         parts = arg.strip().split()
-        if len(parts) < 3:
+        if not parts:
             self._print("Usage: set <slot 1-8> <name> <value>")
             return
         if parts[0] == "master":
-            fx_idx = int(parts[1]) - 1
+            if len(parts) < 4:
+                self._print("Usage: set master <fx_index> <name> <value>")
+                return
+            try:
+                fx_idx = int(parts[1]) - 1
+            except ValueError:
+                self._print("Error: fx_index must be a positive integer")
+                return
+            if not 0 <= fx_idx < len(self.host.engine.master_effects):
+                self._print("Error: fx_index out of range")
+                return
             plugin = self.host.engine.master_effects[fx_idx]
             pname, pval = parts[2], parts[3]
         else:
+            if len(parts) < 3:
+                self._print("Usage: set <slot 1-8> <name> <value>")
+                return
             try:
                 idx = _slot_to_internal(int(parts[0]))
             except ValueError as e:
@@ -215,7 +248,11 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             return
         slot = self.host.engine.slots[idx]
         if slot:
-            slot.gain = float(parts[1])
+            try:
+                slot.gain = float(parts[1])
+            except ValueError:
+                self._print("Error: gain must be a number")
+                return
             self._print(f"  gain = {slot.gain:.2f}")
 
     def do_mute(self, arg):
@@ -247,7 +284,10 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         if not arg.strip():
             self._print(f"  master gain = {self.host.engine.master_gain:.2f}")
             return
-        self.host.engine.master_gain = float(arg.strip())
+        try:
+            self.host.engine.master_gain = float(arg.strip())
+        except ValueError:
+            self._print("Error: master gain must be a number")
 
     # -- routing -------------------------------------------------------------
 
@@ -349,16 +389,27 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         except ValueError as e:
             self._print(f"Error: {e}")
             return
-        n = int(parts[1])
-        v = int(parts[2]) if len(parts) > 2 else 100
-        d = float(parts[3]) / 1000.0 if len(parts) > 3 else 0.3
+        try:
+            n = int(parts[1])
+            v = int(parts[2]) if len(parts) > 2 else 100
+            d = float(parts[3]) / 1000.0 if len(parts) > 3 else 0.3
+        except ValueError:
+            self._print("Error: note/velocity must be integers, dur_ms must be numeric")
+            return
         self.host.send_note(idx, n, v, d)
 
     # -- link ----------------------------------------------------------------
 
     def do_link(self, arg):
         """Enable Link: link [bpm]"""
-        bpm = float(arg.strip()) if arg.strip() else None
+        if arg.strip():
+            try:
+                bpm = float(arg.strip())
+            except ValueError:
+                self._print("Error: bpm must be a number")
+                return
+        else:
+            bpm = None
         try:
             self.host.start_link(bpm)
         except Exception as e:
@@ -371,7 +422,11 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
     def do_tempo(self, arg):
         """Get/set tempo: tempo [bpm]"""
         if arg.strip():
-            self.host.link.bpm = float(arg.strip())
+            try:
+                self.host.link.bpm = float(arg.strip())
+            except ValueError:
+                self._print("Error: bpm must be a number")
+                return
         self._print(f"  {self.host.link.bpm:.1f} BPM")
 
     # -- session -------------------------------------------------------------

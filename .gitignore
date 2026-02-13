@@ -1,5 +1,6 @@
 vcpi.img
 wpa_supplicant.conf
+userconf.txt
 .image-cache/
 
 # Python

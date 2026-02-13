@@ -79,6 +79,18 @@ class VSTHost:
     # -- routing -------------------------------------------------------------
 
     def route(self, midi_channel: int, slot_index: int):
+        if not 0 <= midi_channel < 16:
+            raise ValueError("MIDI channel must be 1-16")
+        if not 0 <= slot_index < NUM_SLOTS:
+            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+
+        # Remove stale membership if this channel was previously routed.
+        prev_idx = self._channel_map.get(midi_channel)
+        if prev_idx is not None and prev_idx != slot_index:
+            prev_slot = self.engine.slots[prev_idx]
+            if prev_slot:
+                prev_slot.midi_channels.discard(midi_channel)
+
         self._channel_map[midi_channel] = slot_index
         slot = self.engine.slots[slot_index]
         if slot:

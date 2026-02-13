@@ -1,5 +1,8 @@
 #!/bin/bash
 
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
 # upgrade system
 apt-get update
 apt-get upgrade -y
@@ -27,13 +30,13 @@ apt-get install \
   python3-venv \
   jackd2 -y
 
-# setup udev
-echo "SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", MODE=\"0666\"" > /etc/udev/rules.d/50-udev-default.rules
+# grant device access via groups instead of world-writable USB rules
+usermod -aG audio,plugdev pi
 
 # setup firewall
 apt-get install ufw -y
 ufw allow ssh
-ufw enable
+ufw --force enable
 
 #setup jack
 echo /usr/bin/jackd -P75 -p16 -dalsa -dhw:0 -p1024 -n3 > /home/pi/.jackdrc

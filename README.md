@@ -49,7 +49,18 @@ network={
 
 `prepare-image.sh` reads this file and writes a NetworkManager profile into the image for Raspberry Pi OS Bookworm+.
 
-2. Execute `prepare-image.sh` with `sudo` (it needs root for `losetup`, `mount`, and `umount`) where `[image]` is the URL to Raspberry Pi OS.
+2. Create a local `userconf.txt` file (it is gitignored) with your own password hash:
+
+   ```bash
+   cp userconf.example.txt userconf.txt
+   HASH=$(openssl passwd -6 'your-strong-password')
+   printf 'pi:%s\n' "$HASH" > userconf.txt
+   ```
+
+   `prepare-image.sh` will refuse known insecure defaults unless you explicitly set
+   `ALLOW_INSECURE_DEFAULTS=1`.
+
+3. Execute `prepare-image.sh` with `sudo` (it needs root for `losetup`, `mount`, and `umount`) where `[image]` is the URL to Raspberry Pi OS.
 
    ```bash
    sudo ./prepare-image.sh [image]
@@ -68,15 +79,21 @@ network={
    sudo IMAGE_CACHE_DIR=/var/cache/vcpi ./prepare-image.sh [image]
    ```
 
-3. Flash the `vcpi.img` to SD card.
+   Optionally set `USERCONF_PATH` if your credentials file is stored elsewhere:
+
+   ```bash
+   sudo USERCONF_PATH=/secure/path/userconf.txt ./prepare-image.sh [image]
+   ```
+
+4. Flash the `vcpi.img` to SD card.
 
 ### First Boot
 
-4. Boot Rpi on DHCP enabled network. The boot script should run `setup.sh` on first boot and reboot the system when its done.
+5. Boot Rpi on DHCP enabled network. The boot script should run `setup.sh` on first boot and reboot the system when its done.
 
-5. Login using user: `pi` pass: `vcpi`
+6. Login with the credentials you configured in `userconf.txt` (default username is `pi`).
 
-6. After reboot, the `vcpi` payload service starts automatically and runs LinkVST.
+7. After reboot, the `vcpi` payload service starts automatically and runs LinkVST.
 
 ### Debugging
 
