@@ -33,7 +33,21 @@ synchronisation, designed for use with an **Arturia Beatstep Pro** and an
 
 ### Build the Image
 
-1. Edit `wpa_supplicant.conf` with your WiFi network name and password.
+1. Create a local `wpa_supplicant.conf` file (it is gitignored) and add your WiFi network name and password:
+
+```conf
+country=BG
+update_config=1
+ctrl_interface=/var/run/wpa_supplicant
+
+network={
+ scan_ssid=1
+ ssid="YOUR_SSID"
+ psk="YOUR_PASSWORD"
+}
+```
+
+`prepare-image.sh` reads this file and writes a NetworkManager profile into the image for Raspberry Pi OS Bookworm+.
 
 2. Execute the `prepare-image.sh [image]` script as `root` where `[image]` is the url to raspiOS.
 

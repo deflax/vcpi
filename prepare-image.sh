@@ -22,6 +22,10 @@ touch /tmp/rpi-img/boot/ssh
 cp -v userconf.txt /tmp/rpi-img/boot/userconf
 
 #wifi (NetworkManager for Bookworm+)
+if [ ! -f wpa_supplicant.conf ]; then
+  echo "ERROR: wpa_supplicant.conf not found (create it locally; it is gitignored)"
+  exit 1
+fi
 WIFI_SSID=$(grep -oP '(?<=ssid=").*(?=")' wpa_supplicant.conf)
 WIFI_PSK=$(grep -oP '(?<=psk=").*(?=")' wpa_supplicant.conf)
 
