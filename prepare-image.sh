@@ -21,8 +21,39 @@ mount /dev/loop8p1 /tmp/rpi-img/boot
 touch /tmp/rpi-img/boot/ssh
 cp -v userconf.txt /tmp/rpi-img/boot/userconf
 
-#wifi
-cp -v wpa_supplicant.conf /tmp/rpi-img/boot/wpa_supplicant.conf
+#wifi (NetworkManager for Bookworm+)
+WIFI_SSID=$(grep -oP '(?<=ssid=").*(?=")' wpa_supplicant.conf)
+WIFI_PSK=$(grep -oP '(?<=psk=").*(?=")' wpa_supplicant.conf)
+
+if [ -z "$WIFI_SSID" ] || [ -z "$WIFI_PSK" ]; then
+  echo "ERROR: Could not read SSID or PSK from wpa_supplicant.conf"
+  exit 1
+fi
+
+NM_DIR=/tmp/rpi-img/etc/NetworkManager/system-connections
+mkdir -p "$NM_DIR"
+cat > "$NM_DIR/wifi.nmconnection" <<NMEOF
+[connection]
+id=$WIFI_SSID
+type=wifi
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+ssid=$WIFI_SSID
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=$WIFI_PSK
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+NMEOF
+chmod 600 "$NM_DIR/wifi.nmconnection"
+echo "WiFi configured for SSID: $WIFI_SSID"
 
 # pi user keys
 mkdir /tmp/rpi-img/home/pi/.ssh
@@ -56,9 +87,9 @@ cp -v ./src/requirements.txt /tmp/rpi-img/root/requirements.txt
 sync
 
 #cleanup
-losetup -d /dev/loop8
 umount /tmp/rpi-img/boot
 umount /tmp/rpi-img
+losetup -d /dev/loop8
 rmdir -v /tmp/rpi-img
 
 #write image
