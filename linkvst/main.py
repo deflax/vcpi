@@ -115,7 +115,7 @@ def main():
     _add_host_args(sp_serve)
     sp_serve.add_argument(
         "--sock", default=None,
-        help="Unix socket path (default: /run/linkvst.sock)")
+        help="Unix socket path (default: /run/linkvst/linkvst.sock)")
     sp_serve.set_defaults(func=_cmd_serve)
 
     # -- cli -----------------------------------------------------------------
@@ -124,7 +124,7 @@ def main():
         help="Connect to a running LinkVST server")
     sp_cli.add_argument(
         "--sock", default=None,
-        help="Unix socket path (default: /run/linkvst.sock)")
+        help="Unix socket path (default: /run/linkvst/linkvst.sock)")
     sp_cli.set_defaults(func=_cmd_cli)
 
     # -- parse ---------------------------------------------------------------

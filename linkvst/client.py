@@ -2,7 +2,7 @@
 
 Usage::
 
-    python -m linkvst cli [--sock /run/linkvst.sock]
+    python -m linkvst cli [--sock /run/linkvst/linkvst.sock]
 
 Or directly::
 

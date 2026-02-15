@@ -46,6 +46,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 ```text
 .
   linkvst/            # Main package
+  docs/               # Extended documentation (CLI reference, etc.)
   start.sh            # One-command local launcher (creates .venv on first run)
   vst_host.py         # Thin entry point
   requirements.txt    # Python dependencies
@@ -68,6 +69,8 @@ python vst_host.py serve --sock /run/linkvst/linkvst.sock
 # Connect CLI client to a running daemon
 python -m linkvst cli --sock /run/linkvst/linkvst.sock
 ```
+
+Full CLI and startup flag reference: `docs/cli-reference.md`
 
 Inside the CLI, a typical first run is:
 
