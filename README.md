@@ -82,6 +82,85 @@ link 120
 status
 ```
 
+## Controller Setup
+
+### Arturia BeatStep Pro (sequencer)
+
+- BeatStep Pro is the note/sequence source; its MIDI channels are fully configurable.
+- Route whichever channels your BSP sends on into LinkVST slots with `route <ch> <slot>`.
+- There are no hard-coded channel assumptions in LinkVST.
+
+```text
+linkvst> midi_ports
+linkvst> midi_seq 0
+linkvst> route 1 1
+linkvst> route 2 2
+linkvst> route 10 3
+linkvst> routing
+```
+
+### Akai MIDI Mix (hardware mixer)
+
+- MIDI Mix uses its own dedicated input port (separate from BeatStep Pro).
+- Connect it with `midi_mix <port_index>`.
+- Factory mapping is used by default:
+  - Channel faders 1-8 -> slot gain
+  - Master fader -> master gain
+  - 3 knobs per strip -> first 3 parameters of that slot's instrument plugin
+  - MUTE buttons -> mute toggle
+  - REC ARM buttons -> solo toggle
+
+Strip-to-slot mapping is fixed: strip 1 controls slot 1, ... strip 8 controls slot 8.
+
+MIDI Mix quick mapping (factory defaults):
+
+```text
+Faders (slots 1-8):   CC 19,23,27,31,49,53,57,61
+Master fader:         CC 62
+Knob 1 (per strip):   CC 16,20,24,28,46,50,54,58
+Knob 2 (per strip):   CC 17,21,25,29,47,51,55,59
+Knob 3 (per strip):   CC 18,22,26,30,48,52,56,60
+MUTE buttons:         Notes 1,4,7,10,13,16,19,22
+SOLO (REC ARM):       Notes 3,6,9,12,15,18,21,24
+```
+
+## Example Commands
+
+Load a synth and test note:
+
+```text
+linkvst> load 1 /path/to/Synth.vst3 Lead
+linkvst> audio_start
+linkvst> note 1 60 100 500
+```
+
+Typical multi-instrument setup with BSP + MIDI Mix:
+
+```text
+linkvst> load 1 /path/to/Lead.vst3 Lead
+linkvst> load 2 /path/to/Bass.vst3 Bass
+linkvst> load 3 /path/to/Drums.vst3 Drums
+
+linkvst> route 1 1
+linkvst> route 2 2
+linkvst> route 10 3
+
+linkvst> midi_seq 0
+linkvst> midi_mix 1
+linkvst> load_fx /path/to/Delay.vst3 1 Delay
+linkvst> load_fx /path/to/Reverb.vst3 master Reverb
+linkvst> audio_start
+linkvst> link 120
+linkvst> status
+```
+
+Headless server + remote CLI:
+
+```bash
+./start.sh serve --sock /run/linkvst/linkvst.sock
+python -m linkvst cli --sock /run/linkvst/linkvst.sock
+```
+
 ## Raspberry Pi Builds
 
 All Raspberry Pi image build files are in `rpi-build/`.
