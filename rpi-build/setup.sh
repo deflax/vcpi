@@ -41,18 +41,18 @@ ufw --force enable
 #setup jack
 echo /usr/bin/jackd -P75 -p16 -dalsa -dhw:0 -p1024 -n3 > /home/pi/.jackdrc
 
-# deploy vcpi
-VCPI_DIR=/home/pi/vcpi
-mkdir -p "$VCPI_DIR"
-mv -v /root/linkvst "$VCPI_DIR/linkvst"
-mv -v /root/vst_host.py "$VCPI_DIR/vst_host.py"
-mv -v /root/requirements.txt "$VCPI_DIR/requirements.txt"
+# deploy linkvst
+PROJECT_DIR=/home/pi/linkvst
+mkdir -p "$PROJECT_DIR"
+mv -v /root/linkvst "$PROJECT_DIR/linkvst"
+mv -v /root/vst_host.py "$PROJECT_DIR/vst_host.py"
+mv -v /root/requirements.txt "$PROJECT_DIR/requirements.txt"
 
-python3 -m venv "$VCPI_DIR/venv"
-"$VCPI_DIR/venv/bin/pip" install --upgrade pip
-"$VCPI_DIR/venv/bin/pip" install -r "$VCPI_DIR/requirements.txt"
+python3 -m venv "$PROJECT_DIR/venv"
+"$PROJECT_DIR/venv/bin/pip" install --upgrade pip
+"$PROJECT_DIR/venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt"
 
-chown -R pi:pi "$VCPI_DIR"
+chown -R pi:pi "$PROJECT_DIR"
 
 # cleanup
 mv /root/setup.sh /root/setup.sh.done

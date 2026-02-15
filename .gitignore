@@ -1,7 +1,12 @@
+# Raspberry Pi build artifacts/config
 vcpi.img
 wpa_supplicant.conf
 userconf.txt
 .image-cache/
+rpi-build/vcpi.img
+rpi-build/wpa_supplicant.conf
+rpi-build/userconf.txt
+rpi-build/.image-cache/
 
 # Python
 # Byte-compiled / optimized / DLL files

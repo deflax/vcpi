@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+
 cleanup() {
   set +e
   if [ -n "${BOOT_MOUNT:-}" ] && mountpoint -q "$BOOT_MOUNT"; then
@@ -26,7 +29,11 @@ trap cleanup EXIT
 MOUNT_DIR=""
 BOOT_MOUNT=""
 LOOP_DEV=""
-USERCONF_PATH="${USERCONF_PATH:-userconf.txt}"
+USERCONF_PATH="${USERCONF_PATH:-$SCRIPT_DIR/userconf.txt}"
+WPA_CONF_PATH="${WPA_CONF_PATH:-$SCRIPT_DIR/wpa_supplicant.conf}"
+WORK_IMAGE="$SCRIPT_DIR/src.img"
+WORK_IMAGE_XZ="$SCRIPT_DIR/src.img.xz"
+OUTPUT_IMAGE="${OUTPUT_IMAGE:-$SCRIPT_DIR/vcpi.img}"
 
 # Legacy default from older repository versions. Block this value unless
 # explicitly allowed for backwards compatibility.
@@ -39,18 +46,23 @@ if [ "${1:-}" = "--refresh" ] || [ "${1:-}" = "-r" ]; then
   shift
 fi
 
-if [ -z "$1" ]; then
+if [ -z "${1:-}" ]; then
   echo "Usage: $0 [--refresh|-r] <image-url>"
   exit 1
 fi
 
 IMAGE_URL="$1"
-CACHE_DIR="${IMAGE_CACHE_DIR:-.image-cache}"
+CACHE_DIR="${IMAGE_CACHE_DIR:-$SCRIPT_DIR/.image-cache}"
 mkdir -p "$CACHE_DIR"
+
+if [ ! -d "$REPO_ROOT/linkvst" ] || [ ! -f "$REPO_ROOT/vst_host.py" ] || [ ! -f "$REPO_ROOT/requirements.txt" ]; then
+  echo "ERROR: LinkVST project files not found at repo root: $REPO_ROOT"
+  exit 1
+fi
 
 if [ ! -f "$USERCONF_PATH" ]; then
   echo "ERROR: $USERCONF_PATH not found"
-  echo "Create it from userconf.example.txt with your own SHA-512 password hash"
+  echo "Create it from rpi-build/userconf.txt.dist with your own SHA-512 password hash"
   exit 1
 fi
 
@@ -92,21 +104,21 @@ else
   echo "Using cached image: $CACHED_IMAGE"
 fi
 
-rm -f src.img src.img.xz
-cp -v "$CACHED_IMAGE" src.img.xz
-xz -v -T 0 -d src.img.xz
+rm -f "$WORK_IMAGE" "$WORK_IMAGE_XZ"
+cp -v "$CACHED_IMAGE" "$WORK_IMAGE_XZ"
+xz -v -T 0 -d "$WORK_IMAGE_XZ"
 
 # WiFi (NetworkManager for Bookworm+)
-if [ ! -f wpa_supplicant.conf ]; then
-  echo "ERROR: wpa_supplicant.conf not found (create it locally; it is gitignored)"
+if [ ! -f "$WPA_CONF_PATH" ]; then
+  echo "ERROR: $WPA_CONF_PATH not found (create it locally; it is gitignored)"
   exit 1
 fi
 
-WIFI_SSID=$(grep -oP '(?<=ssid=").*(?=")' wpa_supplicant.conf || true)
-WIFI_PSK=$(grep -oP '(?<=psk=").*(?=")' wpa_supplicant.conf || true)
+WIFI_SSID=$(grep -oP '(?<=ssid=").*(?=")' "$WPA_CONF_PATH" || true)
+WIFI_PSK=$(grep -oP '(?<=psk=").*(?=")' "$WPA_CONF_PATH" || true)
 
 if [ -z "$WIFI_SSID" ] || [ -z "$WIFI_PSK" ]; then
-  echo "ERROR: Could not read SSID or PSK from wpa_supplicant.conf"
+  echo "ERROR: Could not read SSID or PSK from $WPA_CONF_PATH"
   exit 1
 fi
 
@@ -115,7 +127,7 @@ MOUNT_DIR=$(mktemp -d /tmp/rpi-img.XXXXXX)
 BOOT_MOUNT="$MOUNT_DIR/boot"
 mkdir -p "$BOOT_MOUNT"
 
-LOOP_DEV=$(losetup --show -fP src.img)
+LOOP_DEV=$(losetup --show -fP "$WORK_IMAGE")
 mount "${LOOP_DEV}p2" "$MOUNT_DIR"
 mount "${LOOP_DEV}p1" "$BOOT_MOUNT"
 
@@ -161,7 +173,7 @@ chown 1000:1000 "$MOUNT_DIR/home/pi/.ssh/authorized_keys"
 ln -v -sf /lib/systemd/system/systemd-time-wait-sync.service "$MOUNT_DIR/etc/systemd/system/sysinit.target.wants/systemd-time-wait-sync.service"
 
 #setup autorun on first boot
-cp -v ./services/firstboot.service "$MOUNT_DIR/lib/systemd/system/firstboot.service"
+cp -v "$SCRIPT_DIR/services/firstboot.service" "$MOUNT_DIR/lib/systemd/system/firstboot.service"
 ln -v -sf /lib/systemd/system/firstboot.service "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
 
 # disable built-in audio
@@ -170,15 +182,15 @@ sed -i 's/^dtparam=audio=on/#&/' "$BOOT_MOUNT/config.txt"
 # disable hdmi audio
 sed -i 's/dtoverlay=vc4-kms-v3d/dtoverlay=vc4-kms-v3d,noaudio/' "$BOOT_MOUNT/config.txt"
 
-# setup vcpi payload
-cp -v ./services/payload.service "$MOUNT_DIR/lib/systemd/system/payload.service"
+# setup LinkVST payload
+cp -v "$SCRIPT_DIR/services/payload.service" "$MOUNT_DIR/lib/systemd/system/payload.service"
 ln -v -sf /lib/systemd/system/payload.service "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
 
 #provision project files
-cp -v ./src/setup.sh "$MOUNT_DIR/root/setup.sh"
-cp -rv ./src/linkvst "$MOUNT_DIR/root/linkvst"
-cp -v ./src/vst_host.py "$MOUNT_DIR/root/vst_host.py"
-cp -v ./src/requirements.txt "$MOUNT_DIR/root/requirements.txt"
+cp -v "$SCRIPT_DIR/setup.sh" "$MOUNT_DIR/root/setup.sh"
+cp -rv "$REPO_ROOT/linkvst" "$MOUNT_DIR/root/linkvst"
+cp -v "$REPO_ROOT/vst_host.py" "$MOUNT_DIR/root/vst_host.py"
+cp -v "$REPO_ROOT/requirements.txt" "$MOUNT_DIR/root/requirements.txt"
 
 sync
 
@@ -187,4 +199,4 @@ cleanup
 trap - EXIT
 
 #write image
-mv -i src.img vcpi.img
+mv -i "$WORK_IMAGE" "$OUTPUT_IMAGE"

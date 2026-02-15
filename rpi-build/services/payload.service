@@ -6,10 +6,10 @@ After=sound.target
 Environment=JACK_NO_AUDIO_RESERVATION=1
 User=pi
 Group=pi
-WorkingDirectory=/home/pi/vcpi
+WorkingDirectory=/home/pi/linkvst
 RuntimeDirectory=linkvst
 ExecStartPre=/bin/sleep 10
-ExecStart=/home/pi/vcpi/venv/bin/python vst_host.py serve --sock /run/linkvst/linkvst.sock
+ExecStart=/home/pi/linkvst/venv/bin/python /home/pi/linkvst/vst_host.py serve --sock /run/linkvst/linkvst.sock
 Restart=always
 RestartSec=10s
 KillMode=process
