@@ -13,6 +13,7 @@ from core.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDD
 from core.host import VcpiCore
 from core.midi import MidiPort
 from core.models import NUM_SLOTS
+from graph.routes import render_route_graph
 
 
 def _slot_to_internal(user_slot: int) -> int:
@@ -325,6 +326,13 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             slot = self.host.engine.slots[idx]
             name = slot.name if slot else "(empty)"
             self._print(f"  ch {ch + 1} -> slot {idx + 1} ({name})")
+
+    def do_graph(self, arg):
+        """Show ASCII route graph."""
+        if arg.strip():
+            self._print("Usage: graph")
+            return
+        self._print(render_route_graph(self.host))
 
     # -- audio ---------------------------------------------------------------
 

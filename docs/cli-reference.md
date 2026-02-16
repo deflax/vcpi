@@ -101,6 +101,7 @@ Server/client specific:
 | `route <ch> <slot>` | Route MIDI channel to slot |
 | `unroute <ch>` | Remove MIDI channel route |
 | `routing` | Show active channel routes |
+| `graph` | Show ASCII route graph |
 
 ### Audio Commands
 

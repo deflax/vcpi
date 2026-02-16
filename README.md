@@ -84,6 +84,7 @@ midi_ports
 devices
 midi_seq <index>
 midi_mix <index>
+graph
 audio_start
 link 120
 status
