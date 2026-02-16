@@ -14,6 +14,7 @@ from controllers.arturia_beatstep_pro import BeatStepProController
 from controllers.novation_25le import Novation25LeController
 from core.engine import AudioEngine
 from core.link import LinkSync
+from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import InstrumentSlot, NUM_SLOTS
 
 
@@ -47,6 +48,9 @@ class VcpiCore:
         self.novation_25le = Novation25LeController(self.engine, self.bsp.channel_map)
         self.midimix = MidiMixController(self.engine)
 
+        # Remember the most recently selected/active audio output device name.
+        self._audio_output_name: Optional[str] = None
+
     @property
     def channel_map(self) -> dict[int, int]:
         return self.bsp.channel_map
@@ -66,6 +70,84 @@ class VcpiCore:
     @property
     def mixer_midi_out_name(self) -> Optional[str]:
         return self.midimix.output_port_name
+
+    @property
+    def audio_output_name(self) -> Optional[str]:
+        """Most recently selected/active audio output device name."""
+        current = self._active_audio_output_name()
+        if current:
+            self._audio_output_name = current
+        return self._audio_output_name
+
+    @staticmethod
+    def _output_device_index(device: object) -> Optional[int]:
+        """Extract output device index from sounddevice stream/default value."""
+        if isinstance(device, int):
+            return device
+        if isinstance(device, (tuple, list)):
+            if len(device) >= 2 and isinstance(device[1], int):
+                return device[1]
+            if len(device) == 1 and isinstance(device[0], int):
+                return device[0]
+        return None
+
+    def _active_audio_output_name(self) -> Optional[str]:
+        """Resolve the currently active output device name, if available."""
+        if not deps.HAS_SOUNDDEVICE or deps.sd is None:
+            return None
+
+        stream = self.engine._stream
+        if stream is None:
+            return None
+
+        index = self._output_device_index(getattr(stream, "device", None))
+        if index is None or index < 0:
+            return None
+
+        try:
+            info = deps.sd.query_devices(index)
+        except Exception:
+            return None
+
+        name = info.get("name")
+        if not name:
+            return None
+        return str(name)
+
+    @staticmethod
+    def _resolve_port_index_by_name(port_name: str, ports: list[str], kind: str) -> int:
+        """Resolve a saved port name to a current index (case-insensitive fallback)."""
+        if port_name in ports:
+            return ports.index(port_name)
+
+        lower = port_name.lower()
+        for i, candidate in enumerate(ports):
+            if candidate.lower() == lower:
+                return i
+
+        raise ValueError(f"{kind} port '{port_name}' not found")
+
+    def _resolve_midi_input_port(self, port: int | str) -> int:
+        if isinstance(port, int):
+            return port
+
+        token = port.strip()
+        if token.isdigit():
+            return int(token)
+
+        ports = list_midi_input_ports()
+        return self._resolve_port_index_by_name(token, ports, "MIDI input")
+
+    def _resolve_midi_output_port(self, port: int | str) -> int:
+        if isinstance(port, int):
+            return port
+
+        token = port.strip()
+        if token.isdigit():
+            return int(token)
+
+        ports = list_midi_output_ports()
+        return self._resolve_port_index_by_name(token, ports, "MIDI output")
 
     # -- plugin management ---------------------------------------------------
 
@@ -271,19 +353,29 @@ class VcpiCore:
 
     # -- MIDI controllers ----------------------------------------------------
 
-    def open_sequencer_midi(self, port_index: Optional[int] = None):
+    def open_sequencer_midi(self, port_index: Optional[int | str] = None):
+        if isinstance(port_index, str):
+            token = port_index.strip()
+            if not token or token == "vcpi-Seq":
+                port_index = None
+            else:
+                port_index = self._resolve_midi_input_port(token)
+
         name = self.bsp.open(port_index)
         logger.info("[SEQ MIDI] Opened: %s", name)
 
-    def open_keyboard_midi(self, port_index: int):
+    def open_keyboard_midi(self, port_index: int | str):
+        port_index = self._resolve_midi_input_port(port_index)
         name = self.novation_25le.open(port_index)
         logger.info("[Keyboard MIDI] Opened: %s", name)
 
-    def open_mixer_midi(self, port_index: int):
+    def open_mixer_midi(self, port_index: int | str):
+        port_index = self._resolve_midi_input_port(port_index)
         name = self.midimix.open_input(port_index)
         logger.info("[MIDI Mix IN] Opened: %s", name)
 
-    def open_mixer_midi_out(self, port_index: int):
+    def open_mixer_midi_out(self, port_index: int | str):
+        port_index = self._resolve_midi_output_port(port_index)
         name = self.midimix.open_output(port_index)
         logger.info("[MIDI Mix OUT] Opened: %s", name)
 
@@ -309,7 +401,24 @@ class VcpiCore:
     # -- audio / link --------------------------------------------------------
 
     def start_audio(self, output_device=None):
+        if isinstance(output_device, str):
+            token = output_device.strip()
+            if token.isdigit():
+                output_device = int(token)
+            elif not token:
+                output_device = None
+            else:
+                output_device = token
+
         self.engine.start(output_device)
+
+        current = self._active_audio_output_name()
+        if current:
+            self._audio_output_name = current
+        elif isinstance(output_device, str):
+            self._audio_output_name = output_device
+        elif isinstance(output_device, int):
+            self._audio_output_name = str(output_device)
 
     def stop_audio(self):
         self.engine.stop()

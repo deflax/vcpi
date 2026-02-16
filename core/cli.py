@@ -7,6 +7,7 @@ All slot numbers and MIDI channels are presented 1-based to the user
 from __future__ import annotations
 
 import cmd
+import inspect
 from pathlib import Path
 
 from core.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDDEVICE, sd
@@ -109,6 +110,77 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             return str(hostapi_name)
         except Exception:
             return "unknown"
+
+    @staticmethod
+    def _doc_summary(doc: str | None) -> str:
+        """Condense a command docstring to a short one-line summary."""
+        if not doc:
+            return "-"
+
+        first = doc.strip().splitlines()[0].strip()
+        if ":" in first:
+            first = first.split(":", 1)[0].strip()
+        return first.rstrip(".") or "-"
+
+    def _command_entries(self) -> list[tuple[str, str]]:
+        """Return sorted (command, summary) rows for help output."""
+        entries: list[tuple[str, str]] = []
+
+        for attr in dir(self.__class__):
+            if not attr.startswith("do_"):
+                continue
+
+            command = attr[3:]
+            if not command or command == "EOF" or command.startswith("_"):
+                continue
+
+            handler = getattr(self, attr, None)
+            if not callable(handler):
+                continue
+
+            if command == "exit":
+                summary = "Alias for quit"
+            else:
+                summary = self._doc_summary(inspect.getdoc(handler))
+
+            entries.append((command, summary))
+
+        entries.sort(key=lambda item: item[0])
+        return entries
+
+    def do_help(self, arg):
+        """Show help: help [command]"""
+        topic = arg.strip()
+        if topic:
+            command = topic.split()[0]
+            if command == "EOF":
+                self._print("No help for 'EOF'")
+                return
+
+            handler = getattr(self, f"do_{command}", None)
+            if not callable(handler):
+                self._print(f"No help for '{command}'")
+                return
+
+            doc = inspect.getdoc(handler)
+            if doc:
+                self._print(doc)
+                if command == "exit":
+                    self._print("Alias of: quit")
+            else:
+                self._print(f"No help for '{command}'")
+            return
+
+        entries = self._command_entries()
+        if not entries:
+            self._print("No commands available.")
+            return
+
+        width = max(len(name) for name, _ in entries)
+        self._print("Available commands:")
+        for name, summary in entries:
+            self._print(f"  {name:<{width}}  {summary}")
+        self._print("Tip: use 'help <command>' for detailed usage.")
 
     # -- plugins -------------------------------------------------------------
 

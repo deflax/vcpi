@@ -173,6 +173,15 @@ channel routing table from `route <ch> <slot>`.
 | `save [path]` | Save current session to JSON |
 | `restore [path]` | Restore session from JSON |
 
+Saved/restored session state now also includes selected connection targets for:
+
+- audio output device
+- BeatStep Pro input (`midi_seq`)
+- Novation input (`midi_keys`)
+- MIDI Mix input/output (`midi_mix`, `midi_mix_out`)
+
+On startup restore, vcpi attempts to reconnect these targets automatically.
+
 ### Status and Exit
 
 | Command | Description |

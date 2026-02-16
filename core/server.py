@@ -69,6 +69,7 @@ class VcpiServer:
         self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server_sock.bind(str(self.sock_path))
         self._server_sock.listen(4)
+        self._server_sock.settimeout(1.0)
 
         # Allow non-root users in the same group to connect
         os.chmod(str(self.sock_path), 0o770)
@@ -80,6 +81,8 @@ class VcpiServer:
             while self._running:
                 try:
                     conn, _ = self._server_sock.accept()
+                except socket.timeout:
+                    continue
                 except OSError:
                     break
                 t = threading.Thread(target=self._handle_client, args=(conn,),
@@ -92,6 +95,10 @@ class VcpiServer:
         """Shut down the server and clean up."""
         self._running = False
         if self._server_sock:
+            try:
+                self._server_sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try:
                 self._server_sock.close()
             except OSError:
@@ -181,6 +188,10 @@ class VcpiServer:
         whether daemon shutdown was requested.
         """
         logger.info("cli %s > %s", client_id, line)
+        stripped = line.strip()
+        head = stripped.split(maxsplit=1)[0].lower() if stripped else ""
+        is_help = head == "help"
+
         with self._lock:
             buf = io.StringIO()
 
@@ -206,8 +217,11 @@ class VcpiServer:
 
         text = output.rstrip("\n")
         if text:
-            for out_line in text.splitlines():
-                logger.debug("cli %s -> %s", client_id, out_line)
+            if is_help:
+                logger.debug("cli %s -> [help output omitted]", client_id)
+            else:
+                for out_line in text.splitlines():
+                    logger.debug("cli %s -> %s", client_id, out_line)
         else:
             logger.debug("cli %s -> (no output)", client_id)
 

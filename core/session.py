@@ -7,6 +7,7 @@ Saved state includes:
   - Master gain
   - MIDI channel -> slot routing
   - Link BPM
+  - Audio/MIDI device connection targets
 
 The session file is human-readable JSON so it can be hand-edited if needed.
 """
@@ -88,6 +89,14 @@ def snapshot(host: VcpiCore) -> dict:
     # Routing: store as 1-based for readability in the JSON file
     routing = {str(ch + 1): idx + 1 for ch, idx in host.channel_map.items()}
 
+    connections = {
+        "audio_output": host.audio_output_name,
+        "midi_seq_in": host.sequencer_midi_name,
+        "midi_keys_in": host.keyboard_midi_name,
+        "midi_mix_in": host.mixer_midi_name,
+        "midi_mix_out": host.mixer_midi_out_name,
+    }
+
     return {
         "version": 1,
         "sample_rate": host.sample_rate,
@@ -97,6 +106,7 @@ def snapshot(host: VcpiCore) -> dict:
         "routing": routing,
         "slots": slots_data,
         "master_effects": master_fx_data,
+        "connections": connections,
     }
 
 
@@ -112,8 +122,8 @@ def save(host: VcpiCore, path: Optional[Path] = None):
 def restore(host: VcpiCore, path: Optional[Path] = None):
     """Restore a session from a JSON file.
 
-    Loads instruments, effects, parameters, routing, gains, and tempo.
-    Audio and MIDI ports are NOT restored (they depend on hardware state).
+    Loads instruments, effects, parameters, routing, gains, tempo,
+    and previously connected audio/MIDI device targets.
     """
     path = Path(path) if path else DEFAULT_SESSION_PATH
     if not path.exists():
@@ -183,6 +193,42 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
             host.route(ch_internal, slot_internal)
         except Exception as e:
             errors.append(f"route ch {ch_str} -> slot {slot_num}: {e}")
+
+    # -- Device connections --------------------------------------------------
+    connections = data.get("connections", {})
+    if not isinstance(connections, dict):
+        connections = {}
+
+    def _restore_port(label: str, value, opener):
+        if value is None:
+            return
+        if isinstance(value, str) and not value.strip():
+            return
+        try:
+            opener(value)
+        except Exception as exc:
+            errors.append(f"{label} '{value}': {exc}")
+
+    audio_output = connections.get("audio_output")
+    audio_selected = audio_output is not None
+    if isinstance(audio_output, str) and not audio_output.strip():
+        audio_selected = False
+
+    if audio_selected:
+        try:
+            if host.engine.running:
+                if host.audio_output_name != audio_output:
+                    host.stop_audio()
+                    host.start_audio(audio_output)
+            else:
+                host.start_audio(audio_output)
+        except Exception as e:
+            errors.append(f"audio output '{audio_output}': {e}")
+
+    _restore_port("MIDI seq in", connections.get("midi_seq_in"), host.open_sequencer_midi)
+    _restore_port("MIDI keys in", connections.get("midi_keys_in"), host.open_keyboard_midi)
+    _restore_port("MIDI mix in", connections.get("midi_mix_in"), host.open_mixer_midi)
+    _restore_port("MIDI mix out", connections.get("midi_mix_out"), host.open_mixer_midi_out)
 
     # -- Report --------------------------------------------------------------
     if errors:
