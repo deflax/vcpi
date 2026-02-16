@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from linkvst.deps import HAS_RTMIDI, rtmidi
+from core.deps import HAS_RTMIDI, rtmidi
 
 
 class MidiPort:

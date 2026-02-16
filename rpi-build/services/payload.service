@@ -1,15 +1,15 @@
 [Unit]
-Description=LinkVST headless host
+Description=vcpi headless host
 After=sound.target
 
 [Service]
 Environment=JACK_NO_AUDIO_RESERVATION=1
 User=pi
 Group=pi
-WorkingDirectory=/home/pi/linkvst
-RuntimeDirectory=linkvst
+WorkingDirectory=/home/pi/vcpi
+RuntimeDirectory=vcpi
 ExecStartPre=/bin/sleep 10
-ExecStart=/home/pi/linkvst/venv/bin/python /home/pi/linkvst/vst_host.py serve --sock /run/linkvst/linkvst.sock
+ExecStart=/home/pi/vcpi/venv/bin/python /home/pi/vcpi/main.py serve --sock /run/vcpi/vcpi.sock
 Restart=always
 RestartSec=10s
 KillMode=process

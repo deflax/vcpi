@@ -35,8 +35,7 @@ WORK_IMAGE="$SCRIPT_DIR/src.img"
 WORK_IMAGE_XZ="$SCRIPT_DIR/src.img.xz"
 OUTPUT_IMAGE="${OUTPUT_IMAGE:-$SCRIPT_DIR/vcpi.img}"
 
-# Legacy default from older repository versions. Block this value unless
-# explicitly allowed for backwards compatibility.
+# Legacy default from older repository versions. Block this value.
 INSECURE_DEFAULT_USERCONF='pi:$6$J3VR90uJ/TxGhcPf$OzVHJSqmGWsJlDFxCumcwftgv2okaHZlbrTyu5MX0YXKrDrVxMxsexbroXUt5CkSu0xedQAcfvHm5CDpkiiDu0'
 
 REFRESH_CACHE=0
@@ -55,8 +54,8 @@ IMAGE_URL="$1"
 CACHE_DIR="${IMAGE_CACHE_DIR:-$SCRIPT_DIR/.image-cache}"
 mkdir -p "$CACHE_DIR"
 
-if [ ! -d "$REPO_ROOT/linkvst" ] || [ ! -f "$REPO_ROOT/vst_host.py" ] || [ ! -f "$REPO_ROOT/requirements.txt" ]; then
-  echo "ERROR: LinkVST project files not found at repo root: $REPO_ROOT"
+if [ ! -d "$REPO_ROOT/core" ] || [ ! -d "$REPO_ROOT/controllers" ] || [ ! -f "$REPO_ROOT/main.py" ] || [ ! -f "$REPO_ROOT/requirements.txt" ]; then
+  echo "ERROR: vcpi project files not found at repo root: $REPO_ROOT"
   exit 1
 fi
 
@@ -72,9 +71,9 @@ if [ -z "$USERCONF_LINE" ]; then
   exit 1
 fi
 
-if [ "$USERCONF_LINE" = "$INSECURE_DEFAULT_USERCONF" ] && [ "${ALLOW_INSECURE_DEFAULTS:-0}" != "1" ]; then
+if [ "$USERCONF_LINE" = "$INSECURE_DEFAULT_USERCONF" ]; then
   echo "ERROR: insecure default credentials detected in $USERCONF_PATH"
-  echo "Set a unique password hash (or ALLOW_INSECURE_DEFAULTS=1 to override)"
+  echo "Set a unique password hash"
   exit 1
 fi
 
@@ -182,14 +181,15 @@ sed -i 's/^dtparam=audio=on/#&/' "$BOOT_MOUNT/config.txt"
 # disable hdmi audio
 sed -i 's/dtoverlay=vc4-kms-v3d/dtoverlay=vc4-kms-v3d,noaudio/' "$BOOT_MOUNT/config.txt"
 
-# setup LinkVST payload
+# setup vcpi payload
 cp -v "$SCRIPT_DIR/services/payload.service" "$MOUNT_DIR/lib/systemd/system/payload.service"
 ln -v -sf /lib/systemd/system/payload.service "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
 
 #provision project files
 cp -v "$SCRIPT_DIR/setup.sh" "$MOUNT_DIR/root/setup.sh"
-cp -rv "$REPO_ROOT/linkvst" "$MOUNT_DIR/root/linkvst"
-cp -v "$REPO_ROOT/vst_host.py" "$MOUNT_DIR/root/vst_host.py"
+cp -rv "$REPO_ROOT/core" "$MOUNT_DIR/root/core"
+cp -rv "$REPO_ROOT/controllers" "$MOUNT_DIR/root/controllers"
+cp -v "$REPO_ROOT/main.py" "$MOUNT_DIR/root/main.py"
 cp -v "$REPO_ROOT/requirements.txt" "$MOUNT_DIR/root/requirements.txt"
 
 sync

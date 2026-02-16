@@ -17,12 +17,12 @@ import json
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
-from linkvst.models import NUM_SLOTS
+from core.models import NUM_SLOTS
 
 if TYPE_CHECKING:
-    from linkvst.host import VSTHost
+    from core.host import VcpiCore
 
-DEFAULT_SESSION_PATH = Path("~/.config/linkvst/session.json").expanduser()
+DEFAULT_SESSION_PATH = Path("~/.config/vcpi/session.json").expanduser()
 
 
 # ===========================================================================
@@ -49,7 +49,7 @@ def _apply_plugin_params(plugin, params: dict[str, float]):
             print(f"  [session] could not restore param '{name}' = {value}")
 
 
-def snapshot(host: VSTHost) -> dict:
+def snapshot(host: VcpiCore) -> dict:
     """Capture the full restorable state of the host as a plain dict."""
     slots_data = []
     for slot in host.engine.slots:
@@ -82,7 +82,7 @@ def snapshot(host: VSTHost) -> dict:
         })
 
     # Routing: store as 1-based for readability in the JSON file
-    routing = {str(ch + 1): idx + 1 for ch, idx in host._channel_map.items()}
+    routing = {str(ch + 1): idx + 1 for ch, idx in host.channel_map.items()}
 
     return {
         "version": 1,
@@ -96,7 +96,7 @@ def snapshot(host: VSTHost) -> dict:
     }
 
 
-def save(host: VSTHost, path: Optional[Path] = None):
+def save(host: VcpiCore, path: Optional[Path] = None):
     """Save the current session to a JSON file."""
     path = Path(path) if path else DEFAULT_SESSION_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,7 +105,7 @@ def save(host: VSTHost, path: Optional[Path] = None):
     print(f"[Session] Saved to {path}")
 
 
-def restore(host: VSTHost, path: Optional[Path] = None):
+def restore(host: VcpiCore, path: Optional[Path] = None):
     """Restore a session from a JSON file.
 
     Loads instruments, effects, parameters, routing, gains, and tempo.

@@ -1,4 +1,4 @@
-"""VSTHost - the central coordinator tying all subsystems together."""
+"""vcpi core - the central coordinator for all subsystems."""
 
 from __future__ import annotations
 
@@ -6,16 +6,15 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from linkvst.deps import HAS_PEDALBOARD, HAS_MIDO, load_plugin, mido
-from linkvst.models import InstrumentSlot, NUM_SLOTS
-from linkvst.engine import AudioEngine
-from linkvst.midi import MidiPort
-from linkvst.midimix import MidiMixHandler
-from linkvst.link import LinkSync
-from linkvst import session
+from core import deps, session
+from controllers.bsp import BeatStepProController
+from controllers.midimix import MidiMixController
+from core.engine import AudioEngine
+from core.link import LinkSync
+from core.models import InstrumentSlot, NUM_SLOTS
 
 
-class VSTHost:
+class VcpiCore:
     def __init__(self, sample_rate: int = 44100, buffer_size: int = 512,
                  session_path: Optional[str] = None):
         self.sample_rate = sample_rate
@@ -23,23 +22,34 @@ class VSTHost:
         self.session_path = Path(session_path) if session_path else session.DEFAULT_SESSION_PATH
 
         self.engine = AudioEngine(sample_rate, buffer_size)
-        self.midi_seq = MidiPort()    # Beatstep Pro
-        self.midi_mix = MidiPort()    # Akai MIDI Mix
-        self.mix_handler = MidiMixHandler(self.engine)
         self.link = LinkSync()
 
-        # MIDI channel -> slot index  (Beatstep Pro routing)
-        self._channel_map: dict[int, int] = {}
+        self.bsp = BeatStepProController(self.engine)
+        self.midimix = MidiMixController(self.engine)
+
+    @property
+    def channel_map(self) -> dict[int, int]:
+        return self.bsp.channel_map
+
+    @property
+    def sequencer_midi_name(self) -> Optional[str]:
+        return self.bsp.port_name
+
+    @property
+    def mixer_midi_name(self) -> Optional[str]:
+        return self.midimix.port_name
 
     # -- plugin management ---------------------------------------------------
 
     def load_instrument(self, slot_index: int, path: str,
                         name: Optional[str] = None) -> InstrumentSlot:
-        if not HAS_PEDALBOARD:
+        if not deps.HAS_PEDALBOARD:
             raise RuntimeError("pedalboard not installed")
+        if deps.load_plugin is None:
+            raise RuntimeError("pedalboard loader unavailable")
         if not 0 <= slot_index < NUM_SLOTS:
             raise ValueError(f"slot must be 1-{NUM_SLOTS}")
-        plugin = load_plugin(path)
+        plugin = deps.load_plugin(path)
         if not plugin.is_instrument:
             raise ValueError(f"{path} is not an instrument")
         slot = InstrumentSlot(
@@ -53,9 +63,11 @@ class VSTHost:
     def load_effect(self, path: str, slot_index: Optional[int] = None,
                     name: Optional[str] = None):
         """Load effect into a slot's insert chain or the master bus."""
-        if not HAS_PEDALBOARD:
+        if not deps.HAS_PEDALBOARD:
             raise RuntimeError("pedalboard not installed")
-        plugin = load_plugin(path)
+        if deps.load_plugin is None:
+            raise RuntimeError("pedalboard loader unavailable")
+        plugin = deps.load_plugin(path)
         label = name or Path(path).stem
         if slot_index is not None:
             slot = self.engine.slots[slot_index]
@@ -79,90 +91,29 @@ class VSTHost:
     # -- routing -------------------------------------------------------------
 
     def route(self, midi_channel: int, slot_index: int):
-        if not 0 <= midi_channel < 16:
-            raise ValueError("MIDI channel must be 1-16")
-        if not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
-
-        # Remove stale membership if this channel was previously routed.
-        prev_idx = self._channel_map.get(midi_channel)
-        if prev_idx is not None and prev_idx != slot_index:
-            prev_slot = self.engine.slots[prev_idx]
-            if prev_slot:
-                prev_slot.midi_channels.discard(midi_channel)
-
-        self._channel_map[midi_channel] = slot_index
-        slot = self.engine.slots[slot_index]
-        if slot:
-            slot.midi_channels.add(midi_channel)
+        self.bsp.route(midi_channel, slot_index)
 
     def unroute(self, midi_channel: int):
-        idx = self._channel_map.pop(midi_channel, None)
-        if idx is not None:
-            slot = self.engine.slots[idx]
-            if slot:
-                slot.midi_channels.discard(midi_channel)
+        self.bsp.unroute(midi_channel)
 
-    # -- Beatstep Pro MIDI ---------------------------------------------------
+    # -- MIDI controllers ----------------------------------------------------
 
     def open_sequencer_midi(self, port_index: Optional[int] = None):
-        if port_index is not None:
-            name = self.midi_seq.open(port_index, self._on_seq_midi)
-        else:
-            name = self.midi_seq.open_virtual("LinkVST-Seq", self._on_seq_midi)
+        name = self.bsp.open(port_index)
         print(f"[SEQ MIDI] Opened: {name}")
 
-    def _on_seq_midi(self, event, data=None):
-        """Route Beatstep Pro MIDI to the appropriate instrument slot."""
-        raw, _dt = event
-        if not raw or not HAS_MIDO:
-            return
-        status = raw[0]
-        channel = status & 0x0F
-        msg_type = status & 0xF0
-
-        idx = self._channel_map.get(channel)
-        if idx is None:
-            return
-
-        try:
-            m = None
-            if msg_type == 0x90 and len(raw) >= 3:
-                note, vel = raw[1], raw[2]
-                m = (mido.Message("note_off", note=note, channel=channel)
-                     if vel == 0 else
-                     mido.Message("note_on", note=note, velocity=vel,
-                                  channel=channel))
-            elif msg_type == 0x80 and len(raw) >= 3:
-                m = mido.Message("note_off", note=raw[1], channel=channel)
-            elif msg_type == 0xB0 and len(raw) >= 3:
-                m = mido.Message("control_change", control=raw[1],
-                                 value=raw[2], channel=channel)
-            elif msg_type == 0xE0 and len(raw) >= 3:
-                val = (raw[2] << 7) | raw[1]
-                m = mido.Message("pitchwheel", pitch=val - 8192,
-                                 channel=channel)
-            elif msg_type == 0xD0 and len(raw) >= 2:
-                m = mido.Message("aftertouch", value=raw[1], channel=channel)
-            if m is not None:
-                self.engine.enqueue_midi(idx, m)
-        except Exception as exc:
-            print(f"[SEQ MIDI] {exc}")
-
-    # -- Akai MIDI Mix -------------------------------------------------------
-
     def open_mixer_midi(self, port_index: int):
-        name = self.midi_mix.open(port_index, self.mix_handler.on_midi)
+        name = self.midimix.open(port_index)
         print(f"[MIDI Mix] Opened: {name}")
 
     # -- convenience ---------------------------------------------------------
 
     def send_note(self, slot_index: int, note: int, velocity: int = 100,
                   duration: float = 0.3):
-        if not HAS_MIDO:
+        if not deps.HAS_MIDO or deps.mido is None:
             return
-        on = mido.Message("note_on", note=note, velocity=velocity)
-        off = mido.Message("note_off", note=note)
+        on = deps.mido.Message("note_on", note=note, velocity=velocity)
+        off = deps.mido.Message("note_off", note=note)
         self.engine.enqueue_midi(slot_index, on)
         threading.Timer(duration, self.engine.enqueue_midi,
                         args=(slot_index, off)).start()
@@ -202,7 +153,7 @@ class VSTHost:
     def shutdown(self):
         self.save_session()
         self.stop_audio()
-        self.midi_seq.close()
-        self.midi_mix.close()
+        self.bsp.close()
+        self.midimix.close()
         self.stop_link()
         print("[Host] Shutdown complete")

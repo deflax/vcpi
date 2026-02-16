@@ -13,4 +13,4 @@ if [ ! -x "$PYTHON_BIN" ]; then
   "$PIP_BIN" install -r "$ROOT_DIR/requirements.txt"
 fi
 
-exec "$PYTHON_BIN" "$ROOT_DIR/vst_host.py" "$@"
+exec "$PYTHON_BIN" "$ROOT_DIR/main.py" serve "$@"

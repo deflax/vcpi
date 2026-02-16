@@ -1,12 +1,12 @@
-# LinkVST CLI Reference
+# vcpi CLI Reference
 
-This reference covers command-line startup flags and interactive `linkvst>`
+This reference covers command-line startup flags and interactive `vcpi>`
 commands.
 
 Source of truth:
 
-- `linkvst/main.py`
-- `linkvst/cli.py`
+- `core/main.py`
+- `core/cli.py`
 
 ## Conventions
 
@@ -19,21 +19,20 @@ Source of truth:
 
 | Command | What it does |
 |---|---|
-| `./start.sh` | Starts local interactive mode; bootstraps `.venv` on first run |
-| `python vst_host.py` | Starts local interactive mode |
-| `python vst_host.py serve` | Starts headless server with Unix socket control |
-| `python -m linkvst cli` | Connects to a running headless server |
+| `./vcsrv` | Starts headless server mode; bootstraps `.venv` on first run |
+| `./vcli` | Connects interactive client mode; bootstraps `.venv` on first run |
+| `python main.py serve` | Starts headless server with Unix socket control |
+| `python main.py cli` | Connects to a running headless server |
 
 Default socket path (server and client):
 
 ```text
-/run/linkvst/linkvst.sock
+/run/vcpi/vcpi.sock
 ```
 
 ## Host Startup Flags
 
-These flags apply to local mode (`python vst_host.py`) and server mode
-(`python vst_host.py serve`).
+These flags apply when starting the host server (`python main.py serve`).
 
 | Flag | Default | Description |
 |---|---|---|
@@ -44,15 +43,15 @@ These flags apply to local mode (`python vst_host.py`) and server mode
 | `--seq-midi` | unset | BeatStep Pro MIDI port index to open on startup |
 | `--mix-midi` | unset | MIDI Mix port index to open on startup |
 | `--output` | unset | Output audio device index or name |
-| `--session` | `~/.config/linkvst/session.json` | Session file path |
+| `--session` | `~/.config/vcpi/session.json` | Session file path |
 | `--no-restore` | off | Skip session restore at startup |
 
 Server/client specific:
 
 | Mode | Flag | Default | Description |
 |---|---|---|---|
-| `serve` | `--sock` | `/run/linkvst/linkvst.sock` | Unix socket to bind |
-| `cli` | `--sock` | `/run/linkvst/linkvst.sock` | Unix socket to connect to |
+| `serve` | `--sock` | `/run/vcpi/vcpi.sock` | Unix socket to bind |
+| `cli` | `--sock` | `/run/vcpi/vcpi.sock` | Unix socket to connect to |
 
 ## Interactive Commands
 
@@ -99,7 +98,7 @@ Server/client specific:
 | Command | Description |
 |---|---|
 | `midi_ports` | List MIDI input ports |
-| `midi_seq [port_index]` | Open BeatStep Pro input (no arg opens virtual input `LinkVST-Seq`) |
+| `midi_seq [port_index]` | Open BeatStep Pro input (no arg opens virtual input `vcpi-Seq`) |
 | `midi_mix <port_index>` | Open Akai MIDI Mix input |
 | `note <slot> <note> [vel] [dur_ms]` | Send test note to slot |
 
@@ -124,28 +123,16 @@ Server/client specific:
 |---|---|
 | `status` | Print combined system status |
 | `deps` | Check optional dependency availability |
-| `quit` / `exit` / `Ctrl-D` | Exit local CLI, or disconnect client in server mode |
+| `quit` / `exit` / `Ctrl-D` | Disconnect this client session |
 
 ## Example Workflows
-
-Local interactive mode:
-
-```text
-./start.sh
-linkvst> deps
-linkvst> midi_ports
-linkvst> midi_seq 0
-linkvst> midi_mix 1
-linkvst> load 1 /path/to/Synth.vst3 Lead
-linkvst> route 1 1
-linkvst> audio_start
-linkvst> link 120
-linkvst> status
-```
 
 Headless server + client shell:
 
 ```bash
-./start.sh serve --sock /run/linkvst/linkvst.sock
-python -m linkvst cli --sock /run/linkvst/linkvst.sock
+# Terminal 1
+./vcsrv --sock /run/vcpi/vcpi.sock
+
+# Terminal 2
+./vcli --sock /run/vcpi/vcpi.sock
 ```

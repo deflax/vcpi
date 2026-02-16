@@ -41,11 +41,12 @@ ufw --force enable
 #setup jack
 echo /usr/bin/jackd -P75 -p16 -dalsa -dhw:0 -p1024 -n3 > /home/pi/.jackdrc
 
-# deploy linkvst
-PROJECT_DIR=/home/pi/linkvst
+# deploy runtime sources
+PROJECT_DIR=/home/pi/vcpi
 mkdir -p "$PROJECT_DIR"
-mv -v /root/linkvst "$PROJECT_DIR/linkvst"
-mv -v /root/vst_host.py "$PROJECT_DIR/vst_host.py"
+mv -v /root/core "$PROJECT_DIR/core"
+mv -v /root/controllers "$PROJECT_DIR/controllers"
+mv -v /root/main.py "$PROJECT_DIR/main.py"
 mv -v /root/requirements.txt "$PROJECT_DIR/requirements.txt"
 
 python3 -m venv "$PROJECT_DIR/venv"

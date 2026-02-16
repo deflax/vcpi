@@ -1,23 +1,18 @@
-# LinkVST
+# vcpi
 
-LinkVST is a Python VST3 host with Ableton Link tempo sync, designed for
+vcpi is a Python VST3 host with Ableton Link tempo sync, designed for
 hardware-centric live setups (for example Arturia BeatStep Pro + Akai MIDI Mix).
-
-This repository is now structured with LinkVST as the main project at the repo
-root. Raspberry Pi image tooling lives under `rpi-build/`.
-
-## Project Split
-
-- Main development/runtime project is at repo root (`linkvst/`, `vst_host.py`).
-- Raspberry Pi image provisioning is isolated under `rpi-build/`.
-- Local startup is optimized for repo-root use via `./start.sh`.
 
 ## Quick Start (from repo root)
 
 Fastest path:
 
 ```bash
-./start.sh
+# Terminal 1
+./vcsrv
+
+# Terminal 2
+./vcli
 ```
 
 Manual setup:
@@ -27,13 +22,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Start local interactive mode
-python vst_host.py
-# or (script is executable)
-./vst_host.py
-# or
-python -m linkvst
+# Terminal 1: start server
+python main.py serve --sock /run/vcpi/vcpi.sock
+
+# Terminal 2: connect interactive client
+python main.py cli --sock /run/vcpi/vcpi.sock
 ```
+
+vcpi now always runs with separate server (`serve`) and client (`cli`) processes.
 
 If you are on Linux, you may also need:
 
@@ -45,10 +41,13 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 
 ```text
 .
-  linkvst/            # Main package
+  core/               # Main package
+    host.py           # vcpi core orchestration
+  controllers/        # Hardware controller modules (BSP, MIDI Mix)
   docs/               # Extended documentation (CLI reference, etc.)
-  start.sh            # One-command local launcher (creates .venv on first run)
-  vst_host.py         # Thin entry point
+  main.py             # Top-level Python entry point
+  vcsrv               # Server launcher (creates .venv on first run)
+  vcli                # Client launcher (creates .venv on first run)
   requirements.txt    # Python dependencies
   rpi-build/          # Raspberry Pi image build/provisioning tools only
 ```
@@ -56,18 +55,15 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 ## Common Commands
 
 ```bash
-# One-command launcher (bootstraps .venv on first run)
-./start.sh
-
-# Local interactive host
-python vst_host.py
-./vst_host.py
-
-# Headless daemon with Unix socket API
-python vst_host.py serve --sock /run/linkvst/linkvst.sock
+# Start headless daemon with Unix socket API
+./vcsrv --sock /run/vcpi/vcpi.sock
 
 # Connect CLI client to a running daemon
-python -m linkvst cli --sock /run/linkvst/linkvst.sock
+./vcli --sock /run/vcpi/vcpi.sock
+
+# Direct python equivalents
+python main.py serve --sock /run/vcpi/vcpi.sock
+python main.py cli --sock /run/vcpi/vcpi.sock
 ```
 
 Full CLI and startup flag reference: `docs/cli-reference.md`
@@ -90,16 +86,16 @@ status
 ### Arturia BeatStep Pro (sequencer)
 
 - BeatStep Pro is the note/sequence source; its MIDI channels are fully configurable.
-- Route whichever channels your BSP sends on into LinkVST slots with `route <ch> <slot>`.
-- There are no hard-coded channel assumptions in LinkVST.
+- Route whichever channels your BSP sends on into vcpi slots with `route <ch> <slot>`.
+- There are no hard-coded channel assumptions in vcpi.
 
 ```text
-linkvst> midi_ports
-linkvst> midi_seq 0
-linkvst> route 1 1
-linkvst> route 2 2
-linkvst> route 10 3
-linkvst> routing
+vcpi> midi_ports
+vcpi> midi_seq 0
+vcpi> route 1 1
+vcpi> route 2 2
+vcpi> route 10 3
+vcpi> routing
 ```
 
 ### Akai MIDI Mix (hardware mixer)
@@ -132,36 +128,39 @@ SOLO (REC ARM):       Notes 3,6,9,12,15,18,21,24
 Load a synth and test note:
 
 ```text
-linkvst> load 1 /path/to/Synth.vst3 Lead
-linkvst> audio_start
-linkvst> note 1 60 100 500
+vcpi> load 1 /path/to/Synth.vst3 Lead
+vcpi> audio_start
+vcpi> note 1 60 100 500
 ```
 
 Typical multi-instrument setup with BSP + MIDI Mix:
 
 ```text
-linkvst> load 1 /path/to/Lead.vst3 Lead
-linkvst> load 2 /path/to/Bass.vst3 Bass
-linkvst> load 3 /path/to/Drums.vst3 Drums
+vcpi> load 1 /path/to/Lead.vst3 Lead
+vcpi> load 2 /path/to/Bass.vst3 Bass
+vcpi> load 3 /path/to/Drums.vst3 Drums
 
-linkvst> route 1 1
-linkvst> route 2 2
-linkvst> route 10 3
+vcpi> route 1 1
+vcpi> route 2 2
+vcpi> route 10 3
 
-linkvst> midi_seq 0
-linkvst> midi_mix 1
-linkvst> load_fx /path/to/Delay.vst3 1 Delay
-linkvst> load_fx /path/to/Reverb.vst3 master Reverb
-linkvst> audio_start
-linkvst> link 120
-linkvst> status
+vcpi> midi_seq 0
+vcpi> midi_mix 1
+vcpi> load_fx /path/to/Delay.vst3 1 Delay
+vcpi> load_fx /path/to/Reverb.vst3 master Reverb
+vcpi> audio_start
+vcpi> link 120
+vcpi> status
 ```
 
 Headless server + remote CLI:
 
 ```bash
-./start.sh serve --sock /run/linkvst/linkvst.sock
-python -m linkvst cli --sock /run/linkvst/linkvst.sock
+# Terminal 1
+./vcsrv --sock /run/vcpi/vcpi.sock
+
+# Terminal 2
+./vcli --sock /run/vcpi/vcpi.sock
 ```
 
 ## Raspberry Pi Builds
@@ -188,6 +187,6 @@ sudo ./prepare-image.sh <raspios-image-url>
 
 ## License Notes
 
-LinkVST relies on libraries with different licenses, including GPL components
+vcpi relies on libraries with different licenses, including GPL components
 (`pedalboard`, `aalink`). If you distribute bundled binaries, review dependency
 licenses carefully.

@@ -1,7 +1,7 @@
-"""Unix socket server for LinkVST.
+"""Unix socket server for vcpi.
 
-Runs VSTHost headless and accepts CLI connections over a Unix domain socket.
-Each connected client gets its own HostCLI session sharing the same VSTHost
+Runs VcpiCore headless and accepts CLI connections over a Unix domain socket.
+Each connected client gets its own HostCLI session sharing the same core
 instance.  The protocol is line-oriented text:
 
   client -> server:  one command per line (UTF-8)
@@ -12,7 +12,7 @@ lines until it sees the sentinel, then prints everything before it and
 prompts for the next command.
 
 Multiple clients may connect simultaneously; a threading lock serialises
-command execution so the shared VSTHost state stays consistent.
+command execution so the shared core state stays consistent.
 """
 
 from __future__ import annotations
@@ -25,19 +25,19 @@ import sys
 import threading
 from pathlib import Path
 
-from linkvst.host import VSTHost
-from linkvst.cli import HostCLI
+from core.host import VcpiCore
+from core.cli import HostCLI
 
-DEFAULT_SOCK_PATH = Path("/run/linkvst/linkvst.sock")
+DEFAULT_SOCK_PATH = Path("/run/vcpi/vcpi.sock")
 
 # Sentinel that marks the end of a command's output.
 END_OF_RESPONSE = "\x00"
 
 
-class LinkVSTServer:
-    """Headless VSTHost daemon with a Unix socket control interface."""
+class VcpiServer:
+    """Headless VcpiCore daemon with a Unix socket control interface."""
 
-    def __init__(self, host: VSTHost, sock_path: Path = DEFAULT_SOCK_PATH):
+    def __init__(self, host: VcpiCore, sock_path: Path = DEFAULT_SOCK_PATH):
         self.host = host
         self.sock_path = sock_path
         self._lock = threading.Lock()
@@ -166,10 +166,10 @@ class LinkVSTServer:
         return output
 
 
-def run_server(host: VSTHost, sock_path: str | None = None):
+def run_server(host: VcpiCore, sock_path: str | None = None):
     """Convenience entry point used by ``main.py``."""
     path = Path(sock_path) if sock_path else DEFAULT_SOCK_PATH
-    server = LinkVSTServer(host, path)
+    server = VcpiServer(host, path)
 
     def _shutdown(signum, frame):
         print("\n[Server] Shutting down...")

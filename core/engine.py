@@ -5,8 +5,8 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
-from linkvst.deps import HAS_SOUNDDEVICE, HAS_PEDALBOARD, Pedalboard, sd, np
-from linkvst.models import InstrumentSlot, NUM_SLOTS
+from core.deps import HAS_SOUNDDEVICE, HAS_PEDALBOARD, Pedalboard, sd, np
+from core.models import InstrumentSlot, NUM_SLOTS
 
 
 class AudioEngine:

@@ -1,12 +1,12 @@
-"""CLI client that connects to a running LinkVST server over a Unix socket.
+"""CLI client that connects to a running vcpi server over a Unix socket.
 
 Usage::
 
-    python -m linkvst cli [--sock /run/linkvst/linkvst.sock]
+    python main.py cli [--sock /run/vcpi/vcpi.sock]
 
 Or directly::
 
-    python -c "from linkvst.client import connect; connect()"
+    python -c "from core.client import connect; connect()"
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ import socket
 import sys
 from pathlib import Path
 
-DEFAULT_SOCK_PATH = Path("/run/linkvst/linkvst.sock")
+DEFAULT_SOCK_PATH = Path("/run/vcpi/vcpi.sock")
 
 # Must match the sentinel used by server.py
 END_OF_RESPONSE = "\x00"
 
 
 def connect(sock_path: str | Path | None = None):
-    """Connect to the LinkVST server and run an interactive REPL."""
+    """Connect to the vcpi server and run an interactive REPL."""
     path = Path(sock_path) if sock_path else DEFAULT_SOCK_PATH
 
     if not path.exists():
@@ -47,7 +47,7 @@ def connect(sock_path: str | Path | None = None):
     try:
         while True:
             try:
-                line = input("linkvst> ")
+                line = input("vcpi> ")
             except (EOFError, KeyboardInterrupt):
                 # Ctrl-D or Ctrl-C -> disconnect gracefully
                 print()

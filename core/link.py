@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from linkvst.deps import HAS_LINK, aalink
+from core.deps import HAS_LINK, aalink
 
 
 class LinkSync:

@@ -1,4 +1,4 @@
-"""Interactive command-line interface for LinkVST.
+"""Interactive command-line interface for vcpi.
 
 All slot numbers and MIDI channels are presented 1-based to the user
 (slots 1-8, MIDI channels 1-16) and converted to 0-based internally.
@@ -9,10 +9,10 @@ from __future__ import annotations
 import cmd
 from pathlib import Path
 
-from linkvst.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDDEVICE, sd
-from linkvst.midi import MidiPort
-from linkvst.models import NUM_SLOTS
-from linkvst.host import VSTHost
+from core.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDDEVICE, sd
+from core.host import VcpiCore
+from core.midi import MidiPort
+from core.models import NUM_SLOTS
 
 
 def _slot_to_internal(user_slot: int) -> int:
@@ -32,15 +32,15 @@ def _ch_to_internal(user_ch: int) -> int:
 class HostCLI(cmd.Cmd):
     intro = r"""
 ============================================================
-  LinkVST  -  Python VST3 Host + Ableton Link
+  vcpi  -  Python VST3 Host + Ableton Link
   Beatstep Pro (sequencer)  |  MIDI Mix (mixer)
 ============================================================
 Type 'help' for available commands.
 Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 """
-    prompt = "linkvst> "
+    prompt = "vcpi> "
 
-    def __init__(self, host: VSTHost, stdout=None, owns_host: bool = True):
+    def __init__(self, host: VcpiCore, stdout=None, owns_host: bool = True):
         super().__init__(stdout=stdout)
         self.host = host
         # When True, quit/exit will call host.shutdown().
@@ -317,11 +317,11 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     def do_routing(self, arg):
         """Show MIDI routing."""
-        if not self.host._channel_map:
+        if not self.host.channel_map:
             self._print("  No routes.")
             return
-        for ch in sorted(self.host._channel_map):
-            idx = self.host._channel_map[ch]
+        for ch in sorted(self.host.channel_map):
+            idx = self.host.channel_map[ch]
             slot = self.host.engine.slots[idx]
             name = slot.name if slot else "(empty)"
             self._print(f"  ch {ch + 1} -> slot {idx + 1} ({name})")
@@ -451,11 +451,11 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     def do_status(self, arg):
         """Overall status."""
-        self._print("=== LinkVST Status ===")
+        self._print("=== vcpi Status ===")
         self._print(f"  Audio  : {'RUNNING' if self.host.engine.running else 'STOPPED'}"
                     f"  (sr={self.host.sample_rate} buf={self.host.buffer_size})")
-        self._print(f"  BSP    : {self.host.midi_seq.name or 'closed'}")
-        self._print(f"  MIDIMix: {self.host.midi_mix.name or 'closed'}")
+        self._print(f"  BSP    : {self.host.sequencer_midi_name or 'closed'}")
+        self._print(f"  MIDIMix: {self.host.mixer_midi_name or 'closed'}")
         self._print(f"  Session: {self.host.session_path}")
         lk = self.host.link
         if lk.enabled:
@@ -473,7 +473,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print(f"  {name}: {'OK' if ok else 'MISSING'}")
 
     def do_quit(self, arg):
-        """Exit (disconnect from server, or shutdown in local mode)."""
+        """Exit the current CLI session."""
         if self._owns_host:
             self.host.shutdown()
         return True
