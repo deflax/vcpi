@@ -99,8 +99,12 @@ def connect(sock_path: str | Path | None = None):
         while True:
             try:
                 line = input("vcpi> ")
-            except (EOFError, KeyboardInterrupt):
-                # Ctrl-D or Ctrl-C -> disconnect gracefully
+            except KeyboardInterrupt:
+                # Ctrl-C: cancel current input line and keep the client open.
+                print()
+                continue
+            except EOFError:
+                # Ctrl-D -> disconnect gracefully
                 print()
                 break
 
