@@ -3,6 +3,46 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+CARDINAL_VERSION="${CARDINAL_VERSION:-26.01}"
+CARDINAL_ARCHIVE="Cardinal-linux-aarch64-${CARDINAL_VERSION}.tar.gz"
+CARDINAL_URL="${CARDINAL_URL:-https://github.com/DISTRHO/Cardinal/releases/download/${CARDINAL_VERSION}/${CARDINAL_ARCHIVE}}"
+
+install_cardinal_vst3() {
+  local tmp_dir
+  local archive_path
+  local extract_dir
+  local cardinal_dir
+
+  tmp_dir="$(mktemp -d /tmp/cardinal.XXXXXX)"
+  archive_path="$tmp_dir/$CARDINAL_ARCHIVE"
+  extract_dir="$tmp_dir/extract"
+  mkdir -p "$extract_dir"
+
+  echo "Downloading Cardinal VST3: $CARDINAL_URL"
+  if ! curl -fL --retry 6 --retry-delay 2 --retry-all-errors "$CARDINAL_URL" -o "$archive_path"; then
+    echo "ERROR: failed to download Cardinal archive"
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  tar -xzf "$archive_path" -C "$extract_dir"
+
+  cardinal_dir="$(find "$extract_dir" -type d -name "Cardinal.vst3" -print -quit)"
+  if [ -z "$cardinal_dir" ]; then
+    echo "ERROR: Cardinal.vst3 not found in archive: $CARDINAL_ARCHIVE"
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  mkdir -p /usr/local/lib/vst3
+  rm -rf /usr/local/lib/vst3/Cardinal.vst3
+  cp -a "$cardinal_dir" /usr/local/lib/vst3/Cardinal.vst3
+  chmod -R a+rX /usr/local/lib/vst3/Cardinal.vst3
+
+  echo "Installed Cardinal VST3 to /usr/local/lib/vst3/Cardinal.vst3"
+  rm -rf "$tmp_dir"
+}
+
 # upgrade system
 apt-get update
 apt-get upgrade -y
@@ -30,6 +70,9 @@ apt-get install \
   python3-venv \
   jackd2 -y
 
+# install Cardinal (aarch64 release) for load_vcv
+install_cardinal_vst3
+
 # grant device access via groups instead of world-writable USB rules
 usermod -aG audio,plugdev pi
 
@@ -49,6 +92,7 @@ mv -v /root/controllers "$PROJECT_DIR/controllers"
 mv -v /root/graph "$PROJECT_DIR/graph"
 mv -v /root/main.py "$PROJECT_DIR/main.py"
 mv -v /root/requirements.txt "$PROJECT_DIR/requirements.txt"
+mkdir -p "$PROJECT_DIR/patches"
 
 python3 -m venv "$PROJECT_DIR/venv"
 "$PROJECT_DIR/venv/bin/pip" install --upgrade pip
