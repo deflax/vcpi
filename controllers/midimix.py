@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from core.midi import MidiPort
 from core.models import NUM_SLOTS
+
+
+logger = logging.getLogger(__name__)
 
 # -- CC numbers per channel strip (1-8) -------------------------------------
 
@@ -70,13 +74,18 @@ class MidiMixController:
         msg_type = status & 0xF0
 
         if msg_type == 0xB0 and len(raw) >= 3:
+            logger.debug("CC %d value=%d", raw[1], raw[2])
             self._handle_cc(raw[1], raw[2])
         elif msg_type == 0x90 and len(raw) >= 3 and raw[2] > 0:
+            logger.debug("note %d velocity=%d", raw[1], raw[2])
             self._handle_note(raw[1])
+        else:
+            logger.debug("raw=%s ignored", raw)
 
     def _handle_cc(self, cc: int, value: int):
         if cc == MASTER_FADER_CC:
             self._engine.master_gain = value / 127.0
+            logger.info("master gain -> %.2f", self._engine.master_gain)
             return
 
         slot_idx = self._cc_to_fader.get(cc)
@@ -84,19 +93,29 @@ class MidiMixController:
             slot = self._engine.slots[slot_idx]
             if slot:
                 slot.gain = value / 127.0
+                logger.info("slot %d gain -> %.2f", slot_idx + 1, slot.gain)
+            else:
+                logger.debug("slot %d gain ignored (empty slot)", slot_idx + 1)
             return
 
         knob = self._cc_to_knob.get(cc)
         if knob is None:
+            logger.debug("unmapped CC %d ignored", cc)
             return
 
         slot_idx, knob_idx = knob
         slot = self._engine.slots[slot_idx]
         if slot is None:
+            logger.debug("knob on slot %d ignored (empty slot)", slot_idx + 1)
             return
 
         params = list(slot.plugin.parameters.keys())
         if knob_idx >= len(params):
+            logger.debug(
+                "slot %d knob %d ignored (no mapped param)",
+                slot_idx + 1,
+                knob_idx + 1,
+            )
             return
 
         param_name = params[knob_idx]
@@ -104,11 +123,13 @@ class MidiMixController:
             param_range = slot.plugin.parameters[param_name].range
             mapped = param_range[0] + (value / 127.0) * (param_range[1] - param_range[0])
             setattr(slot.plugin, param_name, mapped)
+            logger.info("slot %d %s -> %s", slot_idx + 1, param_name, mapped)
         except Exception:
             try:
                 setattr(slot.plugin, param_name, value / 127.0)
+                logger.info("slot %d %s -> %s", slot_idx + 1, param_name, value / 127.0)
             except Exception:
-                pass
+                logger.warning("slot %d %s update failed", slot_idx + 1, param_name)
 
     def _handle_note(self, note: int):
         if note in MUTE_NOTES:
@@ -117,7 +138,9 @@ class MidiMixController:
             if slot:
                 slot.muted = not slot.muted
                 state = "MUTED" if slot.muted else "unmuted"
-                print(f"  [slot {idx + 1}] {slot.name}: {state}")
+                logger.info("[slot %d] %s: %s", idx + 1, slot.name, state)
+            else:
+                logger.debug("mute toggle ignored (slot %d empty)", idx + 1)
             return
 
         if note in SOLO_NOTES:
@@ -126,4 +149,9 @@ class MidiMixController:
             if slot:
                 slot.solo = not slot.solo
                 state = "SOLO" if slot.solo else "unsolo"
-                print(f"  [slot {idx + 1}] {slot.name}: {state}")
+                logger.info("[slot %d] %s: %s", idx + 1, slot.name, state)
+            else:
+                logger.debug("solo toggle ignored (slot %d empty)", idx + 1)
+            return
+
+        logger.debug("unmapped note %d ignored", note)

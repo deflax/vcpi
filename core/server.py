@@ -18,6 +18,7 @@ command execution so the shared core state stays consistent.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import signal
 import socket
@@ -31,6 +32,9 @@ from core.paths import DEFAULT_SOCK_PATH
 
 # Sentinel that marks the end of a command's output.
 END_OF_RESPONSE = "\x00"
+
+
+logger = logging.getLogger(__name__)
 
 
 class VcpiServer:
@@ -68,7 +72,7 @@ class VcpiServer:
         os.chmod(str(self.sock_path), 0o770)
 
         self._running = True
-        print(f"[Server] Listening on {self.sock_path}")
+        logger.info("listening on %s", self.sock_path)
 
         try:
             while self._running:
@@ -101,6 +105,8 @@ class VcpiServer:
 
     def _handle_client(self, conn: socket.socket):
         """Serve one connected CLI client."""
+        client_id = f"client-{id(conn):x}"
+        logger.info("%s connected", client_id)
         try:
             rfile = conn.makefile("r", encoding="utf-8", errors="replace")
             wfile = conn.makefile("w", encoding="utf-8")
@@ -121,13 +127,14 @@ class VcpiServer:
 
                 # Execute the command while holding the lock so concurrent
                 # clients don't trample each other.
-                output = self._run_command(line)
+                output = self._run_command(line, client_id)
 
                 if output is None:
                     # quit / exit / EOF  -> close this client
                     wfile.write("[Host] Disconnected.\n")
                     wfile.write(END_OF_RESPONSE + "\n")
                     wfile.flush()
+                    logger.info("%s requested disconnect", client_id)
                     break
 
                 wfile.write(output)
@@ -136,20 +143,22 @@ class VcpiServer:
                 wfile.write(END_OF_RESPONSE + "\n")
                 wfile.flush()
 
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        except (BrokenPipeError, ConnectionResetError, OSError) as e:
+            logger.warning("%s connection error: %s", client_id, e)
         finally:
             try:
                 conn.close()
             except OSError:
                 pass
+            logger.info("%s disconnected", client_id)
 
-    def _run_command(self, line: str) -> str | None:
+    def _run_command(self, line: str, client_id: str) -> str | None:
         """Execute one CLI command and capture its printed output.
 
         Returns the captured output string, or ``None`` if the command
         requests a disconnect (quit/exit/EOF).
         """
+        logger.info("cli %s > %s", client_id, line)
         with self._lock:
             buf = io.StringIO()
 
@@ -167,7 +176,15 @@ class VcpiServer:
         if stop:
             # If the user typed "quit" don't actually shut down the host.
             # The host only shuts down when the daemon process exits.
+            logger.info("cli %s -> disconnect", client_id)
             return None
+
+        text = output.rstrip("\n")
+        if text:
+            for out_line in text.splitlines():
+                logger.debug("cli %s -> %s", client_id, out_line)
+        else:
+            logger.debug("cli %s -> (no output)", client_id)
 
         return output
 
@@ -178,7 +195,8 @@ def run_server(host: VcpiCore, sock_path: str | None = None):
     server = VcpiServer(host, path)
 
     def _shutdown(signum, frame):
-        print("\n[Server] Shutting down...")
+        del signum, frame
+        logger.info("shutting down")
         server.stop()
         host.shutdown()
         sys.exit(0)

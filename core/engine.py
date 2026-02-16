@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Optional
 
 from core.deps import HAS_SOUNDDEVICE, HAS_PEDALBOARD, Pedalboard, sd, np
 from core.models import InstrumentSlot, NUM_SLOTS
+
+
+logger = logging.getLogger(__name__)
 
 
 class AudioEngine:
@@ -52,7 +56,7 @@ class AudioEngine:
 
     def _callback(self, outdata, frames: int, time_info, status):
         if status:
-            print(f"[Audio] {status}")
+            logger.warning("[Audio] %s", status)
 
         mixed = np.zeros((frames, self.output_channels), dtype=np.float32)
 
@@ -130,15 +134,19 @@ class AudioEngine:
             device=output_device,
         )
         self._stream.start()
-        print(f"[Audio] Started  sr={self.sample_rate}  buf={self.buffer_size}"
-              f"  ch={self.output_channels}")
+        logger.info(
+            "[Audio] Started sr=%d buf=%d ch=%d",
+            self.sample_rate,
+            self.buffer_size,
+            self.output_channels,
+        )
 
     def stop(self):
         if self._stream:
             self._stream.stop()
             self._stream.close()
             self._stream = None
-            print("[Audio] Stopped")
+            logger.info("[Audio] Stopped")
 
     @property
     def running(self) -> bool:

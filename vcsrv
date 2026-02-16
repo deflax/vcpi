@@ -13,4 +13,6 @@ if [ ! -x "$PYTHON_BIN" ]; then
   "$PIP_BIN" install -r "$ROOT_DIR/requirements.txt"
 fi
 
+export LOG_LEVEL="${LOG_LEVEL:-DEBUG}"
+
 exec "$PYTHON_BIN" "$ROOT_DIR/main.py" serve "$@"

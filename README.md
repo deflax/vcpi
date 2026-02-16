@@ -31,6 +31,9 @@ python main.py cli
 
 vcpi now always runs with separate server (`serve`) and client (`cli`) processes.
 
+In server mode, vcpi automatically attempts to start audio on boot. If audio
+initialization fails, the server continues running and logs the failure.
+
 If you are on Linux, you may also need:
 
 ```bash
@@ -64,6 +67,11 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 # Direct python equivalents
 python main.py serve
 python main.py cli
+
+# Logging defaults:
+# - python main.py serve -> WARNING
+# - ./vcsrv -> DEBUG
+LOG_LEVEL=INFO ./vcsrv
 ```
 
 Full CLI and startup flag reference: `docs/cli-reference.md`

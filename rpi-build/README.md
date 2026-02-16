@@ -62,6 +62,7 @@ sudo USERCONF_PATH=/secure/userconf.txt WPA_CONF_PATH=/secure/wpa_supplicant.con
 - vcpi is installed under `/home/pi/vcpi`
 - Python packages are under `/home/pi/vcpi/core` and `/home/pi/vcpi/controllers`
 - Python venv is created at `/home/pi/vcpi/venv`
+- `payload.service` sets `LOG_LEVEL=DEBUG`
 - `payload.service` starts:
 
 ```text

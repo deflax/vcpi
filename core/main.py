@@ -9,9 +9,14 @@ cli     Connect to a running server and open an interactive session.
 from __future__ import annotations
 
 import argparse
+import logging
 
 from core.host import VcpiCore
+from core.logging_setup import configure_logging
 from core.paths import DEFAULT_SOCK_PATH
+
+
+logger = logging.getLogger(__name__)
 
 
 # -- shared helpers ----------------------------------------------------------
@@ -45,25 +50,25 @@ def _boot_host(args) -> VcpiCore:
         try:
             host.restore_session()
         except Exception as e:
-            print(f"Session restore: {e}")
+            logger.warning("session restore failed: %s", e)
 
     if args.link:
         try:
             host.start_link(args.bpm)
         except Exception as e:
-            print(f"Link: {e}")
+            logger.warning("link startup failed: %s", e)
 
     if args.seq_midi is not None:
         try:
             host.open_sequencer_midi(args.seq_midi)
         except Exception as e:
-            print(f"SEQ MIDI: {e}")
+            logger.warning("sequencer MIDI startup failed: %s", e)
 
     if args.mix_midi is not None:
         try:
             host.open_mixer_midi(args.mix_midi)
         except Exception as e:
-            print(f"MIDI Mix: {e}")
+            logger.warning("MIDI Mix startup failed: %s", e)
 
     return host
 
@@ -74,7 +79,19 @@ def _cmd_serve(args):
     """Run the host as a headless server."""
     from core.server import run_server
 
+    level = configure_logging(default_level="WARNING")
+    logger.info("vcpi server starting (log level: %s)", logging.getLevelName(level))
+
     host = _boot_host(args)
+
+    output_device = args.output
+    if isinstance(output_device, str) and output_device.isdigit():
+        output_device = int(output_device)
+    try:
+        host.start_audio(output_device)
+    except Exception as e:
+        logger.warning("audio auto-start failed: %s", e)
+
     run_server(host, args.sock)
 
 

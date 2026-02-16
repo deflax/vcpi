@@ -58,14 +58,30 @@ def connect(sock_path: str | Path | None = None):
                 print()
                 break
 
-            wfile.write(line + "\n")
-            wfile.flush()
+            try:
+                wfile.write(line + "\n")
+                wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                # Server already closed the socket.
+                break
 
             if not _read_response(rfile):
                 # Server closed the connection (e.g. after quit)
                 break
 
+            if line.strip().lower() in {"quit", "exit"}:
+                # Explicit disconnect command completed.
+                break
+
     finally:
+        try:
+            wfile.close()
+        except OSError:
+            pass
+        try:
+            rfile.close()
+        except OSError:
+            pass
         try:
             sock.close()
         except OSError:

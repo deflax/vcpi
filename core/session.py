@@ -14,6 +14,7 @@ The session file is human-readable JSON so it can be hand-edited if needed.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
     from core.host import VcpiCore
 
 DEFAULT_SESSION_PATH = Path("~/.config/vcpi/session.json").expanduser()
+
+
+logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
@@ -46,7 +50,7 @@ def _apply_plugin_params(plugin, params: dict[str, float]):
         try:
             setattr(plugin, name, value)
         except Exception:
-            print(f"  [session] could not restore param '{name}' = {value}")
+            logger.warning("[session] could not restore param '%s' = %s", name, value)
 
 
 def snapshot(host: VcpiCore) -> dict:
@@ -102,7 +106,7 @@ def save(host: VcpiCore, path: Optional[Path] = None):
     path.parent.mkdir(parents=True, exist_ok=True)
     data = snapshot(host)
     path.write_text(json.dumps(data, indent=2) + "\n")
-    print(f"[Session] Saved to {path}")
+    logger.info("[Session] Saved to %s", path)
 
 
 def restore(host: VcpiCore, path: Optional[Path] = None):
@@ -113,13 +117,13 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
     """
     path = Path(path) if path else DEFAULT_SESSION_PATH
     if not path.exists():
-        print(f"[Session] No session file at {path}")
+        logger.info("[Session] No session file at %s", path)
         return
 
     data = json.loads(path.read_text())
     version = data.get("version", 0)
     if version != 1:
-        print(f"[Session] Unknown session version {version}, skipping")
+        logger.warning("[Session] Unknown session version %s, skipping", version)
         return
 
     errors = []
@@ -149,7 +153,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
             slot.muted = slot_data.get("muted", False)
             slot.solo = slot_data.get("solo", False)
             _apply_plugin_params(slot.plugin, slot_data.get("params", {}))
-            print(f"  [session] slot {idx + 1}: {slot.name}")
+            logger.info("[session] slot %d: %s", idx + 1, slot.name)
 
             for fx_data in slot_data.get("effects", []):
                 try:
@@ -182,8 +186,8 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
 
     # -- Report --------------------------------------------------------------
     if errors:
-        print(f"[Session] Restored with {len(errors)} error(s):")
+        logger.warning("[Session] Restored with %d error(s):", len(errors))
         for err in errors:
-            print(f"  - {err}")
+            logger.warning("  - %s", err)
     else:
-        print(f"[Session] Restored from {path}")
+        logger.info("[Session] Restored from %s", path)

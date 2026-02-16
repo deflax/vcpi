@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from core.deps import HAS_MIDO, mido
 from core.midi import MidiPort
 from core.models import NUM_SLOTS
+
+
+logger = logging.getLogger(__name__)
 
 
 class BeatStepProController:
@@ -45,11 +49,20 @@ class BeatStepProController:
             prev_slot = self._engine.slots[prev_idx]
             if prev_slot:
                 prev_slot.midi_channels.discard(midi_channel)
+            logger.info(
+                "route update: ch %d slot %d -> slot %d",
+                midi_channel + 1,
+                prev_idx + 1,
+                slot_index + 1,
+            )
 
         self._channel_map[midi_channel] = slot_index
         slot = self._engine.slots[slot_index]
         if slot:
             slot.midi_channels.add(midi_channel)
+
+        if prev_idx is None:
+            logger.info("route set: ch %d -> slot %d", midi_channel + 1, slot_index + 1)
 
     def unroute(self, midi_channel: int):
         idx = self._channel_map.pop(midi_channel, None)
@@ -57,6 +70,7 @@ class BeatStepProController:
             slot = self._engine.slots[idx]
             if slot:
                 slot.midi_channels.discard(midi_channel)
+            logger.info("route removed: ch %d (slot %d)", midi_channel + 1, idx + 1)
 
     def on_midi(self, event, data=None):
         """rtmidi callback that forwards MIDI to routed instrument slots."""
@@ -72,6 +86,7 @@ class BeatStepProController:
 
         slot_index = self._channel_map.get(channel)
         if slot_index is None:
+            logger.debug("ch %d raw=%s dropped (unrouted)", channel + 1, raw)
             return
 
         try:
@@ -97,5 +112,8 @@ class BeatStepProController:
 
             if msg is not None:
                 self._engine.enqueue_midi(slot_index, msg)
+                logger.debug("ch %d -> slot %d: %s", channel + 1, slot_index + 1, msg)
+            else:
+                logger.debug("ch %d raw=%s ignored", channel + 1, raw)
         except Exception as exc:
-            print(f"[SEQ MIDI] {exc}")
+            logger.warning("MIDI processing error: %s", exc)

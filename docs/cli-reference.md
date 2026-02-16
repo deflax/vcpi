@@ -48,6 +48,21 @@ These flags apply when starting the host server (`python main.py serve`).
 | `--session` | `~/.config/vcpi/session.json` | Session file path |
 | `--no-restore` | off | Skip session restore at startup |
 
+When running `serve`, vcpi automatically attempts to start audio at boot
+using `--output` if provided. If startup fails, the daemon keeps running and
+logs the error.
+
+Logging level is controlled by environment variable `LOG_LEVEL`.
+Core default is `WARNING`. `./vcsrv` defaults it to `DEBUG` if unset.
+The Raspberry Pi `payload.service` also sets `LOG_LEVEL=DEBUG`.
+
+Examples:
+
+```bash
+LOG_LEVEL=INFO ./vcsrv
+LOG_LEVEL=WARNING python main.py serve
+```
+
 Server/client specific:
 
 | Mode | Flag | Default | Description |
@@ -138,3 +153,9 @@ Headless server + client shell:
 # Terminal 2
 ./vcli
 ```
+
+Server logs now include:
+
+- CLI command execution (`[CLI] ...`)
+- BeatStep Pro events (`[SEQ MIDI] ...`)
+- MIDI Mix events (`[MIDI Mix] ...`)

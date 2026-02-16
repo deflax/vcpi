@@ -4,6 +4,7 @@ After=sound.target
 
 [Service]
 Environment=JACK_NO_AUDIO_RESERVATION=1
+Environment=LOG_LEVEL=DEBUG
 User=pi
 Group=pi
 WorkingDirectory=/home/pi/vcpi

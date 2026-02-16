@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import Optional
@@ -12,6 +13,9 @@ from controllers.midimix import MidiMixController
 from core.engine import AudioEngine
 from core.link import LinkSync
 from core.models import InstrumentSlot, NUM_SLOTS
+
+
+logger = logging.getLogger(__name__)
 
 
 class VcpiCore:
@@ -74,10 +78,10 @@ class VcpiCore:
             if slot is None:
                 raise ValueError(f"Slot {slot_index + 1} is empty")
             slot.effects.append(plugin)
-            print(f"[FX] '{label}' -> slot {slot_index + 1} ({slot.name})")
+            logger.info("[FX] '%s' -> slot %d (%s)", label, slot_index + 1, slot.name)
         else:
             self.engine.master_effects.append(plugin)
-            print(f"[FX] '{label}' -> master bus")
+            logger.info("[FX] '%s' -> master bus", label)
 
     def remove_effect(self, slot_index: Optional[int], effect_index: int):
         if slot_index is not None:
@@ -100,11 +104,11 @@ class VcpiCore:
 
     def open_sequencer_midi(self, port_index: Optional[int] = None):
         name = self.bsp.open(port_index)
-        print(f"[SEQ MIDI] Opened: {name}")
+        logger.info("[SEQ MIDI] Opened: %s", name)
 
     def open_mixer_midi(self, port_index: int):
         name = self.midimix.open(port_index)
-        print(f"[MIDI Mix] Opened: {name}")
+        logger.info("[MIDI Mix] Opened: %s", name)
 
     # -- convenience ---------------------------------------------------------
 
@@ -130,11 +134,11 @@ class VcpiCore:
         if bpm is not None:
             self.link.bpm = bpm
         self.link.enable()
-        print(f"[Link] Enabled at {self.link.bpm:.1f} BPM")
+        logger.info("[Link] Enabled at %.1f BPM", self.link.bpm)
 
     def stop_link(self):
         self.link.disable()
-        print("[Link] Disabled")
+        logger.info("[Link] Disabled")
 
     # -- session persistence -------------------------------------------------
 
@@ -156,4 +160,4 @@ class VcpiCore:
         self.bsp.close()
         self.midimix.close()
         self.stop_link()
-        print("[Host] Shutdown complete")
+        logger.info("[Host] Shutdown complete")
