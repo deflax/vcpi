@@ -100,14 +100,6 @@ def _cmd_serve(args):
 
     host = _boot_host(args)
 
-    output_device = args.output
-    if isinstance(output_device, str) and output_device.isdigit():
-        output_device = int(output_device)
-    try:
-        host.start_audio(output_device)
-    except Exception as e:
-        logger.warning("audio auto-start failed: %s", e)
-
     run_server(host, args.sock)
 
 

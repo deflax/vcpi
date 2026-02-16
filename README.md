@@ -31,8 +31,8 @@ python main.py cli
 
 vcpi now always runs with separate server (`serve`) and client (`cli`) processes.
 
-In server mode, vcpi automatically attempts to start audio on boot. If audio
-initialization fails, the server continues running and logs the failure.
+In server mode, vcpi does not start audio automatically. Start audio manually
+from `vcli` with `audio_start [device]`.
 
 If you are on Linux, you may also need:
 

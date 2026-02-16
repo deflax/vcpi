@@ -46,13 +46,12 @@ These flags apply when starting the host server (`python main.py serve`).
 | `--keys-midi` | unset | Novation 25 LE MIDI port index to open on startup |
 | `--mix-midi` | unset | MIDI Mix port index to open on startup |
 | `--mix-midi-out` | unset | MIDI Mix output port index (LED feedback) |
-| `--output` | unset | Output audio device index or name |
+| `--output` | unset | Preferred output audio device index or name (not auto-started) |
 | `--session` | `~/.config/vcpi/session.json` | Session file path |
 | `--no-restore` | off | Skip session restore at startup |
 
-When running `serve`, vcpi automatically attempts to start audio at boot
-using `--output` if provided. If startup fails, the daemon keeps running and
-logs the error.
+When running `serve`, vcpi does not start audio automatically. Start audio
+manually from the client with `audio_start [device]`.
 
 Logging level is controlled by environment variable `LOG_LEVEL`.
 Core default is `WARNING`. `./vcsrv` defaults it to `DEBUG` if unset.
