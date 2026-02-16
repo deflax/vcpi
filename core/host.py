@@ -87,7 +87,7 @@ class VcpiCore:
 
         sample = CARDINAL_VST3_CANDIDATES[0]
         raise FileNotFoundError(
-            "Cardinal VST3 not found. Pass explicit path to load_vcv, set "
+            "Cardinal VST3 not found. Pass explicit path to 'load vcv', set "
             f"{CARDINAL_VST3_ENV}, or install Cardinal at {sample}."
         )
 
@@ -218,6 +218,19 @@ class VcpiCore:
             plugin=plugin,
         )
         self.engine.slots[slot_index] = slot
+        return slot
+
+    def remove_instrument(self, slot_index: int) -> InstrumentSlot:
+        """Unload and clear one instrument slot."""
+        if not 0 <= slot_index < NUM_SLOTS:
+            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+
+        slot = self.engine.slots[slot_index]
+        if slot is None:
+            raise ValueError(f"Slot {slot_index + 1} is already empty")
+
+        self.engine.slots[slot_index] = None
+        logger.info("[INST] removed slot %d (%s)", slot_index + 1, slot.name)
         return slot
 
     def load_effect(self, path: str, slot_index: Optional[int] = None,

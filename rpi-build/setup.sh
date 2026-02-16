@@ -70,7 +70,7 @@ apt-get install \
   python3-venv \
   jackd2 -y
 
-# install Cardinal (aarch64 release) for load_vcv
+# install Cardinal (aarch64 release) for `load vcv`
 install_cardinal_vst3
 
 # grant device access via groups instead of world-writable USB rules

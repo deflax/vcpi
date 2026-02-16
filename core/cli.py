@@ -66,8 +66,68 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
     # -- plugins -------------------------------------------------------------
 
     def do_load(self, arg):
-        """Load instrument: load <slot 1-8> <path> [name]"""
-        parts = arg.strip().split(maxsplit=2)
+        """Load instrument/effect/VCV: load <slot 1-8> <path> [name] | load fx <path> [slot 1-8|master] [name] | load vcv <slot 1-8> <patch_name[.vcv]> [name]"""
+        text = arg.strip()
+        if not text:
+            self._print(
+                "Usage: load <slot 1-8> <path> [name] | "
+                "load fx <path> [slot 1-8|master] [name] | "
+                "load vcv <slot 1-8> <patch_name[.vcv]> [name]"
+            )
+            return
+
+        mode = text.split(maxsplit=1)[0]
+
+        if mode == "vcv":
+            parts = text.split(maxsplit=3)
+            if len(parts) < 3:
+                self._print("Usage: load vcv <slot 1-8> <patch_name[.vcv]> [name]")
+                return
+            try:
+                idx = _slot_to_internal(int(parts[1]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+
+            patch_name = parts[2]
+            name = parts[3] if len(parts) > 3 else None
+            try:
+                slot, patch_result, cardinal_path, patch_path = self.host.load_vcv_patch(
+                    idx,
+                    patch_name,
+                    name=name,
+                )
+            except Exception as e:
+                self._print(f"Error: {e}")
+                return
+
+            self._print(f"  slot {parts[1]} = {slot.name}")
+            self._print(f"  patch    : {patch_path}")
+            self._print(f"  cardinal : {cardinal_path}")
+            self._print(f"  result   : {patch_result}")
+            self._print(f"  route with: route <channel 1-16> {parts[1]}")
+            return
+
+        if mode == "fx":
+            parts = text.split(maxsplit=3)
+            if len(parts) < 2:
+                self._print("Usage: load fx <path> [slot 1-8|master] [name]")
+                return
+            path = parts[1]
+            target = parts[2] if len(parts) > 2 else "master"
+            name = parts[3] if len(parts) > 3 else None
+            try:
+                slot_idx = None if target == "master" else _slot_to_internal(int(target))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+            try:
+                self.host.load_effect(path, slot_idx, name)
+            except Exception as e:
+                self._print(f"Error: {e}")
+            return
+
+        parts = text.split(maxsplit=2)
         if len(parts) < 2:
             self._print("Usage: load <slot 1-8> <path> [name]")
             return
@@ -84,77 +144,51 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         except Exception as e:
             self._print(f"Error: {e}")
 
-    def do_load_vcv(self, arg):
-        """Load Cardinal + patch: load_vcv <slot 1-8> <patch_name[.vcv]> [name]"""
-        parts = arg.strip().split(maxsplit=2)
-        if len(parts) < 2:
-            self._print("Usage: load_vcv <slot 1-8> <patch_name[.vcv]> [name]")
+    def do_unload(self, arg):
+        """Unload instrument/effect: unload <slot 1-8> | unload fx <slot 1-8|master> <fx_index>"""
+        parts = arg.strip().split()
+        if not parts:
+            self._print("Usage: unload <slot 1-8> | unload fx <slot 1-8|master> <fx_index>")
             return
+
+        if parts[0] == "fx":
+            if len(parts) < 3:
+                self._print("Usage: unload fx <slot 1-8|master> <fx_index>")
+                return
+            try:
+                slot_idx = None if parts[1] == "master" else _slot_to_internal(int(parts[1]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+            try:
+                fx_idx = int(parts[2]) - 1
+            except ValueError:
+                self._print("Error: fx_index must be a positive integer")
+                return
+            if fx_idx < 0:
+                self._print("Error: fx_index must be >= 1")
+                return
+            try:
+                self.host.remove_effect(slot_idx, fx_idx)
+                self._print("  Removed.")
+            except Exception as e:
+                self._print(f"Error: {e}")
+            return
+
+        if len(parts) != 1:
+            self._print("Usage: unload <slot 1-8> | unload fx <slot 1-8|master> <fx_index>")
+            return
+
         try:
             idx = _slot_to_internal(int(parts[0]))
         except ValueError as e:
             self._print(f"Error: {e}")
             return
 
-        patch_name = parts[1]
-        name = parts[2] if len(parts) > 2 else None
         try:
-            slot, patch_result, cardinal_path, patch_path = self.host.load_vcv_patch(
-                idx,
-                patch_name,
-                name=name,
-            )
-        except Exception as e:
-            self._print(f"Error: {e}")
-            return
-
-        self._print(f"  slot {parts[0]} = {slot.name}")
-        self._print(f"  patch    : {patch_path}")
-        self._print(f"  cardinal : {cardinal_path}")
-        self._print(f"  result   : {patch_result}")
-        self._print(f"  route with: route <channel 1-16> {parts[0]}")
-
-    def do_load_fx(self, arg):
-        """Load effect: load_fx <path> [slot 1-8|master] [name]"""
-        parts = arg.strip().split(maxsplit=2)
-        if not parts:
-            self._print("Usage: load_fx <path> [slot 1-8|master] [name]")
-            return
-        path = parts[0]
-        target = parts[1] if len(parts) > 1 else "master"
-        name = parts[2] if len(parts) > 2 else None
-        try:
-            slot_idx = None if target == "master" else _slot_to_internal(int(target))
-        except ValueError as e:
-            self._print(f"Error: {e}")
-            return
-        try:
-            self.host.load_effect(path, slot_idx, name)
-        except Exception as e:
-            self._print(f"Error: {e}")
-
-    def do_remove_fx(self, arg):
-        """Remove effect: remove_fx <slot 1-8|master> <fx_index>"""
-        parts = arg.strip().split()
-        if len(parts) < 2:
-            self._print("Usage: remove_fx <slot 1-8|master> <fx_index>")
-            return
-        try:
-            slot_idx = None if parts[0] == "master" else _slot_to_internal(int(parts[0]))
-        except ValueError as e:
-            self._print(f"Error: {e}")
-            return
-        try:
-            fx_idx = int(parts[1]) - 1
-        except ValueError:
-            self._print("Error: fx_index must be a positive integer")
-            return
-        if fx_idx < 0:
-            self._print("Error: fx_index must be >= 1")
-            return
-        try:
-            self.host.remove_effect(slot_idx, fx_idx)
-            self._print("  Removed.")
+            removed = self.host.remove_instrument(idx)
+            self.host.refresh_mixer_leds([idx])
+            self._print(f"  slot {parts[0]} cleared ({removed.name})")
         except Exception as e:
             self._print(f"Error: {e}")
 
@@ -389,8 +423,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         """Stop audio."""
         self.host.stop_audio()
 
-    def do_devices(self, arg):
-        """List audio devices."""
+    def do_audio_devices(self, arg):
+        """List audio devices: audio_devices"""
         if HAS_SOUNDDEVICE:
             self._print(sd.query_devices())
         else:
@@ -398,8 +432,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     # -- MIDI ports ----------------------------------------------------------
 
-    def do_midi_ports(self, arg):
-        """List MIDI input ports."""
+    def do_midi_ports_in(self, arg):
+        """List MIDI input ports: midi_ports_in"""
         ports = list_midi_input_ports()
         if not ports:
             self._print("  No MIDI input ports found.")
@@ -407,8 +441,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         for i, name in enumerate(ports):
             self._print(f"  [{i}] {name}")
 
-    def do_midi_out_ports(self, arg):
-        """List MIDI output ports."""
+    def do_midi_ports_out(self, arg):
+        """List MIDI output ports: midi_ports_out"""
         ports = list_midi_output_ports()
         if not ports:
             self._print("  No MIDI output ports found.")
@@ -541,6 +575,15 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print(f"  Link  : {lk.bpm:.1f} BPM  ({lk.num_peers} peers)")
         else:
             self._print("  Link  : disabled")
+
+        gain_tokens = []
+        for i, slot in enumerate(self.host.engine.slots, start=1):
+            if slot is None:
+                gain_tokens.append(f"{i}:-")
+            else:
+                gain_tokens.append(f"{i}:{slot.gain:.2f}")
+        self._print("  Slot gains: " + "  ".join(gain_tokens))
+
         self._print()
         self.do_slots("")
 

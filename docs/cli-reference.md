@@ -60,8 +60,8 @@ The Raspberry Pi `payload.service` also sets `LOG_LEVEL=DEBUG`.
 
 Cardinal/VCV helpers:
 
-- `load_vcv` looks for patch files in `patches/` by default.
-- `load_vcv` does not auto-route channels; use `route <ch> <slot>` explicitly.
+- `load vcv` looks for patch files in `patches/` by default.
+- `load vcv` does not auto-route channels; use `route <ch> <slot>` explicitly.
 - Override patch directory with `VCPI_PATCHES_DIR`.
 - Override Cardinal plugin path with `CARDINAL_VST3_PATH`.
 
@@ -81,14 +81,18 @@ Server/client specific:
 
 ## Interactive Commands
 
+When connected with `./vcli` (or `python main.py cli`), press `Tab` to
+autocomplete command names.
+
 ### Plugin Commands
 
 | Command | Description |
 |---|---|
 | `load <slot> <path> [name]` | Load VST instrument into slot |
-| `load_vcv <slot> <patch_name> [name]` | Load Cardinal into explicit slot from `patches/<patch_name>.vcv` |
-| `load_fx <path> [slot\|master] [name]` | Load effect into slot insert chain or master bus |
-| `remove_fx <slot\|master> <fx_index>` | Remove effect by index |
+| `load vcv <slot> <patch_name> [name]` | Load Cardinal into explicit slot from `patches/<patch_name>.vcv` |
+| `load fx <path> [slot\|master] [name]` | Load effect into slot insert chain or master bus |
+| `unload <slot>` | Unload/clear instrument from slot |
+| `unload fx <slot\|master> <fx_index>` | Remove effect by index |
 | `slots` | Show slot status, routing, gain, and loaded FX |
 | `params <slot>` | Show instrument parameters |
 | `params master <fx_index>` | Show master FX parameters (defaults to first if omitted) |
@@ -119,14 +123,14 @@ Server/client specific:
 |---|---|
 | `audio_start [device]` | Start audio engine |
 | `audio_stop` | Stop audio engine |
-| `devices` | List available output devices |
+| `audio_devices` | List available output devices |
 
 ### MIDI Commands
 
 | Command | Description |
 |---|---|
-| `midi_ports` | List MIDI input ports |
-| `midi_out_ports` | List MIDI output ports |
+| `midi_ports_in` | List MIDI input ports |
+| `midi_ports_out` | List MIDI output ports |
 | `midi_seq [port_index]` | Open BeatStep Pro input (no arg opens virtual input `vcpi-Seq`) |
 | `midi_keys <port_index>` | Open Novation 25 LE keyboard input |
 | `midi_mix <port_index>` | Open Akai MIDI Mix input |
@@ -136,16 +140,17 @@ Server/client specific:
 Index discovery:
 
 ```text
-vcpi> midi_ports
+vcpi> midi_ports_in
   [0] Arturia BeatStep Pro MIDI 1
   [1] Novation 25 LE
   [2] MIDI Mix MIDI 1
 
-vcpi> midi_out_ports
+vcpi> midi_ports_out
   [0] MIDI Mix MIDI 1
 ```
 
-Use the numeric value in `[]` with `midi_seq`, `midi_keys`, `midi_mix`, and
+Use the numeric value in `[]` from `midi_ports_in` with `midi_seq`,
+`midi_keys`, and `midi_mix`. Use indexes from `midi_ports_out` with
 `midi_mix_out`. Indexes may change after reboot or replug.
 
 Important: `route <ch> <slot>` only maps MIDI channels internally. It does
