@@ -182,6 +182,7 @@ def _parse_help_commands(lines: list[str]) -> list[str]:
     """Extract command tokens from cmd.Cmd style help output."""
     commands: list[str] = []
     seen: set[str] = set()
+    in_custom_help = False
 
     for raw in lines:
         line = raw.strip()
@@ -196,7 +197,31 @@ def _parse_help_commands(lines: list[str]) -> list[str]:
         ):
             continue
 
+        if lower.startswith("available commands"):
+            in_custom_help = True
+            continue
+
+        if lower.startswith("tip:"):
+            continue
+
+        if lower.startswith("no commands available"):
+            continue
+
         if set(line) <= {"=", "-"}:
+            continue
+
+        if in_custom_help:
+            # New vcpi help format prints one command per line, followed by
+            # a summary; only the first token is the command name.
+            token = line.split()[0]
+            if token == "EOF":
+                continue
+            if not HELP_TOKEN_RE.fullmatch(token):
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            commands.append(token)
             continue
 
         for token in line.split():
