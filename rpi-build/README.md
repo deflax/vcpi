@@ -9,6 +9,7 @@ OS image that auto-starts vcpi.
 - `setup.sh` - first boot provisioning script executed on the Pi
 - `services/firstboot.service` - runs `setup.sh` once
 - `services/payload.service` - starts vcpi daemon on boot
+- `services/journald-console.conf` - mirrors journal logs to root console (tty1)
 - `userconf.txt.dist` - template for Raspberry Pi credentials
 - `wpa_supplicant.conf.dist` - template Wi-Fi config
 
@@ -63,6 +64,7 @@ sudo USERCONF_PATH=/secure/userconf.txt WPA_CONF_PATH=/secure/wpa_supplicant.con
 - Python packages are under `/home/pi/vcpi/core` and `/home/pi/vcpi/controllers`
 - Python venv is created at `/home/pi/vcpi/venv`
 - `payload.service` sets `LOG_LEVEL=DEBUG`
+- journald forwards logs to `/dev/tty1` at `debug` level
 - `payload.service` starts:
 
 ```text
@@ -74,4 +76,10 @@ sudo USERCONF_PATH=/secure/userconf.txt WPA_CONF_PATH=/secure/wpa_supplicant.con
 ```bash
 journalctl -u firstboot
 journalctl -u payload
+
+# follow vcpi service logs live
+journalctl -u payload -f
 ```
+
+On a connected display, service logs are also mirrored to the root console
+on `tty1` during startup.

@@ -185,6 +185,11 @@ sed -i 's/dtoverlay=vc4-kms-v3d/dtoverlay=vc4-kms-v3d,noaudio/' "$BOOT_MOUNT/con
 cp -v "$SCRIPT_DIR/services/payload.service" "$MOUNT_DIR/lib/systemd/system/payload.service"
 ln -v -sf /lib/systemd/system/payload.service "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
 
+# mirror journald output to root console (tty1)
+mkdir -p "$MOUNT_DIR/etc/systemd/journald.conf.d"
+cp -v "$SCRIPT_DIR/services/journald-console.conf" \
+  "$MOUNT_DIR/etc/systemd/journald.conf.d/console.conf"
+
 #provision project files
 cp -v "$SCRIPT_DIR/setup.sh" "$MOUNT_DIR/root/setup.sh"
 cp -rv "$REPO_ROOT/core" "$MOUNT_DIR/root/core"
