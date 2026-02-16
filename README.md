@@ -227,6 +227,9 @@ Headless server + remote CLI:
 ./vcli
 ```
 
+From `vcli`, use `shutdown` to terminate the daemon process (for example, to
+let systemd restart it).
+
 ## Raspberry Pi Builds
 
 All Raspberry Pi image build files are in `rpi-build/`.

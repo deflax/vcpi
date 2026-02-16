@@ -44,6 +44,8 @@ class VcpiServer:
         self.host = host
         self.sock_path = sock_path
         self._lock = threading.Lock()
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_done = False
         self._server_sock: socket.socket | None = None
         self._running = False
 
@@ -101,6 +103,20 @@ class VcpiServer:
             except OSError:
                 pass
 
+    def shutdown(self):
+        """Stop the server and shut down the host exactly once."""
+        with self._shutdown_lock:
+            if self._shutdown_done:
+                return
+            self._shutdown_done = True
+
+        self.stop()
+
+        try:
+            self.host.shutdown()
+        except Exception:
+            logger.exception("host shutdown failed")
+
     # ------------------------------------------------------------------
 
     def _handle_client(self, conn: socket.socket):
@@ -127,7 +143,7 @@ class VcpiServer:
 
                 # Execute the command while holding the lock so concurrent
                 # clients don't trample each other.
-                output = self._run_command(line, client_id)
+                output, shutdown_requested = self._run_command(line, client_id)
 
                 if output is None:
                     # quit / exit / EOF  -> close this client
@@ -143,6 +159,11 @@ class VcpiServer:
                 wfile.write(END_OF_RESPONSE + "\n")
                 wfile.flush()
 
+                if shutdown_requested:
+                    logger.info("%s requested daemon shutdown", client_id)
+                    self.shutdown()
+                    break
+
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             logger.warning("%s connection error: %s", client_id, e)
         finally:
@@ -152,11 +173,12 @@ class VcpiServer:
                 pass
             logger.info("%s disconnected", client_id)
 
-    def _run_command(self, line: str, client_id: str) -> str | None:
+    def _run_command(self, line: str, client_id: str) -> tuple[str | None, bool]:
         """Execute one CLI command and capture its printed output.
 
         Returns the captured output string, or ``None`` if the command
-        requests a disconnect (quit/exit/EOF).
+        requests a disconnect (quit/exit/EOF). The boolean indicates
+        whether daemon shutdown was requested.
         """
         logger.info("cli %s > %s", client_id, line)
         with self._lock:
@@ -170,14 +192,17 @@ class VcpiServer:
             stop = cli.onecmd(line)
 
             output = buf.getvalue()
+            shutdown_requested = bool(getattr(cli, "_shutdown_requested", False))
+
+        if shutdown_requested:
+            logger.info("cli %s -> shutdown", client_id)
+            return output, True
 
         # quit/exit/EOF tell cmd.Cmd to stop -- but for the *server* we
         # only disconnect this client, we never shut down the host.
         if stop:
-            # If the user typed "quit" don't actually shut down the host.
-            # The host only shuts down when the daemon process exits.
             logger.info("cli %s -> disconnect", client_id)
-            return None
+            return None, False
 
         text = output.rstrip("\n")
         if text:
@@ -186,7 +211,7 @@ class VcpiServer:
         else:
             logger.debug("cli %s -> (no output)", client_id)
 
-        return output
+        return output, False
 
 
 def run_server(host: VcpiCore, sock_path: str | None = None):
@@ -197,8 +222,7 @@ def run_server(host: VcpiCore, sock_path: str | None = None):
     def _shutdown(signum, frame):
         del signum, frame
         logger.info("shutting down")
-        server.stop()
-        host.shutdown()
+        server.shutdown()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _shutdown)

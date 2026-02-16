@@ -180,6 +180,7 @@ channel routing table from `route <ch> <slot>`.
 |---|---|
 | `status` | Print combined system status |
 | `deps` | Check optional dependency availability |
+| `shutdown` | Shut down the vcpi daemon process |
 | `quit` / `exit` / `Ctrl-D` | Disconnect this client session |
 
 ## Example Workflows

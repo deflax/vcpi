@@ -58,6 +58,7 @@ FALLBACK_COMMANDS = (
     "routing",
     "save",
     "set",
+    "shutdown",
     "slots",
     "solo",
     "status",
@@ -114,7 +115,7 @@ def connect(sock_path: str | Path | None = None):
                 # Server closed the connection (e.g. after quit)
                 break
 
-            if line.strip().lower() in {"quit", "exit"}:
+            if line.strip().lower() in {"quit", "exit", "shutdown"}:
                 # Explicit disconnect command completed.
                 break
 

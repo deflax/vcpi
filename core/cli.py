@@ -55,6 +55,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         # Set to False when running behind the socket server (the server
         # manages the host lifecycle).
         self._owns_host = owns_host
+        # Set by `shutdown` so the socket server can terminate the daemon.
+        self._shutdown_requested = False
 
     # -- helper for redirectable output --------------------------------------
 
@@ -62,6 +64,51 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         """Print to self.stdout so output is captured in server mode."""
         kwargs.setdefault("file", self.stdout)
         print(*args, **kwargs)
+
+    def _audio_backend_label(self) -> str:
+        """Best-effort host-audio backend label (ALSA/JACK/Pulse/PipeWire/etc.)."""
+        if not HAS_SOUNDDEVICE:
+            return "sounddevice unavailable"
+
+        try:
+            device_index = None
+
+            stream = self.host.engine._stream
+            if stream is not None:
+                stream_device = getattr(stream, "device", None)
+                if isinstance(stream_device, (tuple, list)):
+                    if len(stream_device) >= 2 and isinstance(stream_device[1], int):
+                        device_index = stream_device[1]
+                    elif len(stream_device) == 1 and isinstance(stream_device[0], int):
+                        device_index = stream_device[0]
+                elif isinstance(stream_device, int):
+                    device_index = stream_device
+
+            if not isinstance(device_index, int):
+                default_device = sd.default.device
+                if isinstance(default_device, (tuple, list)):
+                    if len(default_device) >= 2 and isinstance(default_device[1], int):
+                        device_index = default_device[1]
+                    elif len(default_device) == 1 and isinstance(default_device[0], int):
+                        device_index = default_device[0]
+                elif isinstance(default_device, int):
+                    device_index = default_device
+
+            if not isinstance(device_index, int) or device_index < 0:
+                return "unknown"
+
+            device_info = sd.query_devices(device_index)
+            hostapi_index = device_info.get("hostapi")
+            if not isinstance(hostapi_index, int):
+                return "unknown"
+
+            hostapi_name = sd.query_hostapis(hostapi_index).get("name", "unknown")
+            device_name = device_info.get("name")
+            if device_name:
+                return f"{hostapi_name} ({device_name})"
+            return str(hostapi_name)
+        except Exception:
+            return "unknown"
 
     # -- plugins -------------------------------------------------------------
 
@@ -319,39 +366,62 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print(f"Error: {e}")
             return
         slot = self.host.engine.slots[idx]
-        if slot:
-            try:
-                slot.gain = float(parts[1])
-            except ValueError:
-                self._print("Error: gain must be a number")
-                return
-            self._print(f"  gain = {slot.gain:.2f}")
+        if slot is None:
+            self._print(f"Error: slot {parts[0]} is empty")
+            return
+
+        try:
+            gain = float(parts[1])
+        except ValueError:
+            self._print("Error: gain must be a number")
+            return
+
+        if not 0.0 <= gain <= 1.0:
+            self._print("Error: gain must be between 0.0 and 1.0")
+            return
+
+        slot.gain = gain
+        self._print(f"  gain = {slot.gain:.2f}")
 
     def do_mute(self, arg):
         """Toggle mute: mute <slot 1-8>"""
+        token = arg.strip()
+        if not token:
+            self._print("Usage: mute <slot 1-8>")
+            return
         try:
-            idx = _slot_to_internal(int(arg.strip()))
+            idx = _slot_to_internal(int(token))
         except ValueError as e:
             self._print(f"Error: {e}")
             return
         slot = self.host.engine.slots[idx]
-        if slot:
-            slot.muted = not slot.muted
-            self.host.refresh_mixer_leds([idx])
-            self._print(f"  {slot.name}: {'MUTED' if slot.muted else 'unmuted'}")
+        if slot is None:
+            self._print(f"Error: slot {token} is empty")
+            return
+
+        slot.muted = not slot.muted
+        self.host.refresh_mixer_leds([idx])
+        self._print(f"  {slot.name}: {'MUTED' if slot.muted else 'unmuted'}")
 
     def do_solo(self, arg):
         """Toggle solo: solo <slot 1-8>"""
+        token = arg.strip()
+        if not token:
+            self._print("Usage: solo <slot 1-8>")
+            return
         try:
-            idx = _slot_to_internal(int(arg.strip()))
+            idx = _slot_to_internal(int(token))
         except ValueError as e:
             self._print(f"Error: {e}")
             return
         slot = self.host.engine.slots[idx]
-        if slot:
-            slot.solo = not slot.solo
-            self.host.refresh_mixer_leds([idx])
-            self._print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
+        if slot is None:
+            self._print(f"Error: slot {token} is empty")
+            return
+
+        slot.solo = not slot.solo
+        self.host.refresh_mixer_leds([idx])
+        self._print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
 
     def do_master(self, arg):
         """Set master gain: master <0.0-1.0>"""
@@ -565,6 +635,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         self._print("=== vcpi Status ===")
         self._print(f"  Audio  : {'RUNNING' if self.host.engine.running else 'STOPPED'}"
                     f"  (sr={self.host.sample_rate} buf={self.host.buffer_size})")
+        self._print(f"  Backend: {self._audio_backend_label()}")
         self._print(f"  BSP    : {self.host.sequencer_midi_name or 'closed'}")
         self._print(f"  Keys   : {self.host.keyboard_midi_name or 'closed'}")
         self._print(f"  MIDIMix IN : {self.host.mixer_midi_name or 'closed'}")
@@ -579,7 +650,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         gain_tokens = []
         for i, slot in enumerate(self.host.engine.slots, start=1):
             if slot is None:
-                gain_tokens.append(f"{i}:-")
+                gain_tokens.append(f"{i}:empty")
             else:
                 gain_tokens.append(f"{i}:{slot.gain:.2f}")
         self._print("  Slot gains: " + "  ".join(gain_tokens))
@@ -598,6 +669,20 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         """Exit the current CLI session."""
         if self._owns_host:
             self.host.shutdown()
+        return True
+
+    def do_shutdown(self, arg):
+        """Shutdown host/server process (for systemd restart)."""
+        if arg.strip():
+            self._print("Usage: shutdown")
+            return
+
+        self._shutdown_requested = True
+        self._print("  Shutting down vcpi...")
+
+        if self._owns_host:
+            self.host.shutdown()
+
         return True
 
     do_exit = do_quit
