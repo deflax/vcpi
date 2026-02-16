@@ -11,7 +11,7 @@ from pathlib import Path
 
 from core.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDDEVICE, sd
 from core.host import VcpiCore
-from core.midi import MidiPort
+from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import NUM_SLOTS
 from graph.routes import render_route_graph
 
@@ -32,10 +32,13 @@ def _ch_to_internal(user_ch: int) -> int:
 
 class HostCLI(cmd.Cmd):
     intro = r"""
-============================================================
-  vcpi  -  Python VST3 Host + Ableton Link
-  Beatstep Pro (sequencer)  |  MIDI Mix (mixer)
-============================================================
++------------------------------------------------------------+
+|                .-=-=-=-=-=-=-=-=-=-=-=-=-=-.               |
+|                |           vcpi            |               |
+|                '-=-=-=-=-=-=-=-=-=-=-=-=-=-'               |
++------------------------------------------------------------+
+  Python VST3 Host + Ableton Link
+  BeatStep Pro (sequencer) | MIDI Mix (mixer)
 Type 'help' for available commands.
 Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 """
@@ -76,6 +79,36 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print(f"  slot {parts[0]} = {slot.name}")
         except Exception as e:
             self._print(f"Error: {e}")
+
+    def do_load_vcv(self, arg):
+        """Load Cardinal + patch: load_vcv <slot 1-8> <patch_name[.vcv]> [name]"""
+        parts = arg.strip().split(maxsplit=2)
+        if len(parts) < 2:
+            self._print("Usage: load_vcv <slot 1-8> <patch_name[.vcv]> [name]")
+            return
+        try:
+            idx = _slot_to_internal(int(parts[0]))
+        except ValueError as e:
+            self._print(f"Error: {e}")
+            return
+
+        patch_name = parts[1]
+        name = parts[2] if len(parts) > 2 else None
+        try:
+            slot, patch_result, cardinal_path, patch_path = self.host.load_vcv_patch(
+                idx,
+                patch_name,
+                name=name,
+            )
+        except Exception as e:
+            self._print(f"Error: {e}")
+            return
+
+        self._print(f"  slot {parts[0]} = {slot.name}")
+        self._print(f"  patch    : {patch_path}")
+        self._print(f"  cardinal : {cardinal_path}")
+        self._print(f"  result   : {patch_result}")
+        self._print(f"  route with: route <channel 1-16> {parts[0]}")
 
     def do_load_fx(self, arg):
         """Load effect: load_fx <path> [slot 1-8|master] [name]"""
@@ -266,6 +299,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         slot = self.host.engine.slots[idx]
         if slot:
             slot.muted = not slot.muted
+            self.host.refresh_mixer_leds([idx])
             self._print(f"  {slot.name}: {'MUTED' if slot.muted else 'unmuted'}")
 
     def do_solo(self, arg):
@@ -278,6 +312,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         slot = self.host.engine.slots[idx]
         if slot:
             slot.solo = not slot.solo
+            self.host.refresh_mixer_leds([idx])
             self._print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
 
     def do_master(self, arg):
@@ -361,9 +396,18 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     def do_midi_ports(self, arg):
         """List MIDI input ports."""
-        ports = MidiPort.list_ports()
+        ports = list_midi_input_ports()
         if not ports:
             self._print("  No MIDI input ports found.")
+            return
+        for i, name in enumerate(ports):
+            self._print(f"  [{i}] {name}")
+
+    def do_midi_out_ports(self, arg):
+        """List MIDI output ports."""
+        ports = list_midi_output_ports()
+        if not ports:
+            self._print("  No MIDI output ports found.")
             return
         for i, name in enumerate(ports):
             self._print(f"  [{i}] {name}")
@@ -376,13 +420,33 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         except Exception as e:
             self._print(f"Error: {e}")
 
+    def do_midi_keys(self, arg):
+        """Open Novation 25 LE MIDI input: midi_keys <port_index>"""
+        if not arg.strip():
+            self._print("Usage: midi_keys <port_index>")
+            return
+        try:
+            self.host.open_keyboard_midi(int(arg.strip()))
+        except Exception as e:
+            self._print(f"Error: {e}")
+
     def do_midi_mix(self, arg):
-        """Open Akai MIDI Mix: midi_mix <port_index>"""
+        """Open Akai MIDI Mix input: midi_mix <port_index>"""
         if not arg.strip():
             self._print("Usage: midi_mix <port_index>")
             return
         try:
             self.host.open_mixer_midi(int(arg.strip()))
+        except Exception as e:
+            self._print(f"Error: {e}")
+
+    def do_midi_mix_out(self, arg):
+        """Open Akai MIDI Mix output (LED feedback): midi_mix_out <port_index>"""
+        if not arg.strip():
+            self._print("Usage: midi_mix_out <port_index>")
+            return
+        try:
+            self.host.open_mixer_midi_out(int(arg.strip()))
         except Exception as e:
             self._print(f"Error: {e}")
 
@@ -452,6 +516,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         path = arg.strip() or None
         try:
             self.host.restore_session(path)
+            self.host.refresh_mixer_leds()
         except Exception as e:
             self._print(f"Error: {e}")
 
@@ -463,7 +528,9 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         self._print(f"  Audio  : {'RUNNING' if self.host.engine.running else 'STOPPED'}"
                     f"  (sr={self.host.sample_rate} buf={self.host.buffer_size})")
         self._print(f"  BSP    : {self.host.sequencer_midi_name or 'closed'}")
-        self._print(f"  MIDIMix: {self.host.mixer_midi_name or 'closed'}")
+        self._print(f"  Keys   : {self.host.keyboard_midi_name or 'closed'}")
+        self._print(f"  MIDIMix IN : {self.host.mixer_midi_name or 'closed'}")
+        self._print(f"  MIDIMix OUT: {self.host.mixer_midi_out_name or 'closed'}")
         self._print(f"  Session: {self.host.session_path}")
         lk = self.host.link
         if lk.enabled:

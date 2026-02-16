@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from core.midi import MidiPort
+from core.midi import MidiInPort, MidiOutPort
 from core.models import NUM_SLOTS
 
 
@@ -49,18 +49,69 @@ class MidiMixController:
 
     def __init__(self, engine):
         self._engine = engine
-        self._port = MidiPort()
+        self._in_port = MidiInPort()
+        self._out_port = MidiOutPort()
         self._cc_to_fader, self._cc_to_knob = build_cc_lookups()
 
     @property
-    def port_name(self) -> Optional[str]:
-        return self._port.name
+    def input_port_name(self) -> Optional[str]:
+        return self._in_port.name
 
-    def open(self, port_index: int) -> str:
-        return self._port.open(port_index, self.on_midi)
+    @property
+    def output_port_name(self) -> Optional[str]:
+        return self._out_port.name
+
+    @property
+    def port_name(self) -> Optional[str]:
+        return self.input_port_name
+
+    def open_input(self, port_index: int) -> str:
+        return self._in_port.open_input_port(port_index, self.on_midi)
+
+    def open_output(self, port_index: int) -> str:
+        name = self._out_port.open_output_port(port_index)
+        self.refresh_leds()
+        return name
+
+    def open_virtual_output(self, name: str = "vcpi-MIDI-Mix-LED") -> str:
+        port_name = self._out_port.open_virtual_output_port(name)
+        self.refresh_leds()
+        return port_name
+
+    def close_input(self):
+        self._in_port.close()
+
+    def close_output(self):
+        self._out_port.close()
 
     def close(self):
-        self._port.close()
+        self.close_input()
+        self.close_output()
+
+    def _send_led_note(self, note: int, enabled: bool):
+        if not self._out_port.is_open:
+            return
+        velocity = 127 if enabled else 0
+        try:
+            self._out_port.send([0x90, note, velocity])
+        except Exception as exc:
+            logger.warning("failed to send LED note=%d state=%s: %s", note, enabled, exc)
+
+    def _set_slot_leds(self, slot_index: int):
+        slot = self._engine.slots[slot_index]
+        mute_on = bool(slot and slot.muted)
+        solo_on = bool(slot and slot.solo)
+        self._send_led_note(MUTE_NOTES[slot_index], mute_on)
+        self._send_led_note(SOLO_NOTES[slot_index], solo_on)
+
+    def refresh_leds(self, slot_indices: Optional[list[int]] = None):
+        if slot_indices is None:
+            indices = range(NUM_SLOTS)
+        else:
+            indices = slot_indices
+        for idx in indices:
+            if 0 <= idx < NUM_SLOTS:
+                self._set_slot_leds(idx)
 
     def on_midi(self, event, data=None):
         """rtmidi callback for incoming MIDI Mix events."""
@@ -141,6 +192,7 @@ class MidiMixController:
                 logger.info("[slot %d] %s: %s", idx + 1, slot.name, state)
             else:
                 logger.debug("mute toggle ignored (slot %d empty)", idx + 1)
+            self._set_slot_leds(idx)
             return
 
         if note in SOLO_NOTES:
@@ -152,6 +204,7 @@ class MidiMixController:
                 logger.info("[slot %d] %s: %s", idx + 1, slot.name, state)
             else:
                 logger.debug("solo toggle ignored (slot %d empty)", idx + 1)
+            self._set_slot_leds(idx)
             return
 
         logger.debug("unmapped note %d ignored", note)

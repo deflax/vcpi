@@ -6,7 +6,7 @@ import logging
 from typing import Optional
 
 from core.deps import HAS_MIDO, mido
-from core.midi import MidiPort
+from core.midi import MidiInPort
 from core.models import NUM_SLOTS
 
 
@@ -18,7 +18,7 @@ class BeatStepProController:
 
     def __init__(self, engine):
         self._engine = engine
-        self._port = MidiPort()
+        self._port = MidiInPort()
         # MIDI channel (0-15) -> slot index (0-7)
         self._channel_map: dict[int, int] = {}
 
@@ -32,8 +32,8 @@ class BeatStepProController:
 
     def open(self, port_index: Optional[int] = None) -> str:
         if port_index is not None:
-            return self._port.open(port_index, self.on_midi)
-        return self._port.open_virtual("vcpi-Seq", self.on_midi)
+            return self._port.open_input_port(port_index, self.on_midi)
+        return self._port.open_virtual_input_port("vcpi-Seq", self.on_midi)
 
     def close(self):
         self._port.close()

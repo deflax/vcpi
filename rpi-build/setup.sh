@@ -46,6 +46,7 @@ PROJECT_DIR=/home/pi/vcpi
 mkdir -p "$PROJECT_DIR"
 mv -v /root/core "$PROJECT_DIR/core"
 mv -v /root/controllers "$PROJECT_DIR/controllers"
+mv -v /root/graph "$PROJECT_DIR/graph"
 mv -v /root/main.py "$PROJECT_DIR/main.py"
 mv -v /root/requirements.txt "$PROJECT_DIR/requirements.txt"
 

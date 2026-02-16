@@ -43,7 +43,9 @@ These flags apply when starting the host server (`python main.py serve`).
 | `--bpm` | `120.0` | Initial tempo |
 | `--link` | off | Enable Ableton Link on startup |
 | `--seq-midi` | unset | BeatStep Pro MIDI port index to open on startup |
+| `--keys-midi` | unset | Novation 25 LE MIDI port index to open on startup |
 | `--mix-midi` | unset | MIDI Mix port index to open on startup |
+| `--mix-midi-out` | unset | MIDI Mix output port index (LED feedback) |
 | `--output` | unset | Output audio device index or name |
 | `--session` | `~/.config/vcpi/session.json` | Session file path |
 | `--no-restore` | off | Skip session restore at startup |
@@ -55,6 +57,13 @@ logs the error.
 Logging level is controlled by environment variable `LOG_LEVEL`.
 Core default is `WARNING`. `./vcsrv` defaults it to `DEBUG` if unset.
 The Raspberry Pi `payload.service` also sets `LOG_LEVEL=DEBUG`.
+
+Cardinal/VCV helpers:
+
+- `load_vcv` looks for patch files in `patches/` by default.
+- `load_vcv` does not auto-route channels; use `route <ch> <slot>` explicitly.
+- Override patch directory with `VCPI_PATCHES_DIR`.
+- Override Cardinal plugin path with `CARDINAL_VST3_PATH`.
 
 Examples:
 
@@ -77,6 +86,7 @@ Server/client specific:
 | Command | Description |
 |---|---|
 | `load <slot> <path> [name]` | Load VST instrument into slot |
+| `load_vcv <slot> <patch_name> [name]` | Load Cardinal into explicit slot from `patches/<patch_name>.vcv` |
 | `load_fx <path> [slot\|master] [name]` | Load effect into slot insert chain or master bus |
 | `remove_fx <slot\|master> <fx_index>` | Remove effect by index |
 | `slots` | Show slot status, routing, gain, and loaded FX |
@@ -116,9 +126,33 @@ Server/client specific:
 | Command | Description |
 |---|---|
 | `midi_ports` | List MIDI input ports |
+| `midi_out_ports` | List MIDI output ports |
 | `midi_seq [port_index]` | Open BeatStep Pro input (no arg opens virtual input `vcpi-Seq`) |
+| `midi_keys <port_index>` | Open Novation 25 LE keyboard input |
 | `midi_mix <port_index>` | Open Akai MIDI Mix input |
+| `midi_mix_out <port_index>` | Open Akai MIDI Mix output (LED feedback) |
 | `note <slot> <note> [vel] [dur_ms]` | Send test note to slot |
+
+Index discovery:
+
+```text
+vcpi> midi_ports
+  [0] Arturia BeatStep Pro MIDI 1
+  [1] Novation 25 LE
+  [2] MIDI Mix MIDI 1
+
+vcpi> midi_out_ports
+  [0] MIDI Mix MIDI 1
+```
+
+Use the numeric value in `[]` with `midi_seq`, `midi_keys`, `midi_mix`, and
+`midi_mix_out`. Indexes may change after reboot or replug.
+
+Important: `route <ch> <slot>` only maps MIDI channels internally. It does
+not open hardware ports; `midi_seq`, `midi_keys`, and `midi_mix` do.
+
+`midi_seq` (BeatStep Pro) and `midi_keys` (Novation 25 LE) both use the same
+channel routing table from `route <ch> <slot>`.
 
 ### Link Commands
 

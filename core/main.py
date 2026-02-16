@@ -30,8 +30,12 @@ def _add_host_args(parser: argparse.ArgumentParser):
                         help="Enable Ableton Link on start")
     parser.add_argument("--seq-midi", type=int, default=None,
                         help="Beatstep Pro MIDI port index")
+    parser.add_argument("--keys-midi", type=int, default=None,
+                        help="Novation 25 LE MIDI port index")
     parser.add_argument("--mix-midi", type=int, default=None,
                         help="MIDI Mix port index")
+    parser.add_argument("--mix-midi-out", type=int, default=None,
+                        help="MIDI Mix output port index (LED feedback)")
     parser.add_argument("--output", default=None, help="Audio output device")
     parser.add_argument("--session", default=None,
                         help="Session file path "
@@ -64,11 +68,23 @@ def _boot_host(args) -> VcpiCore:
         except Exception as e:
             logger.warning("sequencer MIDI startup failed: %s", e)
 
+    if args.keys_midi is not None:
+        try:
+            host.open_keyboard_midi(args.keys_midi)
+        except Exception as e:
+            logger.warning("keyboard MIDI startup failed: %s", e)
+
     if args.mix_midi is not None:
         try:
             host.open_mixer_midi(args.mix_midi)
         except Exception as e:
             logger.warning("MIDI Mix startup failed: %s", e)
+
+    if args.mix_midi_out is not None:
+        try:
+            host.open_mixer_midi_out(args.mix_midi_out)
+        except Exception as e:
+            logger.warning("MIDI Mix OUT startup failed: %s", e)
 
     return host
 

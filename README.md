@@ -82,21 +82,60 @@ Inside the CLI, a typical first run is:
 deps
 midi_ports
 devices
+load_vcv <slot> <patch_name>
 midi_seq <index>
+midi_keys <index>
 midi_mix <index>
+midi_out_ports
+midi_mix_out <index>
 graph
 audio_start
 link 120
 status
 ```
 
+### Finding MIDI port indexes
+
+Use these commands to discover indexes used by `midi_seq`, `midi_mix`, and
+`midi_mix_out`:
+
+```text
+vcpi> midi_ports
+  [0] Arturia BeatStep Pro MIDI 1
+  [1] Novation 25 LE
+  [2] MIDI Mix MIDI 1
+
+vcpi> midi_out_ports
+  [0] MIDI Mix MIDI 1
+```
+
+Use the number in brackets:
+
+```text
+vcpi> midi_seq 0
+vcpi> midi_keys 1
+vcpi> midi_mix 2
+vcpi> midi_mix_out 0
+```
+
+Port indexes can change after reboot/replug, so always re-check with
+`midi_ports` and `midi_out_ports`.
+
 ## Controller Setup
 
 ### Arturia BeatStep Pro (sequencer)
 
 - BeatStep Pro is the note/sequence source; its MIDI channels are fully configurable.
+- Open its input port with `midi_seq <index>` (from `midi_ports`).
 - Route whichever channels your BSP sends on into vcpi slots with `route <ch> <slot>`.
 - There are no hard-coded channel assumptions in vcpi.
+
+### Novation 25 LE (keyboard)
+
+- Novation 25 LE is a second note input source.
+- Open its input port with `midi_keys <index>` (from `midi_ports`).
+- It shares the same routing table as BSP (`route <ch> <slot>`).
+- Example: if Novation is set to MIDI channel 15, use `route 15 <slot>`.
 
 ```text
 vcpi> midi_ports
@@ -110,7 +149,9 @@ vcpi> routing
 ### Akai MIDI Mix (hardware mixer)
 
 - MIDI Mix uses its own dedicated input port (separate from BeatStep Pro).
-- Connect it with `midi_mix <port_index>`.
+- MIDI Mix uses its own dedicated input port (separate from BSP/Novation note routing).
+- Connect control input with `midi_mix <port_index>` (from `midi_ports`).
+- Optional LED feedback is via MIDI output with `midi_mix_out <port_index>`.
 - Factory mapping is used by default:
   - Channel faders 1-8 -> slot gain
   - Master fader -> master gain
@@ -134,6 +175,17 @@ SOLO (REC ARM):       Notes 3,6,9,12,15,18,21,24
 
 ## Example Commands
 
+Cardinal + VCV patch quick load:
+
+```text
+# place patch files under ./patches, e.g. ./patches/ambient.vcv
+vcpi> load_vcv 1 ambient
+vcpi> route 1 1
+```
+
+`load_vcv` loads a fresh Cardinal instance into the slot you specify.
+Routing remains explicit via `route <ch> <slot>`.
+
 Load a synth and test note:
 
 ```text
@@ -154,7 +206,8 @@ vcpi> route 2 2
 vcpi> route 10 3
 
 vcpi> midi_seq 0
-vcpi> midi_mix 1
+vcpi> midi_keys 1
+vcpi> midi_mix 2
 vcpi> load_fx /path/to/Delay.vst3 1 Delay
 vcpi> load_fx /path/to/Reverb.vst3 master Reverb
 vcpi> audio_start

@@ -61,7 +61,7 @@ sudo USERCONF_PATH=/secure/userconf.txt WPA_CONF_PATH=/secure/wpa_supplicant.con
 
 - `firstboot.service` runs `/root/setup.sh`
 - vcpi is installed under `/home/pi/vcpi`
-- Python packages are under `/home/pi/vcpi/core` and `/home/pi/vcpi/controllers`
+- Python packages are under `/home/pi/vcpi/core`, `/home/pi/vcpi/controllers`, and `/home/pi/vcpi/graph`
 - Python venv is created at `/home/pi/vcpi/venv`
 - `payload.service` sets `LOG_LEVEL=DEBUG`
 - journald forwards logs to `/dev/tty1` at `debug` level

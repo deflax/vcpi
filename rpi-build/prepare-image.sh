@@ -54,7 +54,7 @@ IMAGE_URL="$1"
 CACHE_DIR="${IMAGE_CACHE_DIR:-$SCRIPT_DIR/.image-cache}"
 mkdir -p "$CACHE_DIR"
 
-if [ ! -d "$REPO_ROOT/core" ] || [ ! -d "$REPO_ROOT/controllers" ] || [ ! -f "$REPO_ROOT/main.py" ] || [ ! -f "$REPO_ROOT/requirements.txt" ]; then
+if [ ! -d "$REPO_ROOT/core" ] || [ ! -d "$REPO_ROOT/controllers" ] || [ ! -d "$REPO_ROOT/graph" ] || [ ! -f "$REPO_ROOT/main.py" ] || [ ! -f "$REPO_ROOT/requirements.txt" ]; then
   echo "ERROR: vcpi project files not found at repo root: $REPO_ROOT"
   exit 1
 fi
@@ -194,6 +194,7 @@ cp -v "$SCRIPT_DIR/services/journald-console.conf" \
 cp -v "$SCRIPT_DIR/setup.sh" "$MOUNT_DIR/root/setup.sh"
 cp -rv "$REPO_ROOT/core" "$MOUNT_DIR/root/core"
 cp -rv "$REPO_ROOT/controllers" "$MOUNT_DIR/root/controllers"
+cp -rv "$REPO_ROOT/graph" "$MOUNT_DIR/root/graph"
 cp -v "$REPO_ROOT/main.py" "$MOUNT_DIR/root/main.py"
 cp -v "$REPO_ROOT/requirements.txt" "$MOUNT_DIR/root/requirements.txt"
 
