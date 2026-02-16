@@ -13,7 +13,7 @@ install_cardinal_vst3() {
   local extract_dir
   local cardinal_dir
 
-  tmp_dir="$(mktemp -d /tmp/cardinal.XXXXXX)"
+  tmp_dir="$(mktemp -d /var/tmp/cardinal.XXXXXX)"
   archive_path="$tmp_dir/$CARDINAL_ARCHIVE"
   extract_dir="$tmp_dir/extract"
   mkdir -p "$extract_dir"
@@ -52,7 +52,8 @@ apt-get install htop \
   wget \
   curl \
   vim \
-  cpufrequtils -y
+  -y
+  #cpufrequtils -y
 
 # setup packages
 apt-get install \

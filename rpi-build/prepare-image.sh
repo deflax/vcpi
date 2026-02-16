@@ -106,9 +106,15 @@ fi
 
 WIFI_SSID=$(grep -oP '(?<=ssid=").*(?=")' "$WPA_CONF_PATH" || true)
 WIFI_PSK=$(grep -oP '(?<=psk=").*(?=")' "$WPA_CONF_PATH" || true)
+WIFI_COUNTRY=$(grep -oP '(?<=country=)\w+' "$WPA_CONF_PATH" || true)
 
 if [ -z "$WIFI_SSID" ] || [ -z "$WIFI_PSK" ]; then
   echo "ERROR: Could not read SSID or PSK from $WPA_CONF_PATH"
+  exit 1
+fi
+
+if [ -z "$WIFI_COUNTRY" ]; then
+  echo "ERROR: Could not read country code from $WPA_CONF_PATH"
   exit 1
 fi
 
@@ -149,7 +155,11 @@ method=auto
 method=auto
 NMEOF
 chmod 600 "$NM_DIR/wifi.nmconnection"
-echo "WiFi configured for SSID: $WIFI_SSID"
+
+# Set regulatory domain so WiFi radio is allowed to transmit.
+mkdir -p "$MOUNT_DIR/etc/default"
+echo "REGDOMAIN=$WIFI_COUNTRY" > "$MOUNT_DIR/etc/default/crda"
+echo "WiFi configured for SSID: $WIFI_SSID (country: $WIFI_COUNTRY)"
 
 # pi user keys
 mkdir -p "$MOUNT_DIR/home/pi/.ssh"
