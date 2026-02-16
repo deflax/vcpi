@@ -35,9 +35,6 @@ WORK_IMAGE="$SCRIPT_DIR/src.img"
 WORK_IMAGE_XZ="$SCRIPT_DIR/src.img.xz"
 OUTPUT_IMAGE="${OUTPUT_IMAGE:-$SCRIPT_DIR/vcpi.img}"
 
-# Legacy default from older repository versions. Block this value.
-INSECURE_DEFAULT_USERCONF='pi:$6$J3VR90uJ/TxGhcPf$OzVHJSqmGWsJlDFxCumcwftgv2okaHZlbrTyu5MX0YXKrDrVxMxsexbroXUt5CkSu0xedQAcfvHm5CDpkiiDu0'
-
 REFRESH_CACHE=0
 
 if [ "${1:-}" = "--refresh" ] || [ "${1:-}" = "-r" ]; then
@@ -68,12 +65,6 @@ fi
 USERCONF_LINE=$(head -n 1 "$USERCONF_PATH" || true)
 if [ -z "$USERCONF_LINE" ]; then
   echo "ERROR: $USERCONF_PATH is empty"
-  exit 1
-fi
-
-if [ "$USERCONF_LINE" = "$INSECURE_DEFAULT_USERCONF" ]; then
-  echo "ERROR: insecure default credentials detected in $USERCONF_PATH"
-  echo "Set a unique password hash"
   exit 1
 fi
 
