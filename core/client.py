@@ -2,7 +2,12 @@
 
 Usage::
 
-    python main.py cli [--sock /run/vcpi/vcpi.sock]
+    python main.py cli [--sock PATH]
+
+Default PATH is auto-selected:
+  $XDG_RUNTIME_DIR/vcpi/vcpi.sock
+  fallback: /tmp/vcpi-<uid>/vcpi.sock
+  root fallback: /run/vcpi/vcpi.sock
 
 Or directly::
 
@@ -16,7 +21,7 @@ import socket
 import sys
 from pathlib import Path
 
-DEFAULT_SOCK_PATH = Path("/run/vcpi/vcpi.sock")
+from core.paths import DEFAULT_SOCK_PATH
 
 # Must match the sentinel used by server.py
 END_OF_RESPONSE = "\x00"

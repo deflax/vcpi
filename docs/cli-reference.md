@@ -27,7 +27,9 @@ Source of truth:
 Default socket path (server and client):
 
 ```text
-/run/vcpi/vcpi.sock
+$XDG_RUNTIME_DIR/vcpi/vcpi.sock
+# fallback: /tmp/vcpi-<uid>/vcpi.sock
+# root fallback: /run/vcpi/vcpi.sock
 ```
 
 ## Host Startup Flags
@@ -50,8 +52,8 @@ Server/client specific:
 
 | Mode | Flag | Default | Description |
 |---|---|---|---|
-| `serve` | `--sock` | `/run/vcpi/vcpi.sock` | Unix socket to bind |
-| `cli` | `--sock` | `/run/vcpi/vcpi.sock` | Unix socket to connect to |
+| `serve` | `--sock` | auto (see above) | Unix socket to bind |
+| `cli` | `--sock` | auto (see above) | Unix socket to connect to |
 
 ## Interactive Commands
 
@@ -131,8 +133,8 @@ Headless server + client shell:
 
 ```bash
 # Terminal 1
-./vcsrv --sock /run/vcpi/vcpi.sock
+./vcsrv
 
 # Terminal 2
-./vcli --sock /run/vcpi/vcpi.sock
+./vcli
 ```

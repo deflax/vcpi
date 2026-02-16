@@ -23,10 +23,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Terminal 1: start server
-python main.py serve --sock /run/vcpi/vcpi.sock
+python main.py serve
 
 # Terminal 2: connect interactive client
-python main.py cli --sock /run/vcpi/vcpi.sock
+python main.py cli
 ```
 
 vcpi now always runs with separate server (`serve`) and client (`cli`) processes.
@@ -56,14 +56,14 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 
 ```bash
 # Start headless daemon with Unix socket API
-./vcsrv --sock /run/vcpi/vcpi.sock
+./vcsrv
 
 # Connect CLI client to a running daemon
-./vcli --sock /run/vcpi/vcpi.sock
+./vcli
 
 # Direct python equivalents
-python main.py serve --sock /run/vcpi/vcpi.sock
-python main.py cli --sock /run/vcpi/vcpi.sock
+python main.py serve
+python main.py cli
 ```
 
 Full CLI and startup flag reference: `docs/cli-reference.md`
@@ -157,10 +157,10 @@ Headless server + remote CLI:
 
 ```bash
 # Terminal 1
-./vcsrv --sock /run/vcpi/vcpi.sock
+./vcsrv
 
 # Terminal 2
-./vcli --sock /run/vcpi/vcpi.sock
+./vcli
 ```
 
 ## Raspberry Pi Builds

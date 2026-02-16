@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 
 from core.host import VcpiCore
+from core.paths import DEFAULT_SOCK_PATH
 
 
 # -- shared helpers ----------------------------------------------------------
@@ -97,7 +98,7 @@ def main():
     _add_host_args(sp_serve)
     sp_serve.add_argument(
         "--sock", default=None,
-        help="Unix socket path (default: /run/vcpi/vcpi.sock)")
+        help=f"Unix socket path (default: {DEFAULT_SOCK_PATH})")
     sp_serve.set_defaults(func=_cmd_serve)
 
     # -- cli -----------------------------------------------------------------
@@ -106,7 +107,7 @@ def main():
         help="Connect to a running vcpi server")
     sp_cli.add_argument(
         "--sock", default=None,
-        help="Unix socket path (default: /run/vcpi/vcpi.sock)")
+        help=f"Unix socket path (default: {DEFAULT_SOCK_PATH})")
     sp_cli.set_defaults(func=_cmd_cli)
 
     args = ap.parse_args()

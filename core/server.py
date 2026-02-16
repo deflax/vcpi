@@ -27,8 +27,7 @@ from pathlib import Path
 
 from core.host import VcpiCore
 from core.cli import HostCLI
-
-DEFAULT_SOCK_PATH = Path("/run/vcpi/vcpi.sock")
+from core.paths import DEFAULT_SOCK_PATH
 
 # Sentinel that marks the end of a command's output.
 END_OF_RESPONSE = "\x00"
@@ -52,7 +51,14 @@ class VcpiServer:
         if self.sock_path.exists():
             self.sock_path.unlink()
 
-        self.sock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.sock_path.parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            fallback = Path("/tmp") / f"vcpi-{os.getuid()}" / "vcpi.sock"
+            raise PermissionError(
+                f"cannot create socket directory '{self.sock_path.parent}'. "
+                f"Use --sock with a writable path (for example: {fallback})"
+            ) from exc
 
         self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server_sock.bind(str(self.sock_path))
