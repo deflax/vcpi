@@ -132,7 +132,9 @@ cat > "$NM_DIR/wifi.nmconnection" <<NMEOF
 [connection]
 id=$WIFI_SSID
 type=wifi
+interface-name=wlan0
 autoconnect=true
+autoconnect-priority=100
 
 [wifi]
 mode=infrastructure
