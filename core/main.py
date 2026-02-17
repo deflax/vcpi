@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 
 from core.host import VcpiCore
 from core.logging_setup import configure_logging
-from core.paths import DEFAULT_SOCK_PATH
+from core.paths import DEFAULT_SOCK_PATH, check_pidfile, write_pidfile, remove_pidfile
 
 
 logger = logging.getLogger(__name__)
@@ -95,12 +96,26 @@ def _cmd_serve(args):
     """Run the host as a headless server."""
     from core.server import run_server
 
+    # Prevent accidental duplicate instances.
+    existing_pid = check_pidfile()
+    if existing_pid is not None:
+        print(
+            f"Error: vcpi server is already running (PID {existing_pid}).\n"
+            "Connect with:  ./vcli\n"
+            "Or stop it first:  ./vcli -c shutdown",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     level = configure_logging(default_level="WARNING")
     logger.info("vcpi server starting (log level: %s)", logging.getLevelName(level))
 
-    host = _boot_host(args)
-
-    run_server(host, args.sock)
+    write_pidfile()
+    try:
+        host = _boot_host(args)
+        run_server(host, args.sock)
+    finally:
+        remove_pidfile()
 
 
 def _cmd_cli(args):

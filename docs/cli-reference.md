@@ -53,6 +53,11 @@ These flags apply when starting the host server (`python main.py serve`).
 When running `serve`, vcpi does not start audio automatically. Start audio
 manually from the client with `audio_start [device]`.
 
+Only one server instance per user is allowed. If a server is already running
+(e.g. via systemd `payload.service`), `./vcsrv` will refuse to start and
+print the existing PID. Connect to the running instance with `./vcli` instead.
+The PID file is stored at `~/.config/vcpi/vcpi.pid`.
+
 Logging level is controlled by environment variable `LOG_LEVEL`.
 Core default is `WARNING`. `./vcsrv` defaults it to `DEBUG` if unset.
 The Raspberry Pi `payload.service` also sets `LOG_LEVEL=DEBUG`.
