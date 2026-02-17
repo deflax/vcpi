@@ -6,7 +6,7 @@ Saved state includes:
   - Master effects: paths, names, and parameter values
   - Master gain
   - MIDI channel -> slot routing
-  - Link BPM
+  - Link BPM and enabled state
   - Audio/MIDI device connection targets
 
 The session file is human-readable JSON so it can be hand-edited if needed.
@@ -102,6 +102,7 @@ def snapshot(host: VcpiCore) -> dict:
         "sample_rate": host.sample_rate,
         "buffer_size": host.buffer_size,
         "bpm": host.link.bpm,
+        "link_enabled": host.link.enabled,
         "master_gain": host.engine.master_gain,
         "routing": routing,
         "slots": slots_data,
@@ -138,10 +139,17 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
 
     errors = []
 
-    # -- BPM -----------------------------------------------------------------
+    # -- BPM / Link ----------------------------------------------------------
     bpm = data.get("bpm")
     if bpm is not None:
         host.link._bpm = bpm
+
+    link_enabled = data.get("link_enabled", False)
+    if link_enabled:
+        try:
+            host.start_link(bpm)
+        except Exception as exc:
+            errors.append(f"link enable: {exc}")
 
     # -- Master gain ---------------------------------------------------------
     mg = data.get("master_gain")
