@@ -16,6 +16,7 @@ from core.engine import AudioEngine
 from core.link import LinkSync
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import InstrumentSlot, NUM_SLOTS
+from core.sampler import WavSamplerPlugin
 
 
 logger = logging.getLogger(__name__)
@@ -298,8 +299,43 @@ class VcpiCore:
             name=name or Path(path).stem,
             path=path,
             plugin=plugin,
+            source_type="plugin",
         )
         self.engine.slots[slot_index] = slot
+        return slot
+
+    def load_wav(self, slot_index: int, wav_path: str,
+                 name: Optional[str] = None) -> InstrumentSlot:
+        """Load a WAV file as a one-shot sampler instrument into a slot."""
+        if not 0 <= slot_index < NUM_SLOTS:
+            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+
+        path = Path(wav_path).expanduser()
+        if not path.is_absolute():
+            cwd_candidate = Path.cwd() / path
+            repo_candidate = Path(__file__).resolve().parent.parent / path
+            if cwd_candidate.exists():
+                path = cwd_candidate
+            elif repo_candidate.exists():
+                path = repo_candidate
+            else:
+                path = cwd_candidate
+
+        resolved = str(path)
+        plugin = WavSamplerPlugin.from_file(
+            resolved,
+            target_sample_rate=self.sample_rate,
+            output_channels=self.engine.output_channels,
+        )
+
+        slot = InstrumentSlot(
+            name=name or Path(resolved).stem,
+            path=resolved,
+            plugin=plugin,
+            source_type="wav",
+        )
+        self.engine.slots[slot_index] = slot
+        logger.info("[WAV] slot %d loaded from %s", slot_index + 1, resolved)
         return slot
 
     def remove_instrument(self, slot_index: int) -> InstrumentSlot:

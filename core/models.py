@@ -9,7 +9,7 @@ NUM_SLOTS = 8  # matches the 8 channel strips on the Akai MIDI Mix
 
 @dataclass
 class InstrumentSlot:
-    """A VST3 instrument with optional insert-effects chain."""
+    """A playable slot source with optional insert-effects chain."""
 
     name: str
     path: str
@@ -20,3 +20,4 @@ class InstrumentSlot:
     muted: bool = False
     solo: bool = False
     enabled: bool = True
+    source_type: str = "plugin"  # plugin | wav

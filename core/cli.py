@@ -185,11 +185,12 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
     # -- plugins -------------------------------------------------------------
 
     def do_load(self, arg):
-        """Load instrument/effect/VCV: load <slot 1-8> <path> [name] | load fx <path> [slot 1-8|master] [name] | load vcv <slot 1-8> <patch_name[.vcv]> [name]"""
+        """Load instrument/effect/VCV/WAV: load <slot 1-8> <path> [name] | load wav <slot 1-8> <pack> <sample> [name] | load fx <path> [slot 1-8|master] [name] | load vcv <slot 1-8> <patch_name[.vcv]> [name]"""
         text = arg.strip()
         if not text:
             self._print(
                 "Usage: load <slot 1-8> <path> [name] | "
+                "load wav <slot 1-8> <pack> <sample> [name] | "
                 "load fx <path> [slot 1-8|master] [name] | "
                 "load vcv <slot 1-8> <patch_name[.vcv]> [name]"
             )
@@ -224,6 +225,53 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print(f"  patch    : {patch_path}")
             self._print(f"  cardinal : {cardinal_path}")
             self._print(f"  result   : {patch_result}")
+            self._print(f"  route with: route <channel 1-16> {parts[1]}")
+            return
+
+        if mode == "wav":
+            parts = text.split(maxsplit=4)
+            if len(parts) < 4:
+                self._print("Usage: load wav <slot 1-8> <pack> <sample> [name]")
+                return
+
+            try:
+                idx = _slot_to_internal(int(parts[1]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+
+            pack_name = parts[2].strip().strip("/")
+            sample_name = parts[3].strip()
+            display_name = parts[4].strip() if len(parts) > 4 else None
+
+            if not pack_name:
+                self._print("Error: pack name is required")
+                return
+            if not sample_name:
+                self._print("Error: sample name is required")
+                return
+
+            pack_path = Path(pack_name)
+            if pack_path.is_absolute() or ".." in pack_path.parts:
+                self._print("Error: invalid pack name")
+                return
+
+            wav_file = sample_name if sample_name.lower().endswith(".wav") else f"{sample_name}.wav"
+            sample_path = Path(wav_file)
+            if sample_path.is_absolute() or ".." in sample_path.parts:
+                self._print("Error: invalid sample name")
+                return
+
+            wav_path = Path("samples") / pack_path / sample_path
+
+            try:
+                slot = self.host.load_wav(idx, str(wav_path), display_name)
+            except Exception as e:
+                self._print(f"Error: {e}")
+                return
+
+            self._print(f"  slot {parts[1]} = {slot.name}")
+            self._print(f"  wav      : {slot.path}")
             self._print(f"  route with: route <channel 1-16> {parts[1]}")
             return
 
@@ -370,11 +418,17 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
                 self._print("  Empty slot")
                 return
             plugin = slot.plugin
-        for name in plugin.parameters:
+        params = getattr(plugin, "parameters", {})
+        for name in params:
             try:
                 val = getattr(plugin, name)
-                rng = plugin.parameters[name].range
-                self._print(f"  {name} = {val}  (range {rng[0]:.3f} .. {rng[1]:.3f})")
+                rng = getattr(params[name], "range", None)
+                if rng is not None and len(rng) >= 2:
+                    self._print(
+                        f"  {name} = {val}  (range {rng[0]:.3f} .. {rng[1]:.3f})"
+                    )
+                else:
+                    self._print(f"  {name} = {val}")
             except Exception:
                 self._print(f"  {name} = ???")
 

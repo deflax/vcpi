@@ -93,6 +93,7 @@ autocomplete command names.
 | Command | Description |
 |---|---|
 | `load <slot> <path> [name]` | Load VST instrument into slot |
+| `load wav <slot> <pack> <sample> [name]` | Load `samples/<pack>/<sample>.wav` as one-shot sampler into slot |
 | `load vcv <slot> <patch_name> [name]` | Load Cardinal into explicit slot from `patches/<patch_name>.vcv` |
 | `load fx <path> [slot\|master] [name]` | Load effect into slot insert chain or master bus |
 | `unload <slot>` | Unload/clear instrument from slot |
@@ -162,6 +163,14 @@ not open hardware ports; `midi_seq`, `midi_keys`, and `midi_mix` do.
 
 `midi_seq` (BeatStep Pro) and `midi_keys` (Novation 25 LE) both use the same
 channel routing table from `route <ch> <slot>`.
+
+WAV sampler behavior:
+
+- `load wav` plays the file when MIDI `note_on` events reach that slot.
+- `load wav 2 909 bassdrum` resolves to `samples/909/bassdrum.wav`.
+- The `.wav` extension is optional in `<sample>`.
+- Notes are pitch-shifted around middle C (MIDI note 60).
+- It is one-shot playback (note-off does not cut the sample).
 
 ### Link Commands
 

@@ -1,8 +1,8 @@
 """Session persistence -- save and restore host state to a JSON file.
 
 Saved state includes:
-  - Per-slot: instrument path, name, gain, muted, solo, insert effect paths/names,
-    and all plugin parameter values
+  - Per-slot: source kind (plugin/wav), instrument path, name, gain, muted,
+    solo, insert effect paths/names, and all plugin parameter values
   - Master effects: paths, names, and parameter values
   - Master gain
   - MIDI channel -> slot routing
@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 def _plugin_params(plugin) -> dict[str, float]:
     """Extract all parameter values from a pedalboard plugin."""
     params = {}
-    for name in plugin.parameters:
+    names = getattr(plugin, "parameters", {})
+    for name in names:
         try:
             params[name] = float(getattr(plugin, name))
         except Exception:
@@ -69,6 +70,7 @@ def snapshot(host: VcpiCore) -> dict:
                 "params": _plugin_params(fx),
             })
         slots_data.append({
+            "kind": slot.source_type,
             "path": slot.path,
             "name": slot.name,
             "gain": slot.gain,
@@ -165,8 +167,12 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
         plugin_path = slot_data.get("path")
         if not plugin_path:
             continue
+        slot_kind = slot_data.get("kind", "plugin")
         try:
-            slot = host.load_instrument(idx, plugin_path, slot_data.get("name"))
+            if slot_kind == "wav":
+                slot = host.load_wav(idx, plugin_path, slot_data.get("name"))
+            else:
+                slot = host.load_instrument(idx, plugin_path, slot_data.get("name"))
             slot.gain = slot_data.get("gain", 0.8)
             slot.muted = slot_data.get("muted", False)
             slot.solo = slot_data.get("solo", False)
@@ -182,7 +188,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                     errors.append(f"slot {idx + 1} fx '{fx_data.get('path')}': {e}")
 
         except Exception as e:
-            errors.append(f"slot {idx + 1} '{plugin_path}': {e}")
+            errors.append(f"slot {idx + 1} ({slot_kind}) '{plugin_path}': {e}")
 
     # -- Master effects ------------------------------------------------------
     for fx_data in data.get("master_effects", []):
