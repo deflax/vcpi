@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -213,31 +214,62 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
     if not isinstance(connections, dict):
         connections = {}
 
-    def _restore_port(label: str, value, opener):
+    # Maximum retries and delay for USB devices that may not be ready at boot.
+    max_retries = 3
+    retry_delay = 2.0  # seconds
+
+    def _restore_port(label: str, value, opener, retries: int = max_retries):
         if value is None:
             return
         if isinstance(value, str) and not value.strip():
             return
-        try:
-            opener(value)
-        except Exception as exc:
-            errors.append(f"{label} '{value}': {exc}")
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                opener(value)
+                if attempt > 0:
+                    logger.info("[Session] %s connected on attempt %d", label, attempt + 1)
+                return
+            except Exception as exc:
+                last_exc = exc
+                if attempt < retries - 1:
+                    logger.debug(
+                        "[Session] %s attempt %d failed (%s), retrying in %.1fs",
+                        label, attempt + 1, exc, retry_delay,
+                    )
+                    time.sleep(retry_delay)
+        errors.append(f"{label} '{value}': {last_exc}")
+
+    def _restore_audio(name: str, retries: int = max_retries):
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                if host.engine.running:
+                    if host.audio_output_name != name:
+                        host.stop_audio()
+                        host.start_audio(name)
+                else:
+                    host.start_audio(name)
+                if attempt > 0:
+                    logger.info("[Session] audio output connected on attempt %d", attempt + 1)
+                return
+            except Exception as exc:
+                last_exc = exc
+                if attempt < retries - 1:
+                    logger.debug(
+                        "[Session] audio output attempt %d failed (%s), retrying in %.1fs",
+                        attempt + 1, exc, retry_delay,
+                    )
+                    time.sleep(retry_delay)
+        errors.append(f"audio output '{name}': {last_exc}")
 
     audio_output = connections.get("audio_output")
     audio_selected = audio_output is not None
     if isinstance(audio_output, str) and not audio_output.strip():
         audio_selected = False
 
-    if audio_selected:
-        try:
-            if host.engine.running:
-                if host.audio_output_name != audio_output:
-                    host.stop_audio()
-                    host.start_audio(audio_output)
-            else:
-                host.start_audio(audio_output)
-        except Exception as e:
-            errors.append(f"audio output '{audio_output}': {e}")
+    if audio_selected and isinstance(audio_output, str):
+        _restore_audio(audio_output)
 
     _restore_port("MIDI seq in", connections.get("midi_seq_in"), host.open_sequencer_midi)
     _restore_port("MIDI keys in", connections.get("midi_keys_in"), host.open_keyboard_midi)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Optional
@@ -116,15 +117,57 @@ class VcpiCore:
         return str(name)
 
     @staticmethod
+    def _strip_alsa_suffix(name: str) -> str:
+        """Strip ALSA numeric port suffixes that change across reboots.
+
+        Examples:
+            "ReMOTE LE:ReMOTE LE 24:0"  -> "ReMOTE LE:ReMOTE LE"
+            "MIDI Mix:MIDI Mix MIDI 1 20:0" -> "MIDI Mix:MIDI Mix MIDI 1"
+            "IQaudIODAC: DAC HiFi pcm512x-hifi-0 (hw:0,0)" ->
+                "IQaudIODAC: DAC HiFi pcm512x-hifi-0"
+        """
+        # Remove trailing " (hw:X,Y)" or "(hw:X,Y,Z)" etc.
+        s = re.sub(r"\s*\(hw:\d+(?:,\d+)*\)\s*$", "", name)
+        # Remove trailing " N:M" (ALSA client:port numbers)
+        s = re.sub(r"\s+\d+:\d+\s*$", "", s)
+        return s.strip()
+
+    @staticmethod
     def _resolve_port_index_by_name(port_name: str, ports: list[str], kind: str) -> int:
-        """Resolve a saved port name to a current index (case-insensitive fallback)."""
+        """Resolve a saved port name to a current index.
+
+        Matching priority:
+          1. Exact match
+          2. Case-insensitive match
+          3. Match after stripping ALSA numeric suffixes
+          4. Substring containment (unique match only)
+        """
+        # 1) exact
         if port_name in ports:
             return ports.index(port_name)
 
+        # 2) case-insensitive
         lower = port_name.lower()
         for i, candidate in enumerate(ports):
             if candidate.lower() == lower:
                 return i
+
+        # 3) stripped ALSA suffixes
+        stripped_target = VcpiCore._strip_alsa_suffix(port_name).lower()
+        for i, candidate in enumerate(ports):
+            stripped_candidate = VcpiCore._strip_alsa_suffix(candidate).lower()
+            if stripped_target and stripped_candidate == stripped_target:
+                return i
+
+        # 4) substring containment -- only if exactly one match
+        if stripped_target:
+            matches = [
+                i for i, candidate in enumerate(ports)
+                if stripped_target in VcpiCore._strip_alsa_suffix(candidate).lower()
+                or VcpiCore._strip_alsa_suffix(candidate).lower() in stripped_target
+            ]
+            if len(matches) == 1:
+                return matches[0]
 
         raise ValueError(f"{kind} port '{port_name}' not found")
 
@@ -436,6 +479,67 @@ class VcpiCore:
 
     # -- audio / link --------------------------------------------------------
 
+    def _resolve_audio_device_by_name(self, name: str):
+        """Resolve an audio output device name to a device index.
+
+        Uses the same ALSA suffix stripping as MIDI port resolution so
+        that saved names like "IQaudIODAC: DAC HiFi pcm512x-hifi-0 (hw:0,0)"
+        survive reboots where the hw index changes.
+        """
+        if not deps.HAS_SOUNDDEVICE or deps.sd is None:
+            return name
+
+        try:
+            devices = deps.sd.query_devices()
+        except Exception:
+            return name
+
+        out_names: list[str] = []
+        out_indices: list[int] = []
+        for i, info in enumerate(devices):
+            try:
+                max_out = int(info.get("max_output_channels", 0))
+            except (TypeError, ValueError):
+                max_out = 0
+            if max_out <= 0:
+                continue
+            dev_name = str(info.get("name", "")).strip()
+            if dev_name:
+                out_names.append(dev_name)
+                out_indices.append(i)
+
+        if not out_names:
+            return name
+
+        # exact
+        if name in out_names:
+            return out_indices[out_names.index(name)]
+
+        # case-insensitive
+        lower = name.lower()
+        for j, candidate in enumerate(out_names):
+            if candidate.lower() == lower:
+                return out_indices[j]
+
+        # stripped ALSA suffix
+        stripped = self._strip_alsa_suffix(name).lower()
+        for j, candidate in enumerate(out_names):
+            if stripped and self._strip_alsa_suffix(candidate).lower() == stripped:
+                return out_indices[j]
+
+        # substring containment (unique)
+        if stripped:
+            matches = [
+                j for j, candidate in enumerate(out_names)
+                if stripped in self._strip_alsa_suffix(candidate).lower()
+                or self._strip_alsa_suffix(candidate).lower() in stripped
+            ]
+            if len(matches) == 1:
+                return out_indices[matches[0]]
+
+        logger.warning("[Audio] could not fuzzy-match device '%s', passing as-is", name)
+        return name
+
     def start_audio(self, output_device=None):
         if isinstance(output_device, str):
             token = output_device.strip()
@@ -444,7 +548,7 @@ class VcpiCore:
             elif not token:
                 output_device = None
             else:
-                output_device = token
+                output_device = self._resolve_audio_device_by_name(token)
 
         self.engine.start(output_device)
 
