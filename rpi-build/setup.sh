@@ -81,6 +81,7 @@ usermod -aG audio,plugdev pi
 # setup firewall
 apt-get install ufw -y
 ufw allow ssh
+ufw allow 20808/udp comment 'Ableton Link peer discovery'
 ufw --force enable
 
 #setup jack
