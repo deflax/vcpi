@@ -8,6 +8,7 @@ OS image that auto-starts vcpi.
 - `prepare-image.sh` - image download, mount, provisioning, and packing
 - `setup.sh` - first boot provisioning script executed on the Pi
 - `services/firstboot.service` - runs `setup.sh` once
+- `services/wifi-unblock.service` - unblocks rfkill and enables Wi-Fi before network-online
 - `services/payload.service` - starts vcpi daemon on boot
 - `services/journald-console.conf` - mirrors journal logs to root console (tty1)
 - `userconf.txt.dist` - template for Raspberry Pi credentials
@@ -60,6 +61,8 @@ sudo USERCONF_PATH=/secure/userconf.txt WPA_CONF_PATH=/secure/wpa_supplicant.con
 ## On First Boot
 
 - `firstboot.service` runs `/root/setup.sh`
+- `wifi-unblock.service` runs before `network-online.target` (`rfkill unblock all`, `nmcli radio wifi on`)
+- `NetworkManager-wait-online.service` is enabled so first boot waits for connectivity
 - The vcpi repo is cloned from GitHub into `/home/pi/vcpi`
 - Python venv is created at `/home/pi/vcpi/.venv`
 - Cardinal VST3 is installed at `/usr/local/lib/vst3/Cardinal.vst3`

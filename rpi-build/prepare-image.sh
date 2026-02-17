@@ -132,7 +132,6 @@ cat > "$NM_DIR/wifi.nmconnection" <<NMEOF
 [connection]
 id=$WIFI_SSID
 type=wifi
-interface-name=wlan0
 autoconnect=true
 autoconnect-priority=100
 
@@ -173,6 +172,14 @@ ln -v -sf /lib/systemd/system/systemd-time-wait-sync.service "$MOUNT_DIR/etc/sys
 #setup autorun on first boot
 cp -v "$SCRIPT_DIR/services/firstboot.service" "$MOUNT_DIR/lib/systemd/system/firstboot.service"
 ln -v -sf /lib/systemd/system/firstboot.service "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
+
+# ensure Wi-Fi radio is enabled before network-online is evaluated
+cp -v "$SCRIPT_DIR/services/wifi-unblock.service" "$MOUNT_DIR/lib/systemd/system/wifi-unblock.service"
+mkdir -p "$MOUNT_DIR/etc/systemd/system/network-online.target.wants"
+ln -v -sf /lib/systemd/system/wifi-unblock.service \
+  "$MOUNT_DIR/etc/systemd/system/network-online.target.wants/wifi-unblock.service"
+ln -v -sf /lib/systemd/system/NetworkManager-wait-online.service \
+  "$MOUNT_DIR/etc/systemd/system/network-online.target.wants/NetworkManager-wait-online.service"
 
 # disable built-in audio
 sed -i 's/^dtparam=audio=on/#&/' "$BOOT_MOUNT/config.txt"

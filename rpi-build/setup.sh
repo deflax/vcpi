@@ -105,5 +105,6 @@ chmod -x /root/setup.sh.done
 
 echo "done :)"
 
-# reboot
+# reboot to apply group memberships/services cleanly
+systemctl --no-block reboot
 exit 0

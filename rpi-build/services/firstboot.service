@@ -1,8 +1,8 @@
 [Unit]
 Description=Run on first boot once
-Wants=time-sync.target
+Wants=network-online.target time-sync.target
 Before=rc-local.service
-After=network.target time-sync.target apt-daily.service apt-daily-upgrade.service 
+After=network-online.target time-sync.target apt-daily.service apt-daily-upgrade.service
 ConditionFileNotEmpty=/root/setup.sh
 
 [Service]

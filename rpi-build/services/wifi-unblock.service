@@ -1,0 +1,14 @@
+[Unit]
+Description=Unblock and enable Wi-Fi radio
+Wants=NetworkManager.service
+After=NetworkManager.service
+Before=NetworkManager-wait-online.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/sbin/rfkill unblock all
+ExecStart=-/usr/bin/nmcli radio wifi on
+RemainAfterExit=yes
+
+[Install]
+WantedBy=network-online.target
