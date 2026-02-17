@@ -189,6 +189,7 @@ cp -v "$SCRIPT_DIR/services/journald-console.conf" \
 
 #provision first-boot script
 cp -v "$SCRIPT_DIR/setup.sh" "$MOUNT_DIR/root/setup.sh"
+chmod 755 "$MOUNT_DIR/root/setup.sh"
 
 sync
 
