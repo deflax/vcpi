@@ -1,6 +1,7 @@
 [Unit]
 Description=vcpi headless host
 After=sound.target
+ConditionPathExists=/root/setup.sh.done
 
 [Service]
 Environment=JACK_NO_AUDIO_RESERVATION=1
@@ -10,7 +11,7 @@ Group=pi
 WorkingDirectory=/home/pi/vcpi
 RuntimeDirectory=vcpi
 #ExecStartPre=/bin/sleep 10
-ExecStart=/home/pi/vcpi/venv/bin/python /home/pi/vcpi/main.py serve --sock /run/vcpi/vcpi.sock
+ExecStart=/home/pi/vcpi/.venv/bin/python /home/pi/vcpi/main.py serve --sock /run/vcpi/vcpi.sock
 StandardOutput=journal+console
 StandardError=journal+console
 Restart=always

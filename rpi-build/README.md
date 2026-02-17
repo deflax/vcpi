@@ -60,17 +60,26 @@ sudo USERCONF_PATH=/secure/userconf.txt WPA_CONF_PATH=/secure/wpa_supplicant.con
 ## On First Boot
 
 - `firstboot.service` runs `/root/setup.sh`
-- vcpi is installed under `/home/pi/vcpi`
-- Python packages are under `/home/pi/vcpi/core`, `/home/pi/vcpi/controllers`, and `/home/pi/vcpi/graph`
-- Python venv is created at `/home/pi/vcpi/venv`
+- The vcpi repo is cloned from GitHub into `/home/pi/vcpi`
+- Python venv is created at `/home/pi/vcpi/.venv`
 - Cardinal VST3 is installed at `/usr/local/lib/vst3/Cardinal.vst3`
-- Patch folder is created at `/home/pi/vcpi/patches`
 - `payload.service` sets `LOG_LEVEL=DEBUG`
 - journald forwards logs to `/dev/tty1` at `debug` level
 - `payload.service` starts:
 
 ```text
-/home/pi/vcpi/venv/bin/python /home/pi/vcpi/main.py serve --sock /run/vcpi/vcpi.sock
+/home/pi/vcpi/.venv/bin/python /home/pi/vcpi/main.py serve --sock /run/vcpi/vcpi.sock
+```
+
+## Updating
+
+SSH into the Pi and pull the latest changes:
+
+```bash
+cd /home/pi/vcpi
+git pull
+.venv/bin/pip install -r requirements.txt   # if dependencies changed
+sudo systemctl restart payload
 ```
 
 ## Debugging

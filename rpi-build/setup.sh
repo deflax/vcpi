@@ -52,6 +52,7 @@ apt-get install htop \
   wget \
   curl \
   vim \
+  git \
   -y
   #cpufrequtils -y
 
@@ -85,19 +86,16 @@ ufw --force enable
 #setup jack
 echo /usr/bin/jackd -P75 -p16 -dalsa -dhw:0 -p1024 -n3 > /home/pi/.jackdrc
 
-# deploy runtime sources
+# deploy via git clone
+VCPI_REPO="${VCPI_REPO:-https://github.com/deflax/vcpi.git}"
+VCPI_BRANCH="${VCPI_BRANCH:-main}"
 PROJECT_DIR=/home/pi/vcpi
-mkdir -p "$PROJECT_DIR"
-mv -v /root/core "$PROJECT_DIR/core"
-mv -v /root/controllers "$PROJECT_DIR/controllers"
-mv -v /root/graph "$PROJECT_DIR/graph"
-mv -v /root/main.py "$PROJECT_DIR/main.py"
-mv -v /root/requirements.txt "$PROJECT_DIR/requirements.txt"
-mkdir -p "$PROJECT_DIR/patches"
 
-python3 -m venv "$PROJECT_DIR/venv"
-"$PROJECT_DIR/venv/bin/pip" install --upgrade pip
-"$PROJECT_DIR/venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt"
+git clone --branch "$VCPI_BRANCH" "$VCPI_REPO" "$PROJECT_DIR"
+
+python3 -m venv "$PROJECT_DIR/.venv"
+"$PROJECT_DIR/.venv/bin/pip" install --upgrade pip
+"$PROJECT_DIR/.venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt"
 
 chown -R pi:pi "$PROJECT_DIR"
 

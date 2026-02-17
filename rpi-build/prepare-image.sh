@@ -3,7 +3,6 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 
 cleanup() {
   set +e
@@ -50,11 +49,6 @@ fi
 IMAGE_URL="$1"
 CACHE_DIR="${IMAGE_CACHE_DIR:-$SCRIPT_DIR/.image-cache}"
 mkdir -p "$CACHE_DIR"
-
-if [ ! -d "$REPO_ROOT/core" ] || [ ! -d "$REPO_ROOT/controllers" ] || [ ! -d "$REPO_ROOT/graph" ] || [ ! -f "$REPO_ROOT/main.py" ] || [ ! -f "$REPO_ROOT/requirements.txt" ]; then
-  echo "ERROR: vcpi project files not found at repo root: $REPO_ROOT"
-  exit 1
-fi
 
 if [ ! -f "$USERCONF_PATH" ]; then
   echo "ERROR: $USERCONF_PATH not found"
@@ -157,8 +151,10 @@ NMEOF
 chmod 600 "$NM_DIR/wifi.nmconnection"
 
 # Set regulatory domain so WiFi radio is allowed to transmit.
-mkdir -p "$MOUNT_DIR/etc/default"
-echo "REGDOMAIN=$WIFI_COUNTRY" > "$MOUNT_DIR/etc/default/crda"
+CMDLINE_FILE="$BOOT_MOUNT/cmdline.txt"
+if ! grep -q 'cfg80211.ieee80211_regdom=' "$CMDLINE_FILE"; then
+  sed -i "s/$/ cfg80211.ieee80211_regdom=$WIFI_COUNTRY/" "$CMDLINE_FILE"
+fi
 echo "WiFi configured for SSID: $WIFI_SSID (country: $WIFI_COUNTRY)"
 
 # pi user keys
@@ -191,13 +187,8 @@ mkdir -p "$MOUNT_DIR/etc/systemd/journald.conf.d"
 cp -v "$SCRIPT_DIR/services/journald-console.conf" \
   "$MOUNT_DIR/etc/systemd/journald.conf.d/console.conf"
 
-#provision project files
+#provision first-boot script
 cp -v "$SCRIPT_DIR/setup.sh" "$MOUNT_DIR/root/setup.sh"
-cp -rv "$REPO_ROOT/core" "$MOUNT_DIR/root/core"
-cp -rv "$REPO_ROOT/controllers" "$MOUNT_DIR/root/controllers"
-cp -rv "$REPO_ROOT/graph" "$MOUNT_DIR/root/graph"
-cp -v "$REPO_ROOT/main.py" "$MOUNT_DIR/root/main.py"
-cp -v "$REPO_ROOT/requirements.txt" "$MOUNT_DIR/root/requirements.txt"
 
 sync
 
