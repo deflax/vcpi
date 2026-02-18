@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import logging
 import threading
 from typing import Optional
@@ -20,11 +21,12 @@ class AudioEngine:
 
     Per callback:
       1. Flush queued MIDI into each instrument plugin
-      2. Render each instrument
-      3. Apply per-slot insert effects
-      4. Mix according to gain / mute / solo
-      5. Apply master effects chain
-      6. Write to output buffer
+      2. Apply queued parameter changes
+      3. Render each instrument
+      4. Apply per-slot insert effects
+      5. Mix according to gain / mute / solo
+      6. Apply master effects chain
+      7. Write to output buffer
     """
 
     def __init__(self, sample_rate: int = 44100, buffer_size: int = 512,
@@ -37,16 +39,69 @@ class AudioEngine:
         self.master_effects: list = []  # pedalboard plugin instances
         self.master_gain: float = 1.0
 
-        self._midi_queues: dict[int, list] = {}  # slot_index -> [mido.Message]
-        self._lock = threading.Lock()
+        self._midi_queue: collections.deque = collections.deque()  # (slot_index, msg)
+        self._param_queue: collections.deque = collections.deque()  # (slot_idx, name, val)
+        self._lock = threading.Lock()  # kept for potential external use
         self._stream = None
+        self._mixed_buf: Optional[np.ndarray] = None  # pre-allocated mix buffer
+        self._master_board = None  # cached Pedalboard for master effects
+
+        # Unified MIDI channel -> slot routing (shared by all controllers)
+        self.channel_map: dict[int, int] = {}  # MIDI channel (0-15) -> slot index (0-7)
+
+    # -- routing -------------------------------------------------------------
+
+    def route(self, midi_channel: int, slot_index: int):
+        """Map a MIDI channel (0-15) to a slot index (0-7)."""
+        if not 0 <= midi_channel < 16:
+            raise ValueError("MIDI channel must be 1-16")
+        if not 0 <= slot_index < NUM_SLOTS:
+            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+
+        prev_idx = self.channel_map.get(midi_channel)
+        if prev_idx is not None and prev_idx != slot_index:
+            prev_slot = self.slots[prev_idx]
+            if prev_slot:
+                prev_slot.midi_channels.discard(midi_channel)
+            logger.info(
+                "route update: ch %d slot %d -> slot %d",
+                midi_channel + 1, prev_idx + 1, slot_index + 1,
+            )
+
+        self.channel_map[midi_channel] = slot_index
+        slot = self.slots[slot_index]
+        if slot:
+            slot.midi_channels.add(midi_channel)
+
+        if prev_idx is None:
+            logger.info("route set: ch %d -> slot %d",
+                        midi_channel + 1, slot_index + 1)
+
+    def unroute(self, midi_channel: int):
+        """Remove a MIDI channel routing."""
+        idx = self.channel_map.pop(midi_channel, None)
+        if idx is not None:
+            slot = self.slots[idx]
+            if slot:
+                slot.midi_channels.discard(midi_channel)
+            logger.info("route removed: ch %d (slot %d)",
+                        midi_channel + 1, idx + 1)
 
     # -- MIDI queueing -------------------------------------------------------
 
     def enqueue_midi(self, slot_index: int, msg):
-        """Thread-safe enqueue of a mido.Message for a given slot."""
-        with self._lock:
-            self._midi_queues.setdefault(slot_index, []).append(msg)
+        """Thread-safe enqueue of a mido.Message for a given slot.
+
+        Uses collections.deque which is thread-safe for append/popleft
+        under CPython (no lock needed).
+        """
+        self._midi_queue.append((slot_index, msg))
+
+    # -- Parameter change queueing -------------------------------------------
+
+    def enqueue_param_change(self, slot_index: int, param_name: str, value):
+        """Thread-safe enqueue of a parameter change (called from controller threads)."""
+        self._param_queue.append((slot_index, param_name, value))
 
     # -- solo logic ----------------------------------------------------------
 
@@ -59,11 +114,35 @@ class AudioEngine:
         if status:
             logger.warning("[Audio] %s", status)
 
-        mixed = np.zeros((frames, self.output_channels), dtype=np.float32)
+        # Use pre-allocated mix buffer (avoid allocation in RT path)
+        if (self._mixed_buf is None
+                or self._mixed_buf.shape != (frames, self.output_channels)):
+            self._mixed_buf = np.zeros((frames, self.output_channels),
+                                       dtype=np.float32)
+        mixed = self._mixed_buf
+        mixed[:] = 0.0
 
-        with self._lock:
-            queues = {k: list(v) for k, v in self._midi_queues.items()}
-            self._midi_queues.clear()
+        # Drain lock-free MIDI queue into per-slot lists
+        queues: dict[int, list] = {}
+        while self._midi_queue:
+            try:
+                slot_idx, msg = self._midi_queue.popleft()
+            except IndexError:
+                break
+            queues.setdefault(slot_idx, []).append(msg)
+
+        # Apply queued parameter changes (drain lock-free deque)
+        while self._param_queue:
+            try:
+                slot_idx, param_name, value = self._param_queue.popleft()
+            except IndexError:
+                break
+            slot = self.slots[slot_idx]
+            if slot is not None and slot.plugin is not None:
+                try:
+                    setattr(slot.plugin, param_name, value)
+                except Exception:
+                    pass
 
         has_solo = self.any_solo()
 
@@ -121,8 +200,9 @@ class AudioEngine:
 
             # Per-slot insert effects
             if slot.effects and HAS_PEDALBOARD:
-                board = Pedalboard(slot.effects)
-                rendered = board(rendered, self.sample_rate)
+                if not hasattr(slot, '_effects_board') or slot._effects_board is None:
+                    slot._effects_board = Pedalboard(slot.effects)
+                rendered = slot._effects_board(rendered, self.sample_rate)
 
             # rendered: (channels, frames) -> transpose for mixing
             rt = rendered.T  # (frames, channels)
@@ -135,9 +215,10 @@ class AudioEngine:
 
         # Master effects
         if self.master_effects and HAS_PEDALBOARD:
-            board = Pedalboard(self.master_effects)
+            if not hasattr(self, '_master_board') or self._master_board is None:
+                self._master_board = Pedalboard(self.master_effects)
             mt = mixed.T.copy()
-            mt = board(mt, self.sample_rate)
+            mt = self._master_board(mt, self.sample_rate)
             mixed = mt.T
 
         mixed *= self.master_gain

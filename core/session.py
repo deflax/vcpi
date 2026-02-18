@@ -97,8 +97,7 @@ def snapshot(host: VcpiCore) -> dict:
 
     connections = {
         "audio_output": host.audio_output_name,
-        "midi_seq_in": host.sequencer_midi_name,
-        "midi_keys_in": host.keyboard_midi_name,
+        "midi_inputs": host.midi_input_names,
         "midi_mix_in": host.mixer_midi_name,
         "midi_mix_out": host.mixer_midi_out_name,
     }
@@ -286,8 +285,11 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
     if audio_selected and isinstance(audio_output, str):
         _restore_audio(audio_output)
 
-    _restore_port("MIDI seq in", connections.get("midi_seq_in"), host.open_sequencer_midi)
-    _restore_port("MIDI keys in", connections.get("midi_keys_in"), host.open_keyboard_midi)
+    midi_inputs = connections.get("midi_inputs")
+    if isinstance(midi_inputs, list):
+        for port_name in midi_inputs:
+            _restore_port(f"MIDI in '{port_name}'", port_name, host.open_midi_input)
+
     _restore_port("MIDI mix in", connections.get("midi_mix_in"), host.open_mixer_midi)
     _restore_port("MIDI mix out", connections.get("midi_mix_out"), host.open_mixer_midi_out)
 

@@ -52,6 +52,14 @@ class MidiMixController:
         self._in_port = MidiInPort()
         self._out_port = MidiOutPort()
         self._cc_to_fader, self._cc_to_knob = build_cc_lookups()
+        self._param_cache: dict[int, list[str]] = {}  # slot_index -> [param_names]
+
+    def invalidate_param_cache(self, slot_index: Optional[int] = None):
+        """Clear cached parameter names. Call when instruments are loaded/removed."""
+        if slot_index is not None:
+            self._param_cache.pop(slot_index, None)
+        else:
+            self._param_cache.clear()
 
     @property
     def input_port_name(self) -> Optional[str]:
@@ -160,7 +168,11 @@ class MidiMixController:
             logger.debug("knob on slot %d ignored (empty slot)", slot_idx + 1)
             return
 
-        params = list(slot.plugin.parameters.keys())
+        # Use cached parameter list to avoid rebuilding on every CC
+        params = self._param_cache.get(slot_idx)
+        if params is None:
+            params = list(slot.plugin.parameters.keys())
+            self._param_cache[slot_idx] = params
         if knob_idx >= len(params):
             logger.debug(
                 "slot %d knob %d ignored (no mapped param)",
@@ -173,11 +185,11 @@ class MidiMixController:
         try:
             param_range = slot.plugin.parameters[param_name].range
             mapped = param_range[0] + (value / 127.0) * (param_range[1] - param_range[0])
-            setattr(slot.plugin, param_name, mapped)
+            self._engine.enqueue_param_change(slot_idx, param_name, mapped)
             logger.info("slot %d %s -> %s", slot_idx + 1, param_name, mapped)
         except Exception:
             try:
-                setattr(slot.plugin, param_name, value / 127.0)
+                self._engine.enqueue_param_change(slot_idx, param_name, value / 127.0)
                 logger.info("slot %d %s -> %s", slot_idx + 1, param_name, value / 127.0)
             except Exception:
                 logger.warning("slot %d %s update failed", slot_idx + 1, param_name)

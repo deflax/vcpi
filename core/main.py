@@ -29,10 +29,8 @@ def _add_host_args(parser: argparse.ArgumentParser):
     parser.add_argument("--bpm", type=float, default=120.0, help="Initial BPM")
     parser.add_argument("--link", action="store_true",
                         help="Enable Ableton Link on start")
-    parser.add_argument("--seq-midi", type=int, default=None,
-                        help="Beatstep Pro MIDI port index")
-    parser.add_argument("--keys-midi", type=int, default=None,
-                        help="Novation 25 LE MIDI port index")
+    parser.add_argument("--midi-in", nargs="*", default=None,
+                        help="MIDI input port index(es) to open")
     parser.add_argument("--mix-midi", type=int, default=None,
                         help="MIDI Mix port index")
     parser.add_argument("--mix-midi-out", type=int, default=None,
@@ -63,17 +61,12 @@ def _boot_host(args) -> VcpiCore:
         except Exception as e:
             logger.warning("link startup failed: %s", e)
 
-    if args.seq_midi is not None:
-        try:
-            host.open_sequencer_midi(args.seq_midi)
-        except Exception as e:
-            logger.warning("sequencer MIDI startup failed: %s", e)
-
-    if args.keys_midi is not None:
-        try:
-            host.open_keyboard_midi(args.keys_midi)
-        except Exception as e:
-            logger.warning("keyboard MIDI startup failed: %s", e)
+    if args.midi_in:
+        for port in args.midi_in:
+            try:
+                host.open_midi_input(port)
+            except Exception as e:
+                logger.warning("MIDI input startup failed for '%s': %s", port, e)
 
     if args.mix_midi is not None:
         try:

@@ -23,6 +23,7 @@ class InstrumentSlot:
     enabled: bool = True
     source_type: str = "plugin"  # plugin | wav | vcv
     vcv_patch_path: str = ""     # .vcv patch file (when source_type == "vcv")
+    _effects_board: object = field(default=None, repr=False, compare=False)
 
     @property
     def display_label(self) -> str:

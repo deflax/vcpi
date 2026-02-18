@@ -11,8 +11,7 @@ from typing import Optional
 
 from core import deps, session
 from controllers.akai_midimix import MidiMixController
-from controllers.arturia_beatstep_pro import BeatStepProController
-from controllers.novation_25le import Novation25LeController
+from controllers.midi_input import MidiInputController
 from core.engine import AudioEngine
 from core.link import LinkSync
 from core.midi import list_midi_input_ports, list_midi_output_ports
@@ -46,8 +45,7 @@ class VcpiCore:
             os.environ.get(PATCHES_DIR_ENV, DEFAULT_PATCHES_DIR)
         ).expanduser()
 
-        self.bsp = BeatStepProController(self.engine)
-        self.novation_25le = Novation25LeController(self.engine, self.bsp.channel_map)
+        self.midi_inputs: list[MidiInputController] = []
         self.midimix = MidiMixController(self.engine)
 
         # Remember the most recently selected/active audio output device name.
@@ -55,19 +53,16 @@ class VcpiCore:
 
     @property
     def channel_map(self) -> dict[int, int]:
-        return self.bsp.channel_map
+        return self.engine.channel_map
 
     @property
-    def sequencer_midi_name(self) -> Optional[str]:
-        return self.bsp.port_name
+    def midi_input_names(self) -> list[str]:
+        """Port names of all open MIDI inputs."""
+        return [c.port_name for c in self.midi_inputs if c.port_name]
 
     @property
     def mixer_midi_name(self) -> Optional[str]:
         return self.midimix.input_port_name
-
-    @property
-    def keyboard_midi_name(self) -> Optional[str]:
-        return self.novation_25le.port_name
 
     @property
     def mixer_midi_out_name(self) -> Optional[str]:
@@ -347,6 +342,7 @@ class VcpiCore:
             source_type="plugin",
         )
         self.engine.slots[slot_index] = slot
+        self.midimix.invalidate_param_cache(slot_index)
         return slot
 
     def load_wav(self, slot_index: int, wav_path: str,
@@ -380,6 +376,7 @@ class VcpiCore:
             source_type="wav",
         )
         self.engine.slots[slot_index] = slot
+        self.midimix.invalidate_param_cache(slot_index)
         logger.info("[WAV] slot %d loaded from %s", slot_index + 1, resolved)
         return slot
 
@@ -393,6 +390,7 @@ class VcpiCore:
             raise ValueError(f"Slot {slot_index + 1} is already empty")
 
         self.engine.slots[slot_index] = None
+        self.midimix.invalidate_param_cache(slot_index)
         logger.info("[INST] removed slot %d (%s)", slot_index + 1, slot.name)
         return slot
 
@@ -410,9 +408,11 @@ class VcpiCore:
             if slot is None:
                 raise ValueError(f"Slot {slot_index + 1} is empty")
             slot.effects.append(plugin)
+            slot._effects_board = None  # invalidate cached Pedalboard
             logger.info("[FX] '%s' -> slot %d (%s)", label, slot_index + 1, slot.name)
         else:
             self.engine.master_effects.append(plugin)
+            self.engine._master_board = None  # invalidate cached Pedalboard
             logger.info("[FX] '%s' -> master bus", label)
 
     def remove_effect(self, slot_index: Optional[int], effect_index: int):
@@ -421,34 +421,38 @@ class VcpiCore:
             if slot is None:
                 raise ValueError(f"Slot {slot_index + 1} is empty")
             del slot.effects[effect_index]
+            slot._effects_board = None  # invalidate cached Pedalboard
         else:
             del self.engine.master_effects[effect_index]
+            self.engine._master_board = None  # invalidate cached Pedalboard
 
     # -- routing -------------------------------------------------------------
 
     def route(self, midi_channel: int, slot_index: int):
-        self.bsp.route(midi_channel, slot_index)
+        self.engine.route(midi_channel, slot_index)
 
     def unroute(self, midi_channel: int):
-        self.bsp.unroute(midi_channel)
+        self.engine.unroute(midi_channel)
 
     # -- MIDI controllers ----------------------------------------------------
 
-    def open_sequencer_midi(self, port_index: Optional[int | str] = None):
-        if isinstance(port_index, str):
-            token = port_index.strip()
-            if not token or token == "vcpi-Seq":
-                port_index = None
-            else:
-                port_index = self._resolve_midi_input_port(token)
-
-        name = self.bsp.open(port_index)
-        logger.info("[SEQ MIDI] Opened: %s", name)
-
-    def open_keyboard_midi(self, port_index: int | str):
+    def open_midi_input(self, port_index: int | str) -> MidiInputController:
+        """Open any MIDI input port and add it to the active inputs list."""
         port_index = self._resolve_midi_input_port(port_index)
-        name = self.novation_25le.open(port_index)
-        logger.info("[Keyboard MIDI] Opened: %s", name)
+        ctrl = MidiInputController(self.engine)
+        name = ctrl.open(port_index)
+        self.midi_inputs.append(ctrl)
+        logger.info("[MIDI IN] Opened: %s", name)
+        return ctrl
+
+    def close_midi_input(self, index: int):
+        """Close and remove a MIDI input by its position in midi_inputs."""
+        if not 0 <= index < len(self.midi_inputs):
+            raise ValueError(
+                f"MIDI input index must be 1-{len(self.midi_inputs)}")
+        ctrl = self.midi_inputs.pop(index)
+        ctrl.close()
+        logger.info("[MIDI IN] Closed: %s", ctrl.label)
 
     def open_mixer_midi(self, port_index: int | str):
         port_index = self._resolve_midi_input_port(port_index)
@@ -594,8 +598,9 @@ class VcpiCore:
     def shutdown(self):
         self.save_session()
         self.stop_audio()
-        self.bsp.close()
-        self.novation_25le.close()
+        for ctrl in self.midi_inputs:
+            ctrl.close()
+        self.midi_inputs.clear()
         self.midimix.close()
         self.stop_link()
         logger.info("[Host] Shutdown complete")

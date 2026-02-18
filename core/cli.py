@@ -869,23 +869,36 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         for i, name in enumerate(ports):
             self._print(f"  [{i}] {name}")
 
-    def do_midi_seq(self, arg):
-        """Open Beatstep Pro MIDI: midi_seq <port_index>"""
-        a = arg.strip()
+    def do_midi_in(self, arg):
+        """Open a MIDI input port: midi_in <port_index>"""
+        if not arg.strip():
+            self._print("Usage: midi_in <port_index>")
+            return
         try:
-            self.host.open_sequencer_midi(int(a) if a else None)
+            ctrl = self.host.open_midi_input(arg.strip())
+            self._print(f"  Opened: {ctrl.port_name}")
         except Exception as e:
             self._print(f"Error: {e}")
 
-    def do_midi_keys(self, arg):
-        """Open Novation 25 LE MIDI input: midi_keys <port_index>"""
+    def do_midi_in_close(self, arg):
+        """Close a MIDI input: midi_in_close <index 1-N>"""
         if not arg.strip():
-            self._print("Usage: midi_keys <port_index>")
+            self._print("Usage: midi_in_close <index>")
             return
         try:
-            self.host.open_keyboard_midi(int(arg.strip()))
+            idx = int(arg.strip()) - 1
+            self.host.close_midi_input(idx)
+            self._print("  Closed.")
         except Exception as e:
             self._print(f"Error: {e}")
+
+    def do_midi_ins(self, arg):
+        """List open MIDI inputs."""
+        if not self.host.midi_inputs:
+            self._print("  No MIDI inputs open.")
+            return
+        for i, ctrl in enumerate(self.host.midi_inputs):
+            self._print(f"  [{i + 1}] {ctrl.port_name or ctrl.label}")
 
     def do_midi_mix(self, arg):
         """Open Akai MIDI Mix input: midi_mix <port_index>"""
@@ -989,8 +1002,11 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         self._print(f"  Audio  : {'RUNNING' if self.host.engine.running else 'STOPPED'}"
                     f"  (sr={self.host.sample_rate} buf={self.host.buffer_size})")
         self._print(f"  Backend: {self._audio_backend_label()}")
-        self._print(f"  BSP    : {self.host.sequencer_midi_name or 'closed'}")
-        self._print(f"  Keys   : {self.host.keyboard_midi_name or 'closed'}")
+        if self.host.midi_inputs:
+            for i, ctrl in enumerate(self.host.midi_inputs):
+                self._print(f"  MIDI IN[{i + 1}]: {ctrl.port_name or ctrl.label}")
+        else:
+            self._print("  MIDI IN: (none)")
         self._print(f"  MIDIMix IN : {self.host.mixer_midi_name or 'closed'}")
         self._print(f"  MIDIMix OUT: {self.host.mixer_midi_out_name or 'closed'}")
         self._print(f"  Session: {self.host.session_path}")

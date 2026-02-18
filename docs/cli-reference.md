@@ -42,8 +42,7 @@ These flags apply when starting the host server (`python main.py serve`).
 | `--buf` | `512` | Audio buffer size |
 | `--bpm` | `120.0` | Initial tempo |
 | `--link` | off | Enable Ableton Link on startup |
-| `--seq-midi` | unset | BeatStep Pro MIDI port index to open on startup |
-| `--keys-midi` | unset | Novation 25 LE MIDI port index to open on startup |
+| `--midi-in` | unset | MIDI input port index(es) to open on startup (repeatable) |
 | `--mix-midi` | unset | MIDI Mix port index to open on startup |
 | `--mix-midi-out` | unset | MIDI Mix output port index (LED feedback) |
 | `--output` | unset | Preferred output audio device index or name (not auto-started) |
@@ -62,10 +61,16 @@ Logging level is controlled by environment variable `LOG_LEVEL`.
 Core default is `WARNING`. `./vcsrv` defaults it to `DEBUG` if unset.
 The Raspberry Pi `payload.service` also sets `LOG_LEVEL=DEBUG`.
 
-VST3 plugin search:
+VST3 plugin search and name resolution:
 
-- `load vst` and `load fx` search `vst3/` in the repo root first, then `~/.vst3`,
+- `load vst` and `load fx` accept a plugin **name** (e.g. `Dexed`) or a full
+  path (e.g. `/usr/lib/vst3/Dexed.vst3`). Names are resolved by scanning
+  known search directories.
+- Search order: `vst3/` in the repo root, `~/.vst3`,
   `/usr/lib/vst3`, `/usr/local/lib/vst3`, and macOS standard paths.
+- Name matching: exact stem match first, then case-insensitive, then unique
+  prefix match. Ambiguous names produce an error listing the candidates.
+- Tab completion for `load vst` and `load fx` lists all detected plugin names.
 - Run `./vst3/fetch-vsts-amd64` on x86_64/amd64 systems.
 - Run `./vst3/fetch-vsts-aarch64` on Raspberry Pi / Linux aarch64 systems.
 - Override with `VST3_PATH` or `VST_PATH` environment variables.
@@ -149,8 +154,9 @@ autocomplete command names. `load` also has context-aware argument completion:
 |---|---|
 | `midi_ports_in` | List MIDI input ports |
 | `midi_ports_out` | List MIDI output ports |
-| `midi_seq [port_index]` | Open BeatStep Pro input (no arg opens virtual input `vcpi-Seq`) |
-| `midi_keys <port_index>` | Open Novation 25 LE keyboard input |
+| `midi_in <port_index>` | Open any MIDI input port |
+| `midi_ins` | List open MIDI inputs |
+| `midi_in_close <index>` | Close a MIDI input by its position in the open list |
 | `midi_mix <port_index>` | Open Akai MIDI Mix input |
 | `midi_mix_out <port_index>` | Open Akai MIDI Mix output (LED feedback) |
 | `note <slot> <note> [vel] [dur_ms]` | Send test note to slot |
@@ -167,15 +173,15 @@ vcpi> midi_ports_out
   [0] MIDI Mix MIDI 1
 ```
 
-Use the numeric value in `[]` from `midi_ports_in` with `midi_seq`,
-`midi_keys`, and `midi_mix`. Use indexes from `midi_ports_out` with
-`midi_mix_out`. Indexes may change after reboot or replug.
+Use the numeric value in `[]` from `midi_ports_in` with `midi_in`
+and `midi_mix`. Use indexes from `midi_ports_out` with `midi_mix_out`.
+Indexes may change after reboot or replug.
+
+You can open multiple MIDI inputs simultaneously. All MIDI inputs share the
+same channel routing table (`route <ch> <slot>`).
 
 Important: `route <ch> <slot>` only maps MIDI channels internally. It does
-not open hardware ports; `midi_seq`, `midi_keys`, and `midi_mix` do.
-
-`midi_seq` (BeatStep Pro) and `midi_keys` (Novation 25 LE) both use the same
-channel routing table from `route <ch> <slot>`.
+not open hardware ports; `midi_in` and `midi_mix` do.
 
 WAV sampler behavior:
 
@@ -214,8 +220,7 @@ vcpi> load wav 5 synth-leads c4-mono-saw
 Saved/restored session state now also includes selected connection targets for:
 
 - audio output device
-- BeatStep Pro input (`midi_seq`)
-- Novation input (`midi_keys`)
+- all open MIDI inputs (`midi_in`)
 - MIDI Mix input/output (`midi_mix`, `midi_mix_out`)
 
 On startup restore, vcpi attempts to reconnect these targets automatically.
@@ -244,5 +249,5 @@ Headless server + client shell:
 Server logs now include:
 
 - CLI command execution (`[CLI] ...`)
-- BeatStep Pro events (`[SEQ MIDI] ...`)
+- MIDI input events (`[MIDI IN] ...`)
 - MIDI Mix events (`[MIDI Mix] ...`)

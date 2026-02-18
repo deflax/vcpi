@@ -1,4 +1,9 @@
-"""Novation 25 LE MIDI keyboard integration."""
+"""Generic MIDI input controller.
+
+Any MIDI input device (keyboard, sequencer, etc.) is handled identically:
+parse incoming raw MIDI, look up engine.channel_map, and enqueue to the
+appropriate instrument slot.
+"""
 
 from __future__ import annotations
 
@@ -12,26 +17,29 @@ from core.midi import MidiInPort
 logger = logging.getLogger(__name__)
 
 
-class Novation25LeController:
-    """Handle Novation 25 LE MIDI input using shared channel routing."""
+class MidiInputController:
+    """Forward MIDI input from any device into routed instrument slots."""
 
-    def __init__(self, engine, channel_map: dict[int, int]):
+    def __init__(self, engine, label: str = "MIDI-in"):
         self._engine = engine
-        self._channel_map = channel_map
         self._port = MidiInPort()
+        self.label = label  # human-readable name for logging / status
 
     @property
     def port_name(self) -> Optional[str]:
         return self._port.name
 
     def open(self, port_index: int) -> str:
-        return self._port.open_input_port(port_index, self.on_midi)
+        """Open a hardware MIDI input port by index."""
+        name = self._port.open_input_port(port_index, self.on_midi)
+        self.label = name
+        return name
 
     def close(self):
         self._port.close()
 
     def on_midi(self, event, data=None):
-        """rtmidi callback forwarding keyboard MIDI into routed slots."""
+        """rtmidi callback forwarding MIDI into routed slots."""
         del data
 
         raw, _dt = event
@@ -42,9 +50,10 @@ class Novation25LeController:
         channel = status & 0x0F
         msg_type = status & 0xF0
 
-        slot_index = self._channel_map.get(channel)
+        slot_index = self._engine.channel_map.get(channel)
         if slot_index is None:
-            logger.debug("ch %d raw=%s dropped (unrouted)", channel + 1, raw)
+            logger.debug("[%s] ch %d raw=%s dropped (unrouted)",
+                         self.label, channel + 1, raw)
             return
 
         try:
@@ -70,8 +79,10 @@ class Novation25LeController:
 
             if msg is not None:
                 self._engine.enqueue_midi(slot_index, msg)
-                logger.debug("ch %d -> slot %d: %s", channel + 1, slot_index + 1, msg)
+                logger.debug("[%s] ch %d -> slot %d: %s",
+                             self.label, channel + 1, slot_index + 1, msg)
             else:
-                logger.debug("ch %d raw=%s ignored", channel + 1, raw)
+                logger.debug("[%s] ch %d raw=%s ignored",
+                             self.label, channel + 1, raw)
         except Exception as exc:
-            logger.warning("keyboard MIDI processing error: %s", exc)
+            logger.warning("[%s] MIDI processing error: %s", self.label, exc)

@@ -46,7 +46,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 .
   core/               # Main package
     host.py           # vcpi core orchestration
-  controllers/        # Hardware controller modules (BSP, MIDI Mix)
+  controllers/        # Hardware controller modules (generic MIDI input, MIDI Mix)
   samples/            # Built-in WAV sample packs (for `load wav`); see samples/README.md
   vst3/               # Open-license VST3 plugins (run arch-specific fetch scripts)
   docs/               # Extended documentation (CLI reference, etc.)
@@ -78,7 +78,10 @@ LOG_LEVEL=INFO ./vcsrv
 
 Full CLI and startup flag reference: `docs/cli-reference.md`
 
-Inside `./vcli`, press `Tab` to autocomplete command names.
+Inside `./vcli`, press `Tab` to autocomplete command names. The `load`
+command has context-aware completion: `load vst` and `load fx` complete
+detected VST3 plugin names, `load wav` completes pack and sample names,
+and `load vcv` completes patch names. You do not need to type full paths.
 
 Inside the CLI, a typical first run is:
 
@@ -87,11 +90,11 @@ deps
 midi_ports_in
 audio_devices
 load vcv <slot> <patch_name>
-midi_seq <index>
-midi_keys <index>
+midi_in <index>
 midi_mix <index>
 midi_ports_out
 midi_mix_out <index>
+route <ch> <slot>
 graph
 audio_start
 link 120
@@ -100,7 +103,7 @@ status
 
 ### Finding MIDI port indexes
 
-Use these commands to discover indexes used by `midi_seq`, `midi_keys`,
+Use these commands to discover indexes used by `midi_in`,
 `midi_mix`, and `midi_mix_out`:
 
 ```text
@@ -116,44 +119,44 @@ vcpi> midi_ports_out
 Use the number in brackets:
 
 ```text
-vcpi> midi_seq 0
-vcpi> midi_keys 1
+vcpi> midi_in 0
+vcpi> midi_in 1
 vcpi> midi_mix 2
 vcpi> midi_mix_out 0
 ```
+
+You can open any number of MIDI inputs. Use `midi_ins` to list them and
+`midi_in_close <index>` to close one.
 
 Port indexes can change after reboot/replug, so always re-check with
 `midi_ports_in` and `midi_ports_out`.
 
 ## Controller Setup
 
-### Arturia BeatStep Pro (sequencer)
+### MIDI inputs (any keyboard, sequencer, etc.)
 
-- BeatStep Pro is the note/sequence source; its MIDI channels are fully configurable.
-- Open its input port with `midi_seq <index>` (from `midi_ports_in`).
-- Route whichever channels your BSP sends on into vcpi slots with `route <ch> <slot>`.
-- There are no hard-coded channel assumptions in vcpi.
-
-### Novation 25 LE (keyboard)
-
-- Novation 25 LE is a second note input source.
-- Open its input port with `midi_keys <index>` (from `midi_ports_in`).
-- It shares the same routing table as BSP (`route <ch> <slot>`).
-- Example: if Novation is set to MIDI channel 15, use `route 15 <slot>`.
+All MIDI input devices are handled identically. Open any device with
+`midi_in <port_index>` and route its MIDI channels to slots:
 
 ```text
 vcpi> midi_ports_in
-vcpi> midi_seq 0
-vcpi> route 1 1
-vcpi> route 2 2
-vcpi> route 10 3
+vcpi> midi_in 0          # e.g. BeatStep Pro
+vcpi> midi_in 1          # e.g. keyboard
+vcpi> route 1 1          # BSP ch 1 -> slot 1
+vcpi> route 2 2          # BSP ch 2 -> slot 2
+vcpi> route 10 3         # BSP ch 10 -> slot 3
+vcpi> route 5 1          # keyboard ch 5 -> slot 1
 vcpi> routing
 ```
 
+- There are no device-specific commands; every MIDI input is a peer.
+- Routing is channel-based: `route <ch> <slot>` maps a MIDI channel to a slot.
+- Each device sends on its own channel(s); configure channels on the hardware.
+- Use `midi_ins` to list open inputs, `midi_in_close <index>` to close one.
+
 ### Akai MIDI Mix (hardware mixer)
 
-- MIDI Mix uses its own dedicated input port (separate from BeatStep Pro).
-- MIDI Mix uses its own dedicated input port (separate from BSP/Novation note routing).
+- MIDI Mix uses its own dedicated input port (separate from note routing).
 - Connect control input with `midi_mix <port_index>` (from `midi_ports_in`).
 - Optional LED feedback is via MIDI output with `midi_mix_out <port_index>` (from `midi_ports_out`).
 - Factory mapping is used by default:
@@ -202,17 +205,15 @@ Bundled plugins currently include Dexed, Surge XT, Odin 2, OB-Xf, Geonkick,
 JC-303, Firefly Synth 2 (+FX), and Dragonfly Reverb.
 
 ```text
-vcpi> load vst 1 Dexed
+vcpi> load vst 1 Dexed         # Tab completes installed VST names
 vcpi> audio_start
 vcpi> note 1 60 100 500
 ```
 
-Load a synth by path:
+Full paths also work:
 
 ```text
 vcpi> load vst 1 /path/to/Synth.vst3 Lead
-vcpi> audio_start
-vcpi> note 1 60 100 500
 ```
 
 Load a WAV sample into a slot and trigger it from MIDI routing:
@@ -220,7 +221,7 @@ Load a WAV sample into a slot and trigger it from MIDI routing:
 ```text
 vcpi> load wav 2 909 bassdrum
 vcpi> route 10 2
-vcpi> midi_seq 0
+vcpi> midi_in 0
 ```
 
 `load wav` resolves to `samples/<pack>/<sample>.wav` (for example,
@@ -245,22 +246,21 @@ vcpi> load wav 4 synth-pads c4-warm
 vcpi> load wav 5 synth-leads c4-mono-saw
 ```
 
-Typical multi-instrument setup with BSP + MIDI Mix:
+Typical multi-instrument setup:
 
 ```text
-vcpi> load vst 1 /path/to/Lead.vst3 Lead
-vcpi> load vst 2 /path/to/Bass.vst3 Bass
-vcpi> load vst 3 /path/to/Drums.vst3 Drums
+vcpi> load vst 1 Dexed Lead
+vcpi> load vst 2 OB-Xf Bass
+vcpi> load vst 3 Geonkick Drums
 
 vcpi> route 1 1
 vcpi> route 2 2
 vcpi> route 10 3
 
-vcpi> midi_seq 0
-vcpi> midi_keys 1
+vcpi> midi_in 0
+vcpi> midi_in 1
 vcpi> midi_mix 2
-vcpi> load fx /path/to/Delay.vst3 1 Delay
-vcpi> load fx /path/to/Reverb.vst3 master Reverb
+vcpi> load fx DragonflyRoomReverb 1 Reverb
 vcpi> audio_start
 vcpi> link 120
 vcpi> status
