@@ -145,6 +145,8 @@ def _vst_search_dirs() -> list[Path]:
 
     candidates = [
         *env_tokens,
+        str(_repo_root() / "vst3"),
+        str(Path.cwd() / "vst3"),
         str(Path.cwd()),
         str(_repo_root()),
         "~/.vst3",

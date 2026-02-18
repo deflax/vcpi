@@ -219,6 +219,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
         candidates = [
             *env_tokens,
+            str(self._repo_root() / "vst3"),
+            str(Path.cwd() / "vst3"),
             str(Path.cwd()),
             str(self._repo_root()),
             "~/.vst3",

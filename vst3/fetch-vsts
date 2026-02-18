@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+#
+# fetch-vsts -- Download open-license VST3 plugins into the vst/ directory.
+#
+# Usage:
+#   ./vst/fetch-vsts          # download all plugins
+#   ./vst/fetch-vsts dexed    # download only Dexed
+#   ./vst/fetch-vsts surge    # download only Surge XT
+#   ./vst/fetch-vsts odin     # download only Odin 2
+#
+# Downloaded .vst3 bundles land in vst/ and are automatically found by
+# vcpi's "load vst" and "load fx" commands.
+#
+# Requirements: curl, unzip, tar
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+VST_DIR="$SCRIPT_DIR"
+
+# ── Plugin definitions ──────────────────────────────────────────────────
+
+SURGE_VERSION="1.3.4"
+SURGE_URL="https://github.com/surge-synthesizer/releases-xt/releases/download/${SURGE_VERSION}/surge-xt-linux-1.3.4-pluginsonly.tar.gz"
+SURGE_ARCHIVE="surge-xt-linux-${SURGE_VERSION}-pluginsonly.tar.gz"
+SURGE_VST3="Surge XT.vst3"
+
+DEXED_VERSION="1.0.1"
+DEXED_URL="https://github.com/asb2m10/dexed/releases/download/v${DEXED_VERSION}/Dexed-${DEXED_VERSION}-lnx.zip"
+DEXED_ARCHIVE="Dexed-${DEXED_VERSION}-lnx.zip"
+DEXED_VST3="Dexed.vst3"
+
+ODIN_VERSION="2.4.1"
+ODIN_URL="https://github.com/TheWaveWarden/odin2/releases/download/NightlyDevel/Odin2.4.1Linux.zip"
+ODIN_ARCHIVE="Odin${ODIN_VERSION}Linux.zip"
+ODIN_VST3="Odin2.vst3"
+
+# ── Helpers ─────────────────────────────────────────────────────────────
+
+need() {
+  if ! command -v "$1" &>/dev/null; then
+    echo "Error: $1 is required but not found." >&2
+    exit 1
+  fi
+}
+
+download() {
+  local url="$1" dest="$2"
+  if [ -f "$dest" ]; then
+    echo "  (archive already cached: $dest)"
+    return
+  fi
+  echo "  Downloading $(basename "$dest") ..."
+  curl -fSL --progress-bar -o "$dest" "$url"
+}
+
+find_vst3() {
+  # Recursively find a .vst3 bundle anywhere under the given directory.
+  # Returns the first match.
+  local search_dir="$1" name="$2"
+  find "$search_dir" -maxdepth 4 -type d -name "$name" 2>/dev/null | head -1
+}
+
+# ── Per-plugin install functions ────────────────────────────────────────
+
+install_surge() {
+  echo "=== Surge XT ${SURGE_VERSION} (GPL-3.0) ==="
+
+  if [ -d "$VST_DIR/$SURGE_VST3" ]; then
+    echo "  Already installed: $VST_DIR/$SURGE_VST3"
+    return
+  fi
+
+  need curl; need tar
+
+  local archive="$VST_DIR/.cache/$SURGE_ARCHIVE"
+  local tmp="$VST_DIR/.cache/surge-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$SURGE_URL" "$archive"
+
+  echo "  Extracting ..."
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  tar xzf "$archive" -C "$tmp"
+
+  local found
+  found=$(find_vst3 "$tmp" "$SURGE_VST3")
+  if [ -z "$found" ]; then
+    # Try alternate name patterns
+    found=$(find_vst3 "$tmp" "Surge_XT.vst3")
+  fi
+  if [ -z "$found" ]; then
+    found=$(find "$tmp" -maxdepth 4 -type d -name "*.vst3" 2>/dev/null | head -1)
+  fi
+
+  if [ -z "$found" ]; then
+    echo "  Warning: could not locate .vst3 bundle in archive. Listing contents:"
+    ls -R "$tmp" | head -40
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  cp -a "$found" "$VST_DIR/"
+  local installed_name
+  installed_name=$(basename "$found")
+  echo "  Installed: $VST_DIR/$installed_name"
+  rm -rf "$tmp"
+}
+
+install_dexed() {
+  echo "=== Dexed ${DEXED_VERSION} (GPL-3.0) ==="
+
+  if [ -d "$VST_DIR/$DEXED_VST3" ]; then
+    echo "  Already installed: $VST_DIR/$DEXED_VST3"
+    return
+  fi
+
+  need curl; need unzip
+
+  local archive="$VST_DIR/.cache/$DEXED_ARCHIVE"
+  local tmp="$VST_DIR/.cache/dexed-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$DEXED_URL" "$archive"
+
+  echo "  Extracting ..."
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  unzip -qo "$archive" -d "$tmp"
+
+  local found
+  found=$(find_vst3 "$tmp" "$DEXED_VST3")
+  if [ -z "$found" ]; then
+    found=$(find "$tmp" -maxdepth 4 -type d -name "*.vst3" 2>/dev/null | head -1)
+  fi
+
+  if [ -z "$found" ]; then
+    echo "  Warning: could not locate .vst3 bundle in archive. Listing contents:"
+    ls -R "$tmp" | head -40
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  cp -a "$found" "$VST_DIR/"
+  local installed_name
+  installed_name=$(basename "$found")
+  echo "  Installed: $VST_DIR/$installed_name"
+  rm -rf "$tmp"
+}
+
+install_odin() {
+  echo "=== Odin 2 ${ODIN_VERSION} (GPL-3.0) ==="
+
+  if [ -d "$VST_DIR/$ODIN_VST3" ]; then
+    echo "  Already installed: $VST_DIR/$ODIN_VST3"
+    return
+  fi
+
+  need curl; need unzip
+
+  local archive="$VST_DIR/.cache/$ODIN_ARCHIVE"
+  local tmp="$VST_DIR/.cache/odin-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$ODIN_URL" "$archive"
+
+  echo "  Extracting ..."
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  unzip -qo "$archive" -d "$tmp"
+
+  local found
+  found=$(find_vst3 "$tmp" "$ODIN_VST3")
+  if [ -z "$found" ]; then
+    found=$(find "$tmp" -maxdepth 4 -type d -name "*.vst3" 2>/dev/null | head -1)
+  fi
+
+  if [ -z "$found" ]; then
+    echo "  Warning: could not locate .vst3 bundle in archive. Listing contents:"
+    ls -R "$tmp" | head -40
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  cp -a "$found" "$VST_DIR/"
+  local installed_name
+  installed_name=$(basename "$found")
+  echo "  Installed: $VST_DIR/$installed_name"
+  rm -rf "$tmp"
+}
+
+# ── Main ────────────────────────────────────────────────────────────────
+
+TARGETS="${1:-all}"
+
+case "$TARGETS" in
+  all)
+    install_dexed
+    install_surge
+    install_odin
+    ;;
+  dexed)    install_dexed  ;;
+  surge)    install_surge  ;;
+  odin)     install_odin   ;;
+  *)
+    echo "Usage: $0 [all|dexed|surge|odin]" >&2
+    exit 1
+    ;;
+esac
+
+echo ""
+echo "Done. VST3 plugins in: $VST_DIR/"
+echo "Use in vcpi:  load vst <slot> <PluginName>"

@@ -62,6 +62,13 @@ Logging level is controlled by environment variable `LOG_LEVEL`.
 Core default is `WARNING`. `./vcsrv` defaults it to `DEBUG` if unset.
 The Raspberry Pi `payload.service` also sets `LOG_LEVEL=DEBUG`.
 
+VST3 plugin search:
+
+- `load vst` and `load fx` search `vst3/` in the repo root first, then `~/.vst3`,
+  `/usr/lib/vst3`, `/usr/local/lib/vst3`, and macOS standard paths.
+- Run `./vst3/fetch-vsts` to download bundled open-license plugins (Dexed, Surge XT, Odin 2).
+- Override with `VST3_PATH` or `VST_PATH` environment variables.
+
 Cardinal/VCV helpers:
 
 - `load vcv` looks for patch files in `patches/` by default.

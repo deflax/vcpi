@@ -48,6 +48,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
     host.py           # vcpi core orchestration
   controllers/        # Hardware controller modules (BSP, MIDI Mix)
   samples/            # Built-in WAV sample packs (for `load wav`); see samples/README.md
+  vst3/               # Open-license VST3 plugins (run vst3/fetch-vsts to download)
   docs/               # Extended documentation (CLI reference, etc.)
   main.py             # Top-level Python entry point
   vcsrv               # Server launcher (creates .venv on first run)
@@ -189,7 +190,19 @@ vcpi> route 1 1
 `load vcv` loads a fresh Cardinal instance into the slot you specify.
 Routing remains explicit via `route <ch> <slot>`.
 
-Load a synth and test note:
+Fetch bundled open-license VST3 plugins and load one:
+
+```bash
+./vst3/fetch-vsts
+```
+
+```text
+vcpi> load vst 1 Dexed
+vcpi> audio_start
+vcpi> note 1 60 100 500
+```
+
+Load a synth by path:
 
 ```text
 vcpi> load vst 1 /path/to/Synth.vst3 Lead
