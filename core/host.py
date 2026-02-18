@@ -473,6 +473,8 @@ class VcpiCore:
                   duration: float = 0.3):
         if not deps.HAS_MIDO or deps.mido is None:
             return
+        note = max(0, min(127, note))
+        velocity = max(0, min(127, velocity))
         on = deps.mido.Message("note_on", note=note, velocity=velocity)
         off = deps.mido.Message("note_off", note=note)
         self.engine.enqueue_midi(slot_index, on)

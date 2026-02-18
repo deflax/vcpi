@@ -925,6 +925,10 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         except ValueError:
             self._print("Error: note/velocity must be integers, dur_ms must be numeric")
             return
+        if not (0 <= n <= 127):
+            self._print(f"Warning: note {n} clamped to {max(0, min(127, n))}")
+        if not (0 <= v <= 127):
+            self._print(f"Warning: velocity {v} clamped to {max(0, min(127, v))}")
         self.host.send_note(idx, n, v, d)
 
     # -- link ----------------------------------------------------------------
