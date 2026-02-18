@@ -47,7 +47,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
   core/               # Main package
     host.py           # vcpi core orchestration
   controllers/        # Hardware controller modules (BSP, MIDI Mix)
-  samples/            # Built-in WAV sample packs (for `load wav`)
+  samples/            # Built-in WAV sample packs (for `load wav`); see samples/README.md
   docs/               # Extended documentation (CLI reference, etc.)
   main.py             # Top-level Python entry point
   vcsrv               # Server launcher (creates .venv on first run)
@@ -208,6 +208,24 @@ vcpi> midi_seq 0
 `load wav` resolves to `samples/<pack>/<sample>.wav` (for example,
 `samples/909/bassdrum.wav`) and plays one-shot sample voices on note-on.
 You can include or omit the `.wav` extension in `<sample>`.
+
+Built-in packs include drums (`808`, `909`) plus melodic/synth packs:
+
+- `piano`
+- `organ`
+- `strings`
+- `synth-pads`
+- `synth-leads`
+
+Examples:
+
+```text
+vcpi> load wav 1 piano c4-soft
+vcpi> load wav 2 organ c4-drawbar
+vcpi> load wav 3 strings c4-ensemble
+vcpi> load wav 4 synth-pads c4-warm
+vcpi> load wav 5 synth-leads c4-mono-saw
+```
 
 Typical multi-instrument setup with BSP + MIDI Mix:
 

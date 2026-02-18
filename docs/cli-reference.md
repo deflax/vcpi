@@ -168,9 +168,20 @@ WAV sampler behavior:
 
 - `load wav` plays the file when MIDI `note_on` events reach that slot.
 - `load wav 2 909 bassdrum` resolves to `samples/909/bassdrum.wav`.
+- Built-in packs: `808`, `909`, `piano`, `organ`, `strings`, `synth-pads`, `synth-leads`.
 - The `.wav` extension is optional in `<sample>`.
 - Notes are pitch-shifted around middle C (MIDI note 60).
 - It is one-shot playback (note-off does not cut the sample).
+
+Melodic examples:
+
+```text
+vcpi> load wav 1 piano c4-soft
+vcpi> load wav 2 organ c4-drawbar
+vcpi> load wav 3 strings c4-ensemble
+vcpi> load wav 4 synth-pads c4-warm
+vcpi> load wav 5 synth-leads c4-mono-saw
+```
 
 ### Link Commands
 

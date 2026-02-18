@@ -1,0 +1,11 @@
+Strings sample source attribution
+
+These files were generated inside this repository using procedural synthesis
+code (mathematical waveform generation), not from third-party recordings.
+
+Generation date:
+- 2026-02-18
+
+License note:
+- No external audio source was imported for these files.
+- Confirm redistribution terms for your deployment context.
