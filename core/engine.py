@@ -8,6 +8,7 @@ from typing import Optional
 
 from core.deps import HAS_SOUNDDEVICE, HAS_PEDALBOARD, Pedalboard, sd, np
 from core.models import InstrumentSlot, NUM_SLOTS
+from core.sampler import WavSamplerPlugin
 
 
 logger = logging.getLogger(__name__)
@@ -78,19 +79,42 @@ class AudioEngine:
             else:
                 audible = True
 
-            # Always send MIDI so instruments track state even when muted
-            for msg in queues.get(idx, []):
-                try:
-                    slot.plugin.send_midi(msg)
-                except Exception:
-                    pass
+            # Deliver MIDI + render audio
+            midi_msgs = queues.get(idx, [])
 
-            # Render
-            silence = np.zeros((self.output_channels, frames), dtype=np.float32)
-            try:
-                rendered = slot.plugin.process(silence, self.sample_rate)
-            except Exception:
-                continue
+            if isinstance(slot.plugin, WavSamplerPlugin):
+                # WavSamplerPlugin: two-step send_midi + process
+                for msg in midi_msgs:
+                    try:
+                        slot.plugin.send_midi(msg)
+                    except Exception:
+                        logger.debug("[Audio] send_midi error slot %d", idx,
+                                     exc_info=True)
+                silence = np.zeros((self.output_channels, frames),
+                                   dtype=np.float32)
+                try:
+                    rendered = slot.plugin.process(silence, self.sample_rate)
+                except Exception:
+                    continue
+            else:
+                # pedalboard ExternalPlugin: pass MIDI list into process()
+                duration = frames / self.sample_rate
+                # Stamp all messages at time=0 (start of this block)
+                for msg in midi_msgs:
+                    msg.time = 0
+                try:
+                    rendered = slot.plugin.process(
+                        midi_msgs,
+                        duration=duration,
+                        sample_rate=self.sample_rate,
+                        num_channels=self.output_channels,
+                        buffer_size=frames,
+                        reset=False,
+                    )
+                except Exception:
+                    logger.debug("[Audio] VST3 process error slot %d", idx,
+                                 exc_info=True)
+                    continue
 
             if not audible:
                 continue
