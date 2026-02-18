@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 #
-# fetch-vsts -- Download open-license VST3 plugins into the vst/ directory.
+# fetch-vsts -- Download open-license VST3 plugins into the vst3/ directory.
 #
 # Usage:
-#   ./vst/fetch-vsts          # download all plugins
-#   ./vst/fetch-vsts dexed    # download only Dexed
-#   ./vst/fetch-vsts surge    # download only Surge XT
-#   ./vst/fetch-vsts odin     # download only Odin 2
+#   ./vst3/fetch-vsts              # download all plugins
+#   ./vst3/fetch-vsts dexed        # download only Dexed
+#   ./vst3/fetch-vsts surge        # download only Surge XT
+#   ./vst3/fetch-vsts odin         # download only Odin 2
+#   ./vst3/fetch-vsts obxf         # download only OB-Xf
+#   ./vst3/fetch-vsts geonkick     # download only Geonkick
+#   ./vst3/fetch-vsts jc303        # download only JC-303
+#   ./vst3/fetch-vsts firefly      # download Firefly Synth 2 and Firefly FX
+#   ./vst3/fetch-vsts fireflyfx    # download only Firefly FX
+#   ./vst3/fetch-vsts dragonfly    # download only Dragonfly Reverb
+#   ./vst3/fetch-vsts synths       # download synths only
+#   ./vst3/fetch-vsts effects      # download effects only
 #
-# Downloaded .vst3 bundles land in vst/ and are automatically found by
+# Downloaded .vst3 bundles land in vst3/ and are automatically found by
 # vcpi's "load vst" and "load fx" commands.
 #
 # Requirements: curl, unzip, tar
@@ -18,7 +26,9 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 VST_DIR="$SCRIPT_DIR"
 
-# ── Plugin definitions ──────────────────────────────────────────────────
+# -- Plugin definitions --------------------------------------------------
+
+# --- Synths ---
 
 SURGE_VERSION="1.3.4"
 SURGE_URL="https://github.com/surge-synthesizer/releases-xt/releases/download/${SURGE_VERSION}/surge-xt-linux-1.3.4-pluginsonly.tar.gz"
@@ -35,7 +45,37 @@ ODIN_URL="https://github.com/TheWaveWarden/odin2/releases/download/NightlyDevel/
 ODIN_ARCHIVE="Odin${ODIN_VERSION}Linux.zip"
 ODIN_VST3="Odin2.vst3"
 
-# ── Helpers ─────────────────────────────────────────────────────────────
+OBXF_URL="https://github.com/surge-synthesizer/OB-Xf/releases/download/Nightly/obxf-2026-02-17-56fd0b7-Linux.zip"
+OBXF_ARCHIVE="obxf-nightly-linux.zip"
+OBXF_VST3="OB-Xf.vst3"
+
+GEONKICK_VERSION="3.7.0"
+GEONKICK_URL="https://github.com/quamplex/geonkick/releases/download/v${GEONKICK_VERSION}/GNULinux_binaries_v${GEONKICK_VERSION}_basic.zip"
+GEONKICK_ARCHIVE="geonkick-${GEONKICK_VERSION}-linux.zip"
+GEONKICK_VST3="geonkick.vst3"
+
+JC303_VERSION="0.12.3"
+JC303_URL="https://github.com/midilab/jc303/releases/download/v${JC303_VERSION}/jc303-${JC303_VERSION}-linux_x64-plugins.zip"
+JC303_ARCHIVE="jc303-${JC303_VERSION}-linux_x64-plugins.zip"
+JC303_VST3="jc303.vst3"
+
+FIREFLY_VERSION="2.1.0"
+FIREFLY_URL="https://github.com/sjoerdvankreel/firefly-synth-2/releases/download/v${FIREFLY_VERSION}/FireflySynth2-linux-vst3-Release.zip"
+FIREFLY_ARCHIVE="FireflySynth2-linux-vst3-${FIREFLY_VERSION}.zip"
+FIREFLY_VST3="FireflySynth2.vst3"
+
+FIREFLY_FX_URL="https://github.com/sjoerdvankreel/firefly-synth-2/releases/download/v${FIREFLY_VERSION}/FireflySynth2FX-linux-vst3-Release.zip"
+FIREFLY_FX_ARCHIVE="FireflySynth2FX-linux-vst3-${FIREFLY_VERSION}.zip"
+FIREFLY_FX_VST3="FireflySynth2FX.vst3"
+
+# --- Effects ---
+
+DRAGONFLY_VERSION="3.2.10"
+DRAGONFLY_URL="https://github.com/michaelwillis/dragonfly-reverb/releases/download/${DRAGONFLY_VERSION}/dragonfly-reverb-${DRAGONFLY_VERSION}-linux-x86_64.tar.xz"
+DRAGONFLY_ARCHIVE="dragonfly-reverb-${DRAGONFLY_VERSION}-linux-x86_64.tar.xz"
+# Dragonfly ships 4 separate .vst3 bundles; we detect them dynamically.
+
+# -- Helpers -------------------------------------------------------------
 
 need() {
   if ! command -v "$1" &>/dev/null; then
@@ -61,10 +101,79 @@ find_vst3() {
   find "$search_dir" -maxdepth 4 -type d -name "$name" 2>/dev/null | head -1
 }
 
-# ── Per-plugin install functions ────────────────────────────────────────
+find_all_vst3() {
+  # Find all .vst3 bundles under a directory.
+  local search_dir="$1"
+  find "$search_dir" -maxdepth 4 -type d -name "*.vst3" 2>/dev/null
+}
+
+# Generic install: extract archive, locate .vst3, copy to VST_DIR.
+# Args: label archive_path tmp_dir expected_vst3_name extract_cmd...
+install_generic() {
+  local label="$1" archive="$2" tmp="$3" expected="$4"
+  shift 4
+  # remaining args = extract command
+
+  echo "  Extracting ..."
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  "$@"
+
+  local found
+  found=$(find_vst3 "$tmp" "$expected")
+  if [ -z "$found" ]; then
+    found=$(find "$tmp" -maxdepth 4 -type d -name "*.vst3" 2>/dev/null | head -1)
+  fi
+
+  if [ -z "$found" ]; then
+    echo "  Warning: could not locate .vst3 bundle in archive. Listing contents:"
+    ls -R "$tmp" | head -40
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  cp -a "$found" "$VST_DIR/"
+  local installed_name
+  installed_name=$(basename "$found")
+  echo "  Installed: $VST_DIR/$installed_name"
+  rm -rf "$tmp"
+}
+
+# Install all .vst3 bundles from an archive (for multi-plugin packs).
+install_all_vst3s() {
+  local tmp="$1"
+  shift
+  # remaining args = extract command
+
+  echo "  Extracting ..."
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  "$@"
+
+  local count=0
+  while IFS= read -r bundle; do
+    [ -z "$bundle" ] && continue
+    cp -a "$bundle" "$VST_DIR/"
+    local name
+    name=$(basename "$bundle")
+    echo "  Installed: $VST_DIR/$name"
+    count=$((count + 1))
+  done < <(find_all_vst3 "$tmp")
+
+  if [ "$count" -eq 0 ]; then
+    echo "  Warning: no .vst3 bundles found in archive."
+    ls -R "$tmp" | head -40
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  rm -rf "$tmp"
+}
+
+# -- Per-plugin install functions ----------------------------------------
 
 install_surge() {
-  echo "=== Surge XT ${SURGE_VERSION} (GPL-3.0) ==="
+  echo "=== Surge XT ${SURGE_VERSION} (GPL-3.0) - Hybrid synth ==="
 
   if [ -d "$VST_DIR/$SURGE_VST3" ]; then
     echo "  Already installed: $VST_DIR/$SURGE_VST3"
@@ -72,43 +181,16 @@ install_surge() {
   fi
 
   need curl; need tar
-
   local archive="$VST_DIR/.cache/$SURGE_ARCHIVE"
   local tmp="$VST_DIR/.cache/surge-tmp"
   mkdir -p "$VST_DIR/.cache"
   download "$SURGE_URL" "$archive"
-
-  echo "  Extracting ..."
-  rm -rf "$tmp"
-  mkdir -p "$tmp"
-  tar xzf "$archive" -C "$tmp"
-
-  local found
-  found=$(find_vst3 "$tmp" "$SURGE_VST3")
-  if [ -z "$found" ]; then
-    # Try alternate name patterns
-    found=$(find_vst3 "$tmp" "Surge_XT.vst3")
-  fi
-  if [ -z "$found" ]; then
-    found=$(find "$tmp" -maxdepth 4 -type d -name "*.vst3" 2>/dev/null | head -1)
-  fi
-
-  if [ -z "$found" ]; then
-    echo "  Warning: could not locate .vst3 bundle in archive. Listing contents:"
-    ls -R "$tmp" | head -40
-    rm -rf "$tmp"
-    return 1
-  fi
-
-  cp -a "$found" "$VST_DIR/"
-  local installed_name
-  installed_name=$(basename "$found")
-  echo "  Installed: $VST_DIR/$installed_name"
-  rm -rf "$tmp"
+  install_generic "Surge XT" "$archive" "$tmp" "$SURGE_VST3" \
+    tar xzf "$archive" -C "$tmp"
 }
 
 install_dexed() {
-  echo "=== Dexed ${DEXED_VERSION} (GPL-3.0) ==="
+  echo "=== Dexed ${DEXED_VERSION} (GPL-3.0) - DX7 FM synth ==="
 
   if [ -d "$VST_DIR/$DEXED_VST3" ]; then
     echo "  Already installed: $VST_DIR/$DEXED_VST3"
@@ -116,39 +198,16 @@ install_dexed() {
   fi
 
   need curl; need unzip
-
   local archive="$VST_DIR/.cache/$DEXED_ARCHIVE"
   local tmp="$VST_DIR/.cache/dexed-tmp"
   mkdir -p "$VST_DIR/.cache"
   download "$DEXED_URL" "$archive"
-
-  echo "  Extracting ..."
-  rm -rf "$tmp"
-  mkdir -p "$tmp"
-  unzip -qo "$archive" -d "$tmp"
-
-  local found
-  found=$(find_vst3 "$tmp" "$DEXED_VST3")
-  if [ -z "$found" ]; then
-    found=$(find "$tmp" -maxdepth 4 -type d -name "*.vst3" 2>/dev/null | head -1)
-  fi
-
-  if [ -z "$found" ]; then
-    echo "  Warning: could not locate .vst3 bundle in archive. Listing contents:"
-    ls -R "$tmp" | head -40
-    rm -rf "$tmp"
-    return 1
-  fi
-
-  cp -a "$found" "$VST_DIR/"
-  local installed_name
-  installed_name=$(basename "$found")
-  echo "  Installed: $VST_DIR/$installed_name"
-  rm -rf "$tmp"
+  install_generic "Dexed" "$archive" "$tmp" "$DEXED_VST3" \
+    unzip -qo "$archive" -d "$tmp"
 }
 
 install_odin() {
-  echo "=== Odin 2 ${ODIN_VERSION} (GPL-3.0) ==="
+  echo "=== Odin 2 ${ODIN_VERSION} (GPL-3.0) - Polyphonic synth ==="
 
   if [ -d "$VST_DIR/$ODIN_VST3" ]; then
     echo "  Already installed: $VST_DIR/$ODIN_VST3"
@@ -156,52 +215,166 @@ install_odin() {
   fi
 
   need curl; need unzip
-
   local archive="$VST_DIR/.cache/$ODIN_ARCHIVE"
   local tmp="$VST_DIR/.cache/odin-tmp"
   mkdir -p "$VST_DIR/.cache"
   download "$ODIN_URL" "$archive"
-
-  echo "  Extracting ..."
-  rm -rf "$tmp"
-  mkdir -p "$tmp"
-  unzip -qo "$archive" -d "$tmp"
-
-  local found
-  found=$(find_vst3 "$tmp" "$ODIN_VST3")
-  if [ -z "$found" ]; then
-    found=$(find "$tmp" -maxdepth 4 -type d -name "*.vst3" 2>/dev/null | head -1)
-  fi
-
-  if [ -z "$found" ]; then
-    echo "  Warning: could not locate .vst3 bundle in archive. Listing contents:"
-    ls -R "$tmp" | head -40
-    rm -rf "$tmp"
-    return 1
-  fi
-
-  cp -a "$found" "$VST_DIR/"
-  local installed_name
-  installed_name=$(basename "$found")
-  echo "  Installed: $VST_DIR/$installed_name"
-  rm -rf "$tmp"
+  install_generic "Odin 2" "$archive" "$tmp" "$ODIN_VST3" \
+    unzip -qo "$archive" -d "$tmp"
 }
 
-# ── Main ────────────────────────────────────────────────────────────────
+install_obxf() {
+  echo "=== OB-Xf Nightly (GPL-3.0) - Oberheim OB-X polysynth ==="
+
+  if [ -d "$VST_DIR/$OBXF_VST3" ]; then
+    echo "  Already installed: $VST_DIR/$OBXF_VST3"
+    return
+  fi
+
+  need curl; need unzip
+  local archive="$VST_DIR/.cache/$OBXF_ARCHIVE"
+  local tmp="$VST_DIR/.cache/obxf-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$OBXF_URL" "$archive"
+  install_generic "OB-Xf" "$archive" "$tmp" "$OBXF_VST3" \
+    unzip -qo "$archive" -d "$tmp"
+}
+
+install_geonkick() {
+  echo "=== Geonkick ${GEONKICK_VERSION} (GPL-3.0) - Percussion synth ==="
+
+  if [ -d "$VST_DIR/$GEONKICK_VST3" ]; then
+    echo "  Already installed: $VST_DIR/$GEONKICK_VST3"
+    return
+  fi
+
+  need curl; need unzip
+  local archive="$VST_DIR/.cache/$GEONKICK_ARCHIVE"
+  local tmp="$VST_DIR/.cache/geonkick-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$GEONKICK_URL" "$archive"
+  install_generic "Geonkick" "$archive" "$tmp" "$GEONKICK_VST3" \
+    unzip -qo "$archive" -d "$tmp"
+}
+
+install_jc303() {
+  echo "=== JC-303 ${JC303_VERSION} (GPL-3.0) - TB-303 acid bass ==="
+
+  if [ -d "$VST_DIR/$JC303_VST3" ]; then
+    echo "  Already installed: $VST_DIR/$JC303_VST3"
+    return
+  fi
+
+  need curl; need unzip
+  local archive="$VST_DIR/.cache/$JC303_ARCHIVE"
+  local tmp="$VST_DIR/.cache/jc303-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$JC303_URL" "$archive"
+  install_generic "JC-303" "$archive" "$tmp" "$JC303_VST3" \
+    unzip -qo "$archive" -d "$tmp"
+}
+
+install_firefly_synth() {
+  echo "=== Firefly Synth 2 ${FIREFLY_VERSION} (GPL-3.0) - Semi-modular synth ==="
+
+  if [ -d "$VST_DIR/$FIREFLY_VST3" ]; then
+    echo "  Already installed: $VST_DIR/$FIREFLY_VST3"
+    return
+  fi
+
+  need curl; need unzip
+  local archive="$VST_DIR/.cache/$FIREFLY_ARCHIVE"
+  local tmp="$VST_DIR/.cache/firefly-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$FIREFLY_URL" "$archive"
+  install_generic "Firefly Synth 2" "$archive" "$tmp" "$FIREFLY_VST3" \
+    unzip -qo "$archive" -d "$tmp"
+}
+
+install_firefly_fx() {
+  echo "=== Firefly Synth 2 FX ${FIREFLY_VERSION} (GPL-3.0) - FX plugin ==="
+
+  if [ -d "$VST_DIR/$FIREFLY_FX_VST3" ]; then
+    echo "  Already installed: $VST_DIR/$FIREFLY_FX_VST3"
+    return
+  fi
+
+  need curl; need unzip
+  local archive="$VST_DIR/.cache/$FIREFLY_FX_ARCHIVE"
+  local tmp="$VST_DIR/.cache/firefly-fx-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$FIREFLY_FX_URL" "$archive"
+  install_generic "Firefly Synth 2 FX" "$archive" "$tmp" "$FIREFLY_FX_VST3" \
+    unzip -qo "$archive" -d "$tmp"
+}
+
+install_firefly() {
+  install_firefly_synth
+  install_firefly_fx
+}
+
+install_dragonfly() {
+  echo "=== Dragonfly Reverb ${DRAGONFLY_VERSION} (GPL-3.0) - Reverb suite ==="
+
+  # Dragonfly ships 4 .vst3 bundles: Hall, Room, Plate, Early Reflections.
+  # Check if any are already present.
+  local existing
+  existing=$(find "$VST_DIR" -maxdepth 1 -type d -name "Dragonfly*Reverb.vst3" 2>/dev/null | head -1)
+  if [ -n "$existing" ]; then
+    echo "  Already installed (at least one Dragonfly reverb found)"
+    return
+  fi
+
+  need curl; need tar
+  local archive="$VST_DIR/.cache/$DRAGONFLY_ARCHIVE"
+  local tmp="$VST_DIR/.cache/dragonfly-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$DRAGONFLY_URL" "$archive"
+  install_all_vst3s "$tmp" \
+    tar xJf "$archive" -C "$tmp"
+}
+
+# -- Group helpers -------------------------------------------------------
+
+install_all_synths() {
+  install_dexed
+  install_surge
+  install_odin
+  install_obxf
+  install_geonkick
+  install_jc303
+  install_firefly_synth
+}
+
+install_all_effects() {
+  install_dragonfly
+  install_firefly_fx
+}
+
+install_all() {
+  install_all_synths
+  install_all_effects
+}
+
+# -- Main ----------------------------------------------------------------
 
 TARGETS="${1:-all}"
 
 case "$TARGETS" in
-  all)
-    install_dexed
-    install_surge
-    install_odin
-    ;;
-  dexed)    install_dexed  ;;
-  surge)    install_surge  ;;
-  odin)     install_odin   ;;
+  all)        install_all          ;;
+  synths)     install_all_synths   ;;
+  effects)    install_all_effects  ;;
+  dexed)      install_dexed        ;;
+  surge)      install_surge        ;;
+  odin)       install_odin         ;;
+  obxf)       install_obxf         ;;
+  geonkick)   install_geonkick     ;;
+  jc303)      install_jc303        ;;
+  firefly)    install_firefly      ;;
+  fireflyfx)  install_firefly_fx   ;;
+  dragonfly)  install_dragonfly    ;;
   *)
-    echo "Usage: $0 [all|dexed|surge|odin]" >&2
+    echo "Usage: $0 [all|synths|effects|dexed|surge|odin|obxf|geonkick|jc303|firefly|fireflyfx|dragonfly]" >&2
     exit 1
     ;;
 esac
@@ -209,3 +382,4 @@ esac
 echo ""
 echo "Done. VST3 plugins in: $VST_DIR/"
 echo "Use in vcpi:  load vst <slot> <PluginName>"
+echo "              load fx <PluginName> [slot|master]"

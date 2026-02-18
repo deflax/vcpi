@@ -196,6 +196,9 @@ Fetch bundled open-license VST3 plugins and load one:
 ./vst3/fetch-vsts
 ```
 
+Bundled plugins currently include Dexed, Surge XT, Odin 2, OB-Xf, Geonkick,
+JC-303, Firefly Synth 2 (+FX), and Dragonfly Reverb.
+
 ```text
 vcpi> load vst 1 Dexed
 vcpi> audio_start
