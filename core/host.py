@@ -278,6 +278,8 @@ class VcpiCore:
         slot_label = name or f"Cardinal:{patch_path.stem}"
 
         slot = self.load_instrument(slot_index, str(cardinal_vst_path), slot_label)
+        slot.source_type = "vcv"
+        slot.vcv_patch_path = str(patch_path)
         patch_result = self._apply_vcv_patch(slot.plugin, patch_path)
 
         logger.info(

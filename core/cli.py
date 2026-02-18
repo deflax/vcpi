@@ -375,7 +375,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             chs = ",".join(str(c + 1) for c in sorted(slot.midi_channels)) or "-"
             audible = (not slot.muted) and (not any_solo or slot.solo)
             aud_mark = " " if audible else "x"
-            self._print(f"  [{display_num}] {aud_mark} {slot.name:<20} ch={chs:<8} "
+            label = slot.display_label
+            self._print(f"  [{display_num}] {aud_mark} {label:<30} ch={chs:<8} "
                         f"gain={slot.gain:.2f}  {''.join(flags)}")
             for j, fx in enumerate(slot.effects):
                 self._print(f"        fx[{j + 1}] {Path(fx.path_to_plugin_file).stem}")
@@ -772,14 +773,6 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print(f"  Link  : {lk.bpm:.1f} BPM  ({lk.num_peers} peers)")
         else:
             self._print("  Link  : disabled")
-
-        gain_tokens = []
-        for i, slot in enumerate(self.host.engine.slots, start=1):
-            if slot is None:
-                gain_tokens.append(f"{i}:empty")
-            else:
-                gain_tokens.append(f"{i}:{slot.gain:.2f}")
-        self._print("  Slot gains: " + "  ".join(gain_tokens))
 
         self._print()
         self.do_slots("")

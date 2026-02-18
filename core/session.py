@@ -70,7 +70,7 @@ def snapshot(host: VcpiCore) -> dict:
                 "name": Path(fx.path_to_plugin_file).stem,
                 "params": _plugin_params(fx),
             })
-        slots_data.append({
+        slot_entry = {
             "kind": slot.source_type,
             "path": slot.path,
             "name": slot.name,
@@ -79,7 +79,10 @@ def snapshot(host: VcpiCore) -> dict:
             "solo": slot.solo,
             "params": _plugin_params(slot.plugin),
             "effects": effects_data,
-        })
+        }
+        if slot.source_type == "vcv" and slot.vcv_patch_path:
+            slot_entry["vcv_patch_path"] = slot.vcv_patch_path
+        slots_data.append(slot_entry)
 
     master_fx_data = []
     for fx in host.engine.master_effects:
@@ -170,10 +173,22 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
             continue
         slot_kind = slot_data.get("kind", "plugin")
         try:
-            if slot_kind == "wav":
-                slot = host.load_wav(idx, plugin_path, slot_data.get("name"))
-            else:
-                slot = host.load_instrument(idx, plugin_path, slot_data.get("name"))
+            match slot_kind:
+                case "wav":
+                    slot = host.load_wav(idx, plugin_path, slot_data.get("name"))
+                case "vcv":
+                    vcv_patch = slot_data.get("vcv_patch_path", "")
+                    if vcv_patch:
+                        slot, _, _ = host.load_vcv(
+                            idx, vcv_patch,
+                            cardinal_path=plugin_path,
+                            name=slot_data.get("name"),
+                        )
+                    else:
+                        slot = host.load_instrument(idx, plugin_path, slot_data.get("name"))
+                        slot.source_type = "vcv"
+                case _:
+                    slot = host.load_instrument(idx, plugin_path, slot_data.get("name"))
             slot.gain = slot_data.get("gain", 0.8)
             slot.muted = slot_data.get("muted", False)
             slot.solo = slot_data.get("solo", False)
