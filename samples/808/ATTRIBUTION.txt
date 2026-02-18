@@ -1,0 +1,17 @@
+TR-808 sample source attribution
+
+These samples were downloaded from:
+https://github.com/oramics/sampled/tree/master/DM/TR-808/samples
+
+Upstream project:
+https://oramics.github.io/sampled/
+
+Original instrument: Roland TR-808 Rhythm Composer (1980)
+
+License note:
+- The oramics/sampled project describes itself as a collection of sampled
+  instruments with public-domain or similar licenses:
+  https://oramics.github.io/sampled/
+- Each instrument can have its own terms.
+
+Please verify the source license terms for your intended redistribution.
