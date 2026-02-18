@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import cmd
 import inspect
+import os
 from pathlib import Path
 
 from core.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDDEVICE, sd
@@ -48,6 +49,7 @@ Type 'help' for available commands.
 Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 """
     prompt = "vcpi> "
+    LOAD_TYPES = ("vst", "wav", "vcv", "fx")
 
     def __init__(self, host: VcpiCore, stdout=None, owns_host: bool = True):
         super().__init__(stdout=stdout)
@@ -184,19 +186,253 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     # -- plugins -------------------------------------------------------------
 
+    def _load_usage(self) -> str:
+        return (
+            "load vst <slot 1-8> <path|vst_name> [name] | "
+            "load wav <slot 1-8> <pack> <sample> [name] | "
+            "load fx <path|vst_name> [slot 1-8|master] [name] | "
+            "load vcv <slot 1-8> <patch_name[.vcv]> [name]"
+        )
+
+    @staticmethod
+    def _repo_root() -> Path:
+        return Path(__file__).resolve().parent.parent
+
+    def _samples_root(self) -> Path:
+        cwd_samples = Path.cwd() / "samples"
+        if cwd_samples.exists() and cwd_samples.is_dir():
+            return cwd_samples
+        return self._repo_root() / "samples"
+
+    def _patches_root(self) -> Path:
+        patches_dir = self.host.patches_dir
+        if not patches_dir.is_absolute():
+            patches_dir = Path.cwd() / patches_dir
+        return patches_dir
+
+    def _vst_search_dirs(self) -> list[Path]:
+        env_tokens: list[str] = []
+        for key in ("VST3_PATH", "VST_PATH"):
+            raw = os.environ.get(key)
+            if raw:
+                env_tokens.extend(part for part in raw.split(os.pathsep) if part)
+
+        candidates = [
+            *env_tokens,
+            str(Path.cwd()),
+            str(self._repo_root()),
+            "~/.vst3",
+            "/usr/lib/vst3",
+            "/usr/local/lib/vst3",
+            "~/Library/Audio/Plug-Ins/VST3",
+            "/Library/Audio/Plug-Ins/VST3",
+        ]
+
+        found: list[Path] = []
+        seen: set[Path] = set()
+        for token in candidates:
+            path = Path(token).expanduser()
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if resolved.exists() and resolved.is_dir():
+                found.append(resolved)
+        return found
+
+    def _iter_vst_plugin_paths(self) -> list[Path]:
+        plugins: dict[str, Path] = {}
+        for base in self._vst_search_dirs():
+            try:
+                entries = list(base.iterdir())
+            except OSError:
+                continue
+            for entry in entries:
+                if entry.suffix.lower() != ".vst3":
+                    continue
+                plugins.setdefault(str(entry), entry)
+        return sorted(plugins.values(), key=lambda p: p.name.lower())
+
+    def _resolve_vst_token(self, token: str) -> str:
+        token = token.strip()
+        if not token:
+            raise ValueError("VST path/name is required")
+
+        path = Path(token).expanduser()
+        if path.exists():
+            return str(path)
+
+        if token.startswith(("/", "./", "../", "~")):
+            return str(path)
+
+        key = token.lower()
+        exact: list[Path] = []
+        prefix: list[Path] = []
+
+        for candidate in self._iter_vst_plugin_paths():
+            stem = candidate.stem.lower()
+            name = candidate.name.lower()
+
+            if key in {stem, name} or (not key.endswith(".vst3") and f"{key}.vst3" == name):
+                exact.append(candidate)
+                continue
+
+            if stem.startswith(key) or name.startswith(key):
+                prefix.append(candidate)
+
+        if len(exact) == 1:
+            return str(exact[0])
+        if len(exact) > 1:
+            preview = ", ".join(sorted({p.stem for p in exact})[:5])
+            raise ValueError(f"ambiguous VST name '{token}' (matches: {preview})")
+
+        if len(prefix) == 1:
+            return str(prefix[0])
+        if len(prefix) > 1:
+            preview = ", ".join(sorted({p.stem for p in prefix})[:5])
+            raise ValueError(f"ambiguous VST name '{token}' (matches: {preview})")
+
+        return token
+
+    @staticmethod
+    def _filter_prefix(values: list[str], prefix: str) -> list[str]:
+        wanted = prefix.lower()
+        return sorted(v for v in values if v.lower().startswith(wanted))
+
+    def _sample_pack_names(self) -> list[str]:
+        root = self._samples_root()
+        if not root.exists() or not root.is_dir():
+            return []
+        packs: list[str] = []
+        for entry in root.iterdir():
+            if entry.is_dir() and not entry.name.startswith("."):
+                packs.append(entry.name)
+        return sorted(packs)
+
+    def _sample_names(self, pack_name: str) -> list[str]:
+        pack = Path(pack_name.strip().strip("/"))
+        if pack.is_absolute() or ".." in pack.parts:
+            return []
+
+        pack_dir = self._samples_root() / pack
+        if not pack_dir.exists() or not pack_dir.is_dir():
+            return []
+
+        samples: list[str] = []
+        for wav in pack_dir.glob("*.wav"):
+            samples.append(wav.stem)
+        return sorted(samples)
+
+    def _vcv_patch_names(self) -> list[str]:
+        root = self._patches_root()
+        if not root.exists() or not root.is_dir():
+            return []
+
+        patches: list[str] = []
+        for patch_file in root.rglob("*.vcv"):
+            try:
+                rel = patch_file.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if rel.lower().endswith(".vcv"):
+                rel = rel[:-4]
+            patches.append(rel)
+        return sorted(patches)
+
+    def _vst_names(self) -> list[str]:
+        return sorted({path.stem for path in self._iter_vst_plugin_paths()})
+
+    def complete_load(self, text, line, begidx, endidx):
+        del endidx
+        prefix_tokens = line[:begidx].split()
+        if not prefix_tokens or prefix_tokens[0] != "load":
+            return []
+
+        arg_index = len(prefix_tokens) - 1
+        args_before = prefix_tokens[1:]
+
+        if arg_index == 0:
+            return self._filter_prefix(list(self.LOAD_TYPES), text)
+
+        if not args_before:
+            return []
+
+        mode = args_before[0]
+
+        if mode == "wav":
+            if arg_index == 1:
+                return self._filter_prefix([str(i) for i in range(1, NUM_SLOTS + 1)], text)
+            if arg_index == 2:
+                return self._filter_prefix(self._sample_pack_names(), text)
+            if arg_index == 3 and len(args_before) >= 3:
+                return self._filter_prefix(self._sample_names(args_before[2]), text)
+            return []
+
+        if mode == "vcv":
+            if arg_index == 1:
+                return self._filter_prefix([str(i) for i in range(1, NUM_SLOTS + 1)], text)
+            if arg_index == 2:
+                return self._filter_prefix(self._vcv_patch_names(), text)
+            return []
+
+        if mode == "vst":
+            if arg_index == 1:
+                return self._filter_prefix([str(i) for i in range(1, NUM_SLOTS + 1)], text)
+            if arg_index == 2:
+                return self._filter_prefix(self._vst_names(), text)
+            return []
+
+        if mode == "fx":
+            if arg_index == 1:
+                return self._filter_prefix(self._vst_names(), text)
+            if arg_index == 2:
+                targets = ["master", *[str(i) for i in range(1, NUM_SLOTS + 1)]]
+                return self._filter_prefix(targets, text)
+            return []
+
+        return []
+
     def do_load(self, arg):
-        """Load instrument/effect/VCV/WAV: load <slot 1-8> <path> [name] | load wav <slot 1-8> <pack> <sample> [name] | load fx <path> [slot 1-8|master] [name] | load vcv <slot 1-8> <patch_name[.vcv]> [name]"""
+        """Load instrument/effect/VCV/WAV: load vst <slot 1-8> <path|vst_name> [name] | load wav <slot 1-8> <pack> <sample> [name] | load fx <path|vst_name> [slot 1-8|master] [name] | load vcv <slot 1-8> <patch_name[.vcv]> [name]"""
         text = arg.strip()
         if not text:
-            self._print(
-                "Usage: load <slot 1-8> <path> [name] | "
-                "load wav <slot 1-8> <pack> <sample> [name] | "
-                "load fx <path> [slot 1-8|master] [name] | "
-                "load vcv <slot 1-8> <patch_name[.vcv]> [name]"
-            )
+            self._print(f"Usage: {self._load_usage()}")
             return
 
-        mode = text.split(maxsplit=1)[0]
+        mode = text.split(maxsplit=1)[0].lower()
+
+        if mode not in self.LOAD_TYPES:
+            if mode.isdigit():
+                self._print("Error: instrument loads now use 'load vst <slot 1-8> <path|vst_name> [name]'")
+            else:
+                self._print("Error: load type must be one of: vst, wav, vcv, fx")
+            self._print(f"Usage: {self._load_usage()}")
+            return
+
+        if mode == "vst":
+            parts = text.split(maxsplit=3)
+            if len(parts) < 3:
+                self._print("Usage: load vst <slot 1-8> <path|vst_name> [name]")
+                return
+            try:
+                idx = _slot_to_internal(int(parts[1]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+
+            path_token = parts[2]
+            name = parts[3] if len(parts) > 3 else None
+            try:
+                path = self._resolve_vst_token(path_token)
+                slot = self.host.load_instrument(idx, path, name)
+                self._print(f"  slot {parts[1]} = {slot.name}")
+                self._print(f"  vst      : {slot.path}")
+            except Exception as e:
+                self._print(f"Error: {e}")
+            return
 
         if mode == "vcv":
             parts = text.split(maxsplit=3)
@@ -278,13 +514,14 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         if mode == "fx":
             parts = text.split(maxsplit=3)
             if len(parts) < 2:
-                self._print("Usage: load fx <path> [slot 1-8|master] [name]")
+                self._print("Usage: load fx <path|vst_name> [slot 1-8|master] [name]")
                 return
-            path = parts[1]
+            path_token = parts[1]
             target = parts[2] if len(parts) > 2 else "master"
             name = parts[3] if len(parts) > 3 else None
             try:
                 slot_idx = None if target == "master" else _slot_to_internal(int(target))
+                path = self._resolve_vst_token(path_token)
             except ValueError as e:
                 self._print(f"Error: {e}")
                 return
@@ -293,23 +530,6 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             except Exception as e:
                 self._print(f"Error: {e}")
             return
-
-        parts = text.split(maxsplit=2)
-        if len(parts) < 2:
-            self._print("Usage: load <slot 1-8> <path> [name]")
-            return
-        try:
-            idx = _slot_to_internal(int(parts[0]))
-        except ValueError as e:
-            self._print(f"Error: {e}")
-            return
-        path = parts[1]
-        name = parts[2] if len(parts) > 2 else None
-        try:
-            slot = self.host.load_instrument(idx, path, name)
-            self._print(f"  slot {parts[0]} = {slot.name}")
-        except Exception as e:
-            self._print(f"Error: {e}")
 
     def do_unload(self, arg):
         """Unload instrument/effect: unload <slot 1-8> | unload fx <slot 1-8|master> <fx_index>"""

@@ -86,16 +86,21 @@ Server/client specific:
 ## Interactive Commands
 
 When connected with `./vcli` (or `python main.py cli`), press `Tab` to
-autocomplete command names.
+autocomplete command names. `load` also has context-aware argument completion:
+
+- `load` -> `vst`, `wav`, `vcv`, `fx`
+- `load wav` -> sample pack names and sample names
+- `load vcv` -> patch names from `patches/`
+- `load vst` / `load fx` -> detected VST names
 
 ### Plugin Commands
 
 | Command | Description |
 |---|---|
-| `load <slot> <path> [name]` | Load VST instrument into slot |
+| `load vst <slot> <path\|vst_name> [name]` | Load VST instrument into slot |
 | `load wav <slot> <pack> <sample> [name]` | Load `samples/<pack>/<sample>.wav` as one-shot sampler into slot |
 | `load vcv <slot> <patch_name> [name]` | Load Cardinal into explicit slot from `patches/<patch_name>.vcv` |
-| `load fx <path> [slot\|master] [name]` | Load effect into slot insert chain or master bus |
+| `load fx <path\|vst_name> [slot\|master] [name]` | Load effect into slot insert chain or master bus |
 | `unload <slot>` | Unload/clear instrument from slot |
 | `unload fx <slot\|master> <fx_index>` | Remove effect by index |
 | `slots` | Show slot status, routing, gain, and loaded FX |

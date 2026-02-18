@@ -192,7 +192,7 @@ Routing remains explicit via `route <ch> <slot>`.
 Load a synth and test note:
 
 ```text
-vcpi> load 1 /path/to/Synth.vst3 Lead
+vcpi> load vst 1 /path/to/Synth.vst3 Lead
 vcpi> audio_start
 vcpi> note 1 60 100 500
 ```
@@ -230,9 +230,9 @@ vcpi> load wav 5 synth-leads c4-mono-saw
 Typical multi-instrument setup with BSP + MIDI Mix:
 
 ```text
-vcpi> load 1 /path/to/Lead.vst3 Lead
-vcpi> load 2 /path/to/Bass.vst3 Bass
-vcpi> load 3 /path/to/Drums.vst3 Drums
+vcpi> load vst 1 /path/to/Lead.vst3 Lead
+vcpi> load vst 2 /path/to/Bass.vst3 Bass
+vcpi> load vst 3 /path/to/Drums.vst3 Drums
 
 vcpi> route 1 1
 vcpi> route 2 2
