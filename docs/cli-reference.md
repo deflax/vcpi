@@ -66,9 +66,8 @@ VST3 plugin search:
 
 - `load vst` and `load fx` search `vst3/` in the repo root first, then `~/.vst3`,
   `/usr/lib/vst3`, `/usr/local/lib/vst3`, and macOS standard paths.
-- Run `./vst3/fetch-vsts` to download bundled open-license plugins
-  (Dexed, Surge XT, Odin 2, OB-Xf, Geonkick, JC-303, Firefly Synth 2 + Firefly FX,
-  Dragonfly Reverb).
+- Run `./vst3/fetch-vsts-amd64` on x86_64/amd64 systems.
+- Run `./vst3/fetch-vsts-aarch64` on Raspberry Pi / Linux aarch64 systems.
 - Override with `VST3_PATH` or `VST_PATH` environment variables.
 
 Cardinal/VCV helpers:

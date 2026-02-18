@@ -3,57 +3,76 @@
 This directory holds open-license VST3 plugins for use with vcpi's
 `load vst` and `load fx` commands.
 
+## Architecture-specific fetch scripts
+
+- `fetch-vsts-amd64`: plugin downloads for Linux amd64/x86_64
+- `fetch-vsts-aarch64`: plugin downloads for Linux aarch64 (for example Raspberry Pi)
+
 ## Quick Start
 
 ```bash
-./vst3/fetch-vsts              # download all plugins
-./vst3/fetch-vsts synths       # download synths only
-./vst3/fetch-vsts effects      # download effects only
-./vst3/fetch-vsts dexed        # download only Dexed
-./vst3/fetch-vsts fireflyfx    # download only Firefly Synth 2 FX
+# Linux amd64/x86_64
+./vst3/fetch-vsts-amd64
+
+# Linux aarch64 (Raspberry Pi)
+./vst3/fetch-vsts-aarch64
 ```
 
-After fetching, load them by name:
+You can also target groups or individual plugins:
+
+```bash
+./vst3/fetch-vsts-amd64 synths
+./vst3/fetch-vsts-amd64 dragonfly
+./vst3/fetch-vsts-aarch64 effects
+./vst3/fetch-vsts-aarch64 surge
+```
+
+After fetching, load plugins by name:
 
 ```text
-vcpi> load vst 1 Dexed
-vcpi> load vst 2 Surge XT
-vcpi> load vst 3 Odin2
-vcpi> load vst 4 OB-Xf
-vcpi> load vst 5 jc303
+vcpi> load vst 1 Surge XT
+vcpi> load vst 2 OB-Xf
 vcpi> load fx DragonflyHallReverb master
 ```
 
-## Included Plugins
+## Plugin Catalog
 
-### Synths
+### amd64/x86_64 (`fetch-vsts-amd64`)
 
-| Plugin | Version | Type | License | Upstream |
-|---|---|---|---|---|
-| Dexed | 1.0.1 | DX7 FM synth | GPL-3.0 | https://github.com/asb2m10/dexed |
-| Surge XT | 1.3.4 | Hybrid synth + FX | GPL-3.0 | https://github.com/surge-synthesizer/surge |
-| Odin 2 | 2.4.1 | 24-voice polyphonic synth | GPL-3.0 | https://github.com/TheWaveWarden/odin2 |
-| OB-Xf | Nightly | Oberheim OB-X polysynth | GPL-3.0 | https://github.com/surge-synthesizer/OB-Xf |
-| Geonkick | 3.7.0 | Percussion synth | GPL-3.0 | https://github.com/quamplex/geonkick |
-| JC-303 | 0.12.3 | TB-303 acid bass | GPL-3.0 | https://github.com/midilab/jc303 |
-| Firefly Synth 2 | 2.1.0 | Semi-modular synth | GPL-3.0 | https://github.com/sjoerdvankreel/firefly-synth-2 |
+Synths:
 
-### Effects
+- Dexed
+- Surge XT
+- Odin 2
+- OB-Xf
+- Geonkick
+- JC-303
+- Firefly Synth 2
 
-| Plugin | Version | Type | License | Upstream |
-|---|---|---|---|---|
-| Dragonfly Reverb | 3.2.10 | Hall/Room/Plate/Early reverbs | GPL-3.0 | https://github.com/michaelwillis/dragonfly-reverb |
-| Firefly Synth 2 FX | 2.1.0 | FX processor | GPL-3.0 | https://github.com/sjoerdvankreel/firefly-synth-2 |
+Effects:
+
+- Dragonfly Reverb (Hall/Room/Plate/Early)
+- Firefly Synth 2 FX
+
+### aarch64 (`fetch-vsts-aarch64`)
+
+Synths:
+
+- Surge XT (OBS nightly package)
+- OB-Xf (OBS nightly package)
+
+Effects:
+
+- Dragonfly Reverb (GitHub arm64 release)
 
 ## How It Works
 
-- `fetch-vsts` downloads official Linux x86_64 release archives from GitHub,
-  extracts the `.vst3` bundles, and places them here.
+- Downloads and extractions are performed into `vst3/`.
 - Downloaded archives are cached in `vst3/.cache/` (gitignored).
-- The `.vst3` bundles themselves are gitignored -- run `fetch-vsts` after
-  cloning to populate them.
+- `.vst3` bundles are gitignored; run the fetch script after cloning.
 - vcpi's VST search path includes this directory automatically.
 
 ## Requirements
 
-`fetch-vsts` needs `curl`, `unzip`, and `tar` (standard on most Linux systems).
+- `fetch-vsts-amd64`: `curl`, `unzip`, `tar`
+- `fetch-vsts-aarch64`: `curl`, `gzip`, `ar`, `tar`

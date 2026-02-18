@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 #
-# fetch-vsts -- Download open-license VST3 plugins into the vst3/ directory.
+# fetch-vsts-amd64 -- Download amd64 open-license VST3 plugins into vst3/.
 #
 # Usage:
-#   ./vst3/fetch-vsts              # download all plugins
-#   ./vst3/fetch-vsts dexed        # download only Dexed
-#   ./vst3/fetch-vsts surge        # download only Surge XT
-#   ./vst3/fetch-vsts odin         # download only Odin 2
-#   ./vst3/fetch-vsts obxf         # download only OB-Xf
-#   ./vst3/fetch-vsts geonkick     # download only Geonkick
-#   ./vst3/fetch-vsts jc303        # download only JC-303
-#   ./vst3/fetch-vsts firefly      # download Firefly Synth 2 and Firefly FX
-#   ./vst3/fetch-vsts fireflyfx    # download only Firefly FX
-#   ./vst3/fetch-vsts dragonfly    # download only Dragonfly Reverb
-#   ./vst3/fetch-vsts synths       # download synths only
-#   ./vst3/fetch-vsts effects      # download effects only
+#   ./vst3/fetch-vsts-amd64              # download all plugins
+#   ./vst3/fetch-vsts-amd64 dexed        # download only Dexed
+#   ./vst3/fetch-vsts-amd64 surge        # download only Surge XT
+#   ./vst3/fetch-vsts-amd64 odin         # download only Odin 2
+#   ./vst3/fetch-vsts-amd64 obxf         # download only OB-Xf
+#   ./vst3/fetch-vsts-amd64 geonkick     # download only Geonkick
+#   ./vst3/fetch-vsts-amd64 jc303        # download only JC-303
+#   ./vst3/fetch-vsts-amd64 firefly      # download Firefly Synth 2 and Firefly FX
+#   ./vst3/fetch-vsts-amd64 fireflyfx    # download only Firefly FX
+#   ./vst3/fetch-vsts-amd64 dragonfly    # download only Dragonfly Reverb
+#   ./vst3/fetch-vsts-amd64 synths       # download synths only
+#   ./vst3/fetch-vsts-amd64 effects      # download effects only
 #
 # Downloaded .vst3 bundles land in vst3/ and are automatically found by
 # vcpi's "load vst" and "load fx" commands.

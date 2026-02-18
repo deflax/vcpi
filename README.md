@@ -48,7 +48,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
     host.py           # vcpi core orchestration
   controllers/        # Hardware controller modules (BSP, MIDI Mix)
   samples/            # Built-in WAV sample packs (for `load wav`); see samples/README.md
-  vst3/               # Open-license VST3 plugins (run vst3/fetch-vsts to download)
+  vst3/               # Open-license VST3 plugins (run arch-specific fetch scripts)
   docs/               # Extended documentation (CLI reference, etc.)
   main.py             # Top-level Python entry point
   vcsrv               # Server launcher (creates .venv on first run)
@@ -193,7 +193,9 @@ Routing remains explicit via `route <ch> <slot>`.
 Fetch bundled open-license VST3 plugins and load one:
 
 ```bash
-./vst3/fetch-vsts
+./vst3/fetch-vsts-amd64    # desktop/laptop Linux amd64
+# or
+./vst3/fetch-vsts-aarch64  # Raspberry Pi / Linux aarch64
 ```
 
 Bundled plugins currently include Dexed, Surge XT, Odin 2, OB-Xf, Geonkick,

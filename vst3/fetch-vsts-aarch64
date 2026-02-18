@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+#
+# fetch-vsts-aarch64 -- Download aarch64 open-license VST3 plugins into vst3/.
+#
+# Usage:
+#   ./vst3/fetch-vsts-aarch64            # download all available aarch64 plugins
+#   ./vst3/fetch-vsts-aarch64 synths     # download synths only
+#   ./vst3/fetch-vsts-aarch64 effects    # download effects only
+#   ./vst3/fetch-vsts-aarch64 surge      # download only Surge XT (aarch64)
+#   ./vst3/fetch-vsts-aarch64 obxf       # download only OB-Xf (aarch64)
+#   ./vst3/fetch-vsts-aarch64 dragonfly  # download only Dragonfly Reverb (aarch64)
+#
+# Notes:
+# - Not every plugin in fetch-vsts-amd64 has Linux aarch64 prebuilt binaries.
+# - This script installs only currently available aarch64 builds.
+#
+# Requirements: curl, gzip, ar, tar
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+VST_DIR="$SCRIPT_DIR"
+
+# -- Sources -------------------------------------------------------------
+
+OBS_BASE_URL="http://download.opensuse.org/repositories/home:/surge-synth-team/Raspbian_12"
+OBS_PACKAGES_GZ_URL="${OBS_BASE_URL}/Packages.gz"
+
+SURGE_OBS_PACKAGE="surge-xt-nightly-vst3"
+SURGE_VST3="Surge XT.vst3"
+
+OBXF_OBS_PACKAGE="ob-xf-nightly-vst3"
+OBXF_VST3="OB-Xf.vst3"
+
+DRAGONFLY_VERSION="3.2.10"
+DRAGONFLY_URL="https://github.com/michaelwillis/dragonfly-reverb/releases/download/${DRAGONFLY_VERSION}/dragonfly-reverb-${DRAGONFLY_VERSION}-linux-arm64.tar.xz"
+DRAGONFLY_ARCHIVE="dragonfly-reverb-${DRAGONFLY_VERSION}-linux-arm64.tar.xz"
+
+OBS_PACKAGES_GZ_CACHE="$VST_DIR/.cache/surge-team-raspbian12-Packages.gz"
+OBS_PACKAGES_TXT_CACHE="$VST_DIR/.cache/surge-team-raspbian12-Packages.txt"
+
+# -- Helpers -------------------------------------------------------------
+
+need() {
+  if ! command -v "$1" &>/dev/null; then
+    echo "Error: $1 is required but not found." >&2
+    exit 1
+  fi
+}
+
+download() {
+  local url="$1" dest="$2"
+  if [ -f "$dest" ]; then
+    echo "  (archive already cached: $dest)"
+    return
+  fi
+  echo "  Downloading $(basename "$dest") ..."
+  curl -fSL --progress-bar -o "$dest" "$url"
+}
+
+find_vst3() {
+  local search_dir="$1" name="$2"
+  find "$search_dir" -maxdepth 6 -type d -name "$name" 2>/dev/null | head -1
+}
+
+find_all_vst3() {
+  local search_dir="$1"
+  find "$search_dir" -maxdepth 6 -type d -name "*.vst3" 2>/dev/null
+}
+
+obs_refresh_index() {
+  mkdir -p "$VST_DIR/.cache"
+  echo "  Refreshing OBS package index ..."
+  curl -fSL --progress-bar -o "$OBS_PACKAGES_GZ_CACHE" "$OBS_PACKAGES_GZ_URL"
+  gzip -dc "$OBS_PACKAGES_GZ_CACHE" > "$OBS_PACKAGES_TXT_CACHE"
+}
+
+obs_find_arm64_filename() {
+  local package_name="$1"
+  local pkg=""
+  local arch=""
+  local filename=""
+  local line
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ -z "$line" ]; then
+      if [ "$pkg" = "$package_name" ] && [ "$arch" = "arm64" ] && [ -n "$filename" ]; then
+        printf '%s\n' "$filename"
+        return 0
+      fi
+      pkg=""
+      arch=""
+      filename=""
+      continue
+    fi
+
+    case "$line" in
+      "Package: "*)
+        pkg="${line#Package: }"
+        ;;
+      "Architecture: "*)
+        arch="${line#Architecture: }"
+        ;;
+      "Filename: "*)
+        filename="${line#Filename: }"
+        ;;
+    esac
+  done < "$OBS_PACKAGES_TXT_CACHE"
+
+  if [ "$pkg" = "$package_name" ] && [ "$arch" = "arm64" ] && [ -n "$filename" ]; then
+    printf '%s\n' "$filename"
+    return 0
+  fi
+
+  return 1
+}
+
+extract_deb_data() {
+  local deb_path="$1"
+  local out_dir="$2"
+  local data_member=""
+  local member
+
+  while IFS= read -r member; do
+    case "$member" in
+      data.tar.*)
+        data_member="$member"
+        break
+        ;;
+    esac
+  done < <(ar t "$deb_path")
+
+  if [ -z "$data_member" ]; then
+    echo "Error: could not find data.tar.* in $(basename "$deb_path")" >&2
+    return 1
+  fi
+
+  mkdir -p "$out_dir"
+  case "$data_member" in
+    *.xz)
+      ar p "$deb_path" "$data_member" | tar xJf - -C "$out_dir"
+      ;;
+    *.gz)
+      ar p "$deb_path" "$data_member" | tar xzf - -C "$out_dir"
+      ;;
+    *.bz2)
+      ar p "$deb_path" "$data_member" | tar xjf - -C "$out_dir"
+      ;;
+    *.zst)
+      if tar --help 2>/dev/null | grep -q -- '--zstd'; then
+        ar p "$deb_path" "$data_member" | tar --zstd -xf - -C "$out_dir"
+      else
+        echo "Error: data.tar.zst needs tar --zstd support" >&2
+        return 1
+      fi
+      ;;
+    *)
+      ar p "$deb_path" "$data_member" | tar xf - -C "$out_dir"
+      ;;
+  esac
+}
+
+install_obs_vst3() {
+  local package_name="$1"
+  local expected_vst3="$2"
+  local label="$3"
+  local tmp_name="$4"
+
+  echo "=== ${label} (aarch64) ==="
+
+  if [ -d "$VST_DIR/$expected_vst3" ]; then
+    echo "  Already installed: $VST_DIR/$expected_vst3"
+    return
+  fi
+
+  need curl
+  need gzip
+  need ar
+  need tar
+
+  obs_refresh_index
+
+  local rel_path
+  rel_path=$(obs_find_arm64_filename "$package_name" || true)
+  if [ -z "$rel_path" ]; then
+    echo "Error: could not find arm64 package '${package_name}' in OBS index" >&2
+    return 1
+  fi
+
+  local url="${OBS_BASE_URL}/${rel_path}"
+  local archive="$VST_DIR/.cache/$(basename "$rel_path")"
+  local tmp="$VST_DIR/.cache/${tmp_name}"
+
+  download "$url" "$archive"
+
+  echo "  Extracting ..."
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  extract_deb_data "$archive" "$tmp"
+
+  local found
+  found=$(find_vst3 "$tmp" "$expected_vst3")
+  if [ -z "$found" ]; then
+    found=$(find "$tmp" -maxdepth 6 -type d -name "*.vst3" 2>/dev/null | head -1)
+  fi
+
+  if [ -z "$found" ]; then
+    echo "  Warning: could not locate .vst3 bundle in package"
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  cp -a "$found" "$VST_DIR/"
+  echo "  Installed: $VST_DIR/$(basename "$found")"
+  rm -rf "$tmp"
+}
+
+install_dragonfly() {
+  echo "=== Dragonfly Reverb ${DRAGONFLY_VERSION} (aarch64) ==="
+
+  local existing
+  existing=$(find "$VST_DIR" -maxdepth 1 -type d -name "Dragonfly*Reverb.vst3" 2>/dev/null | head -1)
+  if [ -n "$existing" ]; then
+    echo "  Already installed (at least one Dragonfly reverb found)"
+    return
+  fi
+
+  need curl
+  need tar
+
+  local archive="$VST_DIR/.cache/$DRAGONFLY_ARCHIVE"
+  local tmp="$VST_DIR/.cache/dragonfly-arm64-tmp"
+  mkdir -p "$VST_DIR/.cache"
+  download "$DRAGONFLY_URL" "$archive"
+
+  echo "  Extracting ..."
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  tar xJf "$archive" -C "$tmp"
+
+  local count=0
+  local bundle
+  while IFS= read -r bundle; do
+    [ -z "$bundle" ] && continue
+    cp -a "$bundle" "$VST_DIR/"
+    echo "  Installed: $VST_DIR/$(basename "$bundle")"
+    count=$((count + 1))
+  done < <(find_all_vst3 "$tmp")
+
+  rm -rf "$tmp"
+
+  if [ "$count" -eq 0 ]; then
+    echo "Error: no Dragonfly .vst3 bundles found in archive" >&2
+    return 1
+  fi
+}
+
+# -- Targets -------------------------------------------------------------
+
+install_surge() {
+  install_obs_vst3 "$SURGE_OBS_PACKAGE" "$SURGE_VST3" "Surge XT nightly from OBS" "surge-arm64-tmp"
+}
+
+install_obxf() {
+  install_obs_vst3 "$OBXF_OBS_PACKAGE" "$OBXF_VST3" "OB-Xf nightly from OBS" "obxf-arm64-tmp"
+}
+
+install_all_synths() {
+  install_surge
+  install_obxf
+}
+
+install_all_effects() {
+  install_dragonfly
+}
+
+install_all() {
+  install_all_synths
+  install_all_effects
+}
+
+# -- Main ----------------------------------------------------------------
+
+TARGETS="${1:-all}"
+
+case "$TARGETS" in
+  all)        install_all          ;;
+  synths)     install_all_synths   ;;
+  effects)    install_all_effects  ;;
+  surge)      install_surge        ;;
+  obxf)       install_obxf         ;;
+  dragonfly)  install_dragonfly    ;;
+  *)
+    echo "Usage: $0 [all|synths|effects|surge|obxf|dragonfly]" >&2
+    exit 1
+    ;;
+esac
+
+echo ""
+echo "Done. VST3 plugins in: $VST_DIR/"
+echo "Use in vcpi:  load vst <slot> <PluginName>"
+echo "              load fx <PluginName> [slot|master]"
