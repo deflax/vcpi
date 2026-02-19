@@ -16,6 +16,7 @@ class WavSamplerPlugin:
     """Minimal sampler with plugin-like API used by the audio engine."""
 
     is_instrument = True
+    info_type = "Sample"
     parameters: dict[str, object] = {}
 
     def __init__(

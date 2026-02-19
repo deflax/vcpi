@@ -39,8 +39,7 @@ def render_plugin_info(plugin, label: str = "") -> str:
     identifier = _safe_attr(plugin, "identifier")
     latency = _safe_attr(plugin, "reported_latency_samples", "0")
 
-    is_instrument = getattr(plugin, "is_instrument", False)
-    plugin_type = "Instrument" if is_instrument else "Effect"
+    plugin_type = _safe_attr(plugin, "info_type", "Unknown")
 
     path = _safe_attr(plugin, "path_to_plugin_file",
                       _safe_attr(plugin, "path", ""))

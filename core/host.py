@@ -190,6 +190,14 @@ class VcpiCore:
 
     # -- plugin management ---------------------------------------------------
 
+    @staticmethod
+    def _set_plugin_info_type(plugin: object, plugin_type: str) -> None:
+        """Tag plugin instance so info panels can show a precise type."""
+        try:
+            setattr(plugin, "info_type", plugin_type)
+        except Exception:
+            logger.debug("failed setting info_type=%s", plugin_type, exc_info=True)
+
     def _resolve_cardinal_path(self, cardinal_path: Optional[str]) -> Path:
         """Resolve Cardinal VST3 path from arg, env, or common defaults."""
         candidates: list[Path] = []
@@ -335,6 +343,7 @@ class VcpiCore:
         plugin = deps.load_plugin(path, reset=False)
         if not plugin.is_instrument:
             raise ValueError(f"{path} is not an instrument")
+        self._set_plugin_info_type(plugin, "Instrument")
         slot = InstrumentSlot(
             name=name or Path(path).stem,
             path=path,
@@ -368,6 +377,7 @@ class VcpiCore:
             target_sample_rate=self.sample_rate,
             output_channels=self.engine.output_channels,
         )
+        self._set_plugin_info_type(plugin, "Sample")
 
         slot = InstrumentSlot(
             name=name or Path(resolved).stem,
@@ -402,6 +412,7 @@ class VcpiCore:
         if deps.load_plugin is None:
             raise RuntimeError("pedalboard loader unavailable")
         plugin = deps.load_plugin(path, reset=False)
+        self._set_plugin_info_type(plugin, "Effect")
         label = name or Path(path).stem
         if slot_index is not None:
             slot = self.engine.slots[slot_index]
