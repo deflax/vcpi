@@ -202,7 +202,7 @@ class AudioEngine:
             if slot.effects and HAS_PEDALBOARD:
                 if not hasattr(slot, '_effects_board') or slot._effects_board is None:
                     slot._effects_board = Pedalboard(slot.effects)
-                rendered = slot._effects_board(rendered, self.sample_rate)
+                rendered = slot._effects_board(rendered, self.sample_rate, reset=False)
 
             # rendered: (channels, frames) -> transpose for mixing
             rt = rendered.T  # (frames, channels)
@@ -218,7 +218,7 @@ class AudioEngine:
             if not hasattr(self, '_master_board') or self._master_board is None:
                 self._master_board = Pedalboard(self.master_effects)
             mt = mixed.T.copy()
-            mt = self._master_board(mt, self.sample_rate)
+            mt = self._master_board(mt, self.sample_rate, reset=False)
             mixed = mt.T
 
         mixed *= self.master_gain
