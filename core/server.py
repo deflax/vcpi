@@ -187,11 +187,6 @@ class VcpiServer:
         requests a disconnect (quit/exit/EOF). The boolean indicates
         whether daemon shutdown was requested.
         """
-        logger.info("cli %s > %s", client_id, line)
-        stripped = line.strip()
-        head = stripped.split(maxsplit=1)[0].lower() if stripped else ""
-        is_help = head == "help"
-
         with self._lock:
             buf = io.StringIO()
 
@@ -214,16 +209,6 @@ class VcpiServer:
         if stop:
             logger.info("cli %s -> disconnect", client_id)
             return None, False
-
-        text = output.rstrip("\n")
-        if text:
-            if is_help:
-                logger.debug("cli %s -> [help output omitted]", client_id)
-            else:
-                for out_line in text.splitlines():
-                    logger.debug("cli %s -> %s", client_id, out_line)
-        else:
-            logger.debug("cli %s -> (no output)", client_id)
 
         return output, False
 
