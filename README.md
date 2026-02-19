@@ -309,8 +309,10 @@ cd rpi-build
 sudo ./prepare-image.sh <raspios-image-url>
 ```
 
-## License Notes
+## License
 
-vcpi relies on libraries with different licenses, including GPL components
-(`pedalboard`, `aalink`). If you distribute bundled binaries, review dependency
-licenses carefully.
+vcpi is licensed under the GNU General Public License v3.0 (GPL-3.0).
+See the [LICENSE](LICENSE) file for the full text.
+
+Several Python dependencies (`pedalboard`, `aalink`) and all bundled VST3
+plugins are also GPL-3.0 licensed.
