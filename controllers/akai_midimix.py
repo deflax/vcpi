@@ -63,7 +63,12 @@ class MidiMixController:
             self._param_cache.clear()
 
     def _build_param_cache(self, slot_index: int) -> list[tuple[str, tuple[float, float]]]:
-        """Build and cache param name + range list for a slot (called once, off RT thread)."""
+        """Build and cache param name + range list for a slot.
+
+        Only caches the result when we successfully read the parameters.
+        A transient failure (e.g. C++ thread-safety issue) returns an
+        empty list *without* caching so the next CC retries.
+        """
         slot = self._engine.slots[slot_index]
         if slot is None or slot.plugin is None:
             return []
@@ -76,7 +81,8 @@ class MidiMixController:
                 except Exception:
                     entries.append((name, (0.0, 1.0)))
         except Exception:
-            pass
+            logger.debug("slot %d param cache build failed (transient)", slot_index + 1)
+            return []  # don't cache — let next CC retry
         self._param_cache[slot_index] = entries
         return entries
 

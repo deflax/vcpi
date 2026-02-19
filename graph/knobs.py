@@ -67,14 +67,14 @@ def _format_value(plugin, pname: str, params: dict) -> tuple[str, str, str]:
 
     if not display:
         if val is not None:
-            if isinstance(val, float):
-                display = f"{val:.4g}"
-            else:
+            try:
+                display = f"{float(val):.4g}" if isinstance(val, (int, float)) else str(val)
+            except (TypeError, ValueError):
                 display = str(val)
         else:
             display = "???"
 
-    return display, units, type_hint
+    return str(display), str(units), type_hint
 
 
 def render_knobs(plugin, label: str = "") -> str:
@@ -124,8 +124,11 @@ def render_knobs(plugin, label: str = "") -> str:
 
         # Range text
         rng = getattr(param_obj, "range", None)
-        if rng and len(rng) >= 2:
-            range_text = f"{rng[0]:.4g} .. {rng[1]:.4g}"
+        if rng and len(rng) >= 2 and rng[0] is not None and rng[1] is not None:
+            try:
+                range_text = f"{float(rng[0]):.4g} .. {float(rng[1]):.4g}"
+            except (TypeError, ValueError):
+                range_text = f"{rng[0]} .. {rng[1]}"
         else:
             range_text = ""
 
