@@ -332,7 +332,7 @@ class VcpiCore:
             raise RuntimeError("pedalboard loader unavailable")
         if not 0 <= slot_index < NUM_SLOTS:
             raise ValueError(f"slot must be 1-{NUM_SLOTS}")
-        plugin = deps.load_plugin(path)
+        plugin = deps.load_plugin(path, reset=False)
         if not plugin.is_instrument:
             raise ValueError(f"{path} is not an instrument")
         slot = InstrumentSlot(
@@ -401,7 +401,7 @@ class VcpiCore:
             raise RuntimeError("pedalboard not installed")
         if deps.load_plugin is None:
             raise RuntimeError("pedalboard loader unavailable")
-        plugin = deps.load_plugin(path)
+        plugin = deps.load_plugin(path, reset=False)
         label = name or Path(path).stem
         if slot_index is not None:
             slot = self.engine.slots[slot_index]

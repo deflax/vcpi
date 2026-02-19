@@ -38,9 +38,12 @@ FALLBACK_COMMANDS = (
     "audio_devices",
     "deps",
     "exit",
+    "flow",
     "gain",
     "graph",
     "help",
+    "info",
+    "knobs",
     "link",
     "load",
     "master",
@@ -185,6 +188,28 @@ def _vst_names() -> list[str]:
     return sorted(names)
 
 
+def _complete_slot_fx_args(text: str, prefix_tokens: list[str]) -> list[str]:
+    """Tab completion for info/knobs: <slot 1-8> [fx] | master."""
+    arg_index = len(prefix_tokens) - 1
+    slots = [str(i) for i in range(1, 9)]
+
+    if arg_index == 0:
+        return _filter_prefix(["master", *slots], text)
+
+    args = prefix_tokens[1:]
+    if not args:
+        return []
+
+    if args[0] == "master":
+        return []
+
+    # <slot> [fx]
+    if arg_index == 1:
+        return _filter_prefix(["fx"], text)
+
+    return []
+
+
 def _complete_load_args(text: str, prefix_tokens: list[str]) -> list[str]:
     arg_index = len(prefix_tokens) - 1
     args_before = prefix_tokens[1:]
@@ -315,6 +340,8 @@ def _configure_tab_completion(command_names: list[str]):
             matches = _filter_prefix(names, text)
         elif prefix_tokens[0] == "load":
             matches = _complete_load_args(text, prefix_tokens)
+        elif prefix_tokens[0] in ("info", "knobs"):
+            matches = _complete_slot_fx_args(text, prefix_tokens)
         else:
             return None
 

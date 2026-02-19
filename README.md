@@ -47,6 +47,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
   core/               # Main package
     host.py           # vcpi core orchestration
   controllers/        # Hardware controller modules (generic MIDI input, MIDI Mix)
+  graph/              # ASCII visualization renderers (route graph, signal flow, plugin info, knobs)
   samples/            # Built-in WAV sample packs (for `load wav`); see samples/README.md
   vst3/               # Open-license VST3 plugins (run arch-specific fetch scripts)
   docs/               # Extended documentation (CLI reference, etc.)
@@ -96,9 +97,12 @@ midi_ports_out
 midi_mix_out <index>
 route <ch> <slot>
 graph
+flow
 audio_start
 link 120
 status
+info 1
+knobs 1
 ```
 
 ### Finding MIDI port indexes
@@ -264,6 +268,12 @@ vcpi> load fx DragonflyRoomReverb 1 Reverb
 vcpi> audio_start
 vcpi> link 120
 vcpi> status
+
+vcpi> flow              # signal flow: all slots, FX chains, master bus
+vcpi> info 1            # plugin metadata: vendor, category, version, etc.
+vcpi> info 1 fx 1       # info for slot 1's first effect
+vcpi> knobs 1           # ASCII slider view of all parameters
+vcpi> knobs master 1    # knobs for first master effect
 ```
 
 Headless server + remote CLI:

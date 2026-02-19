@@ -16,6 +16,9 @@ from core.host import VcpiCore
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import NUM_SLOTS
 from graph.routes import render_route_graph
+from graph.signal_flow import render_signal_flow
+from graph.plugin_info import render_plugin_info
+from graph.knobs import render_knobs
 
 
 def _slot_to_internal(user_slot: int) -> int:
@@ -396,6 +399,53 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             return []
 
         return []
+
+    def _complete_slot_fx(self, text, prefix_tokens):
+        """Shared completion for info/knobs: <slot 1-8> [fx <index>] | master [index]."""
+        arg_index = len(prefix_tokens) - 1
+
+        if arg_index == 0:
+            targets = ["master", *[str(i) for i in range(1, NUM_SLOTS + 1)]]
+            return self._filter_prefix(targets, text)
+
+        args = prefix_tokens[1:]
+        if not args:
+            return []
+
+        if args[0] == "master":
+            # master <fx_index>
+            if arg_index == 1:
+                n = len(self.host.engine.master_effects)
+                return self._filter_prefix([str(i) for i in range(1, n + 1)], text)
+            return []
+
+        # <slot> [fx <fx_index>]
+        if arg_index == 1:
+            return self._filter_prefix(["fx"], text)
+        if arg_index == 2 and len(args) >= 2 and args[1] == "fx":
+            try:
+                idx = _slot_to_internal(int(args[0]))
+                slot = self.host.engine.slots[idx]
+                if slot and slot.effects:
+                    n = len(slot.effects)
+                    return self._filter_prefix([str(i) for i in range(1, n + 1)], text)
+            except (ValueError, IndexError):
+                pass
+        return []
+
+    def complete_info(self, text, line, begidx, endidx):
+        del endidx
+        prefix_tokens = line[:begidx].split()
+        if not prefix_tokens or prefix_tokens[0] != "info":
+            return []
+        return self._complete_slot_fx(text, prefix_tokens)
+
+    def complete_knobs(self, text, line, begidx, endidx):
+        del endidx
+        prefix_tokens = line[:begidx].split()
+        if not prefix_tokens or prefix_tokens[0] != "knobs":
+            return []
+        return self._complete_slot_fx(text, prefix_tokens)
 
     def do_load(self, arg):
         """Load instrument/effect/VCV/WAV: load vst <slot 1-8> <path|vst_name> [name] | load wav <slot 1-8> <pack> <sample> [name] | load fx <path|vst_name> [slot 1-8|master] [name] | load vcv <slot 1-8> <patch_name[.vcv]> [name]"""
@@ -825,6 +875,119 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print("Usage: graph")
             return
         self._print(render_route_graph(self.host))
+
+    def do_flow(self, arg):
+        """Show full signal-flow diagram: flow"""
+        if arg.strip():
+            self._print("Usage: flow")
+            return
+        self._print(render_signal_flow(self.host.engine, self.host.channel_map))
+
+    def do_info(self, arg):
+        """Show plugin info: info <slot 1-8> | info <slot 1-8> fx <fx_index> | info master <fx_index>"""
+        parts = arg.strip().split()
+        if not parts:
+            self._print("Usage: info <slot 1-8> | info <slot 1-8> fx <fx_index> | info master <fx_index>")
+            return
+
+        if parts[0] == "master":
+            if not self.host.engine.master_effects:
+                self._print("  No master effects loaded")
+                return
+            try:
+                fx_idx = int(parts[1]) - 1 if len(parts) > 1 else 0
+            except ValueError:
+                self._print("Error: fx_index must be a positive integer")
+                return
+            if not 0 <= fx_idx < len(self.host.engine.master_effects):
+                self._print("Error: fx_index out of range")
+                return
+            plugin = self.host.engine.master_effects[fx_idx]
+            label = f"Master FX {fx_idx + 1}"
+        else:
+            try:
+                idx = _slot_to_internal(int(parts[0]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+            slot = self.host.engine.slots[idx]
+            if slot is None:
+                self._print(f"  Slot {parts[0]} is empty")
+                return
+
+            # info <slot> fx <fx_index>  -- show info for a slot effect
+            if len(parts) >= 2 and parts[1] == "fx":
+                if not slot.effects:
+                    self._print(f"  Slot {parts[0]} has no effects")
+                    return
+                try:
+                    fx_idx = int(parts[2]) - 1 if len(parts) > 2 else 0
+                except ValueError:
+                    self._print("Error: fx_index must be a positive integer")
+                    return
+                if not 0 <= fx_idx < len(slot.effects):
+                    self._print("Error: fx_index out of range")
+                    return
+                plugin = slot.effects[fx_idx]
+                label = f"Slot {parts[0]} FX {fx_idx + 1}"
+            else:
+                plugin = slot.plugin
+                label = f"Slot {parts[0]}: {slot.name}"
+
+        self._print(render_plugin_info(plugin, label))
+
+    def do_knobs(self, arg):
+        """Show parameter knobs: knobs <slot 1-8> | knobs <slot 1-8> fx <fx_index> | knobs master [fx_index]"""
+        parts = arg.strip().split()
+        if not parts:
+            self._print("Usage: knobs <slot 1-8> | knobs <slot 1-8> fx <fx_index> | knobs master [fx_index]")
+            return
+
+        if parts[0] == "master":
+            if not self.host.engine.master_effects:
+                self._print("  No master effects loaded")
+                return
+            try:
+                fx_idx = int(parts[1]) - 1 if len(parts) > 1 else 0
+            except ValueError:
+                self._print("Error: fx_index must be a positive integer")
+                return
+            if not 0 <= fx_idx < len(self.host.engine.master_effects):
+                self._print("Error: fx_index out of range")
+                return
+            plugin = self.host.engine.master_effects[fx_idx]
+            label = f"Master FX {fx_idx + 1}"
+        else:
+            try:
+                idx = _slot_to_internal(int(parts[0]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+            slot = self.host.engine.slots[idx]
+            if slot is None:
+                self._print(f"  Slot {parts[0]} is empty")
+                return
+
+            # knobs <slot> fx <fx_index>  -- show knobs for a slot effect
+            if len(parts) >= 2 and parts[1] == "fx":
+                if not slot.effects:
+                    self._print(f"  Slot {parts[0]} has no effects")
+                    return
+                try:
+                    fx_idx = int(parts[2]) - 1 if len(parts) > 2 else 0
+                except ValueError:
+                    self._print("Error: fx_index must be a positive integer")
+                    return
+                if not 0 <= fx_idx < len(slot.effects):
+                    self._print("Error: fx_index out of range")
+                    return
+                plugin = slot.effects[fx_idx]
+                label = f"Slot {parts[0]} FX {fx_idx + 1}"
+            else:
+                plugin = slot.plugin
+                label = f"Slot {parts[0]}: {slot.name}"
+
+        self._print(render_knobs(plugin, label))
 
     # -- audio ---------------------------------------------------------------
 

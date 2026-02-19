@@ -105,6 +105,7 @@ autocomplete command names. `load` also has context-aware argument completion:
 - `load wav` -> sample pack names and sample names
 - `load vcv` -> patch names from `patches/`
 - `load vst` / `load fx` -> detected VST names
+- `info` / `knobs` -> slot numbers, `master`, `fx`
 
 ### Plugin Commands
 
@@ -121,6 +122,12 @@ autocomplete command names. `load` also has context-aware argument completion:
 | `params master <fx_index>` | Show master FX parameters (defaults to first if omitted) |
 | `set <slot> <name> <value>` | Set instrument parameter |
 | `set master <fx_index> <name> <value>` | Set master FX parameter |
+| `info <slot>` | Show plugin metadata (vendor, category, version, latency, param count) |
+| `info <slot> fx <fx_index>` | Show metadata for a slot effect |
+| `info master [fx_index]` | Show metadata for a master bus effect |
+| `knobs <slot>` | Show ASCII parameter sliders with values, units, and ranges |
+| `knobs <slot> fx <fx_index>` | Show parameter sliders for a slot effect |
+| `knobs master [fx_index]` | Show parameter sliders for a master bus effect |
 
 ### Mixer Commands
 
@@ -139,6 +146,7 @@ autocomplete command names. `load` also has context-aware argument completion:
 | `unroute <ch>` | Remove MIDI channel route |
 | `routing` | Show active channel routes |
 | `graph` | Show ASCII route graph |
+| `flow` | Show full signal-flow diagram (all slots, FX chains, master bus) |
 
 ### Audio Commands
 
@@ -224,6 +232,84 @@ Saved/restored session state now also includes selected connection targets for:
 - MIDI Mix input/output (`midi_mix`, `midi_mix_out`)
 
 On startup restore, vcpi attempts to reconnect these targets automatically.
+
+### Visualization Commands
+
+The `flow`, `info`, and `knobs` commands render ASCII diagrams using metadata
+exposed by the pedalboard VST3 host library.
+
+**`flow`** shows the full signal chain across all 8 slots:
+
+```text
+vcpi> flow
++------------------------------------------------+
+|                vcpi Signal Flow                |
++------------------------------------------------+
+|   [ S1] ch01,ch02    -> Dexed -> DragonflyHall |
+|          gain [########--] 0.75                |
+|   [S2] (empty)                                 |
+|   [xS3] ch05         -> Surge -> TAL-Dub       |
+|          gain [########--] 0.75 M              |
+|   ...                                          |
+|   Master FX: Limiter                           |
+|   Master   : [########--] 0.85                 |
++------------------------------------------------+
+```
+
+- `x` prefix on the slot number means the slot is inaudible (muted, or
+  another slot is soloed).
+- `M` / `S` flags indicate mute and solo state.
+
+**`info`** shows plugin metadata:
+
+```text
+vcpi> info 1
++-----------------------------------------------+
+|                 Slot 1: Dexed                 |
+|                                               |
+| Name          : Dexed                         |
+| Vendor        : Digital Suburban              |
+| Category      : Instrument|Synth              |
+| Version       : 0.9.6                         |
+| Type          : Instrument                    |
+| Path          : /home/pi/vcpi/vst3/Dexed.vst3 |
+| Latency       : 0 samples                     |
+|                                               |
+| Parameters    : 24                            |
+|   automatable : 24                            |
+|   boolean     : 2                             |
+|   discrete    : 5                             |
++-----------------------------------------------+
+```
+
+**`knobs`** shows every parameter as an ASCII slider bar:
+
+```text
+vcpi> knobs 1
++--------------------------------------------------------------+
+|                        Slot 1: Dexed                         |
++--------------------------------------------------------------+
+|   cutoff_hz  [#-------------------]  880.0 Hz  (20 .. 2e+04) |
+|   resonance  [######--------------]  0.3       (0 .. 1)      |
+|   attack_ms  [--------------------]  50.0 ms   (0 .. 5000)   |
++--------------------------------------------------------------+
+```
+
+- Float parameters show a slider bar, value with units, and the valid range.
+- Boolean parameters show an on/off slider.
+- Enum/string parameters show the current value and available options.
+
+All three commands support slot instruments, per-slot effects, and master bus
+effects using the same targeting syntax:
+
+```text
+info 1            # slot 1 instrument
+info 1 fx 1       # slot 1, first effect
+info master 1     # first master bus effect
+knobs 1           # slot 1 instrument
+knobs 1 fx 2      # slot 1, second effect
+knobs master      # first master bus effect (index defaults to 1)
+```
 
 ### Status and Exit
 
