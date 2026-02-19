@@ -1,7 +1,7 @@
 """Unix socket server for vcpi.
 
 Runs VcpiCore headless and accepts CLI connections over a Unix domain socket.
-Each connected client gets its own HostCLI session sharing the same core
+Each connected client gets its own reader thread sharing the same core
 instance.  The protocol is line-oriented text:
 
   client -> server:  one command per line (UTF-8)
@@ -11,8 +11,10 @@ The sentinel is a NUL byte on its own line (``\\x00\\n``).  The client reads
 lines until it sees the sentinel, then prints everything before it and
 prompts for the next command.
 
-Multiple clients may connect simultaneously; a threading lock serialises
-command execution so the shared core state stays consistent.
+Command execution happens on the **main thread** so that native libraries
+(e.g. pedalboard/JUCE VST3 hosting) which require main-thread access work
+correctly.  Per-client reader threads enqueue commands and block until the
+main thread has executed them and posted the result.
 """
 
 from __future__ import annotations
@@ -20,11 +22,13 @@ from __future__ import annotations
 import io
 import logging
 import os
+import queue
 import signal
 import socket
 import sys
 import threading
 from pathlib import Path
+from typing import NamedTuple
 
 from core.host import VcpiCore
 from core.cli import HostCLI
@@ -37,22 +41,38 @@ END_OF_RESPONSE = "\x00"
 logger = logging.getLogger(__name__)
 
 
+class _CommandRequest(NamedTuple):
+    """A command submitted by a reader thread for main-thread execution."""
+    line: str
+    client_id: str
+    result: threading.Event
+    # Mutable container so the main thread can store the result.
+    # [0] = output (str | None), [1] = shutdown_requested (bool)
+    result_box: list
+
+
 class VcpiServer:
     """Headless VcpiCore daemon with a Unix socket control interface."""
 
     def __init__(self, host: VcpiCore, sock_path: Path = DEFAULT_SOCK_PATH):
         self.host = host
         self.sock_path = sock_path
-        self._lock = threading.Lock()
         self._shutdown_lock = threading.Lock()
         self._shutdown_done = False
         self._server_sock: socket.socket | None = None
         self._running = False
+        # Commands enqueued by reader threads, executed on the main thread.
+        self._cmd_queue: queue.Queue[_CommandRequest] = queue.Queue()
 
     # ------------------------------------------------------------------
 
     def start(self):
-        """Bind the Unix socket and accept connections in a loop."""
+        """Bind the Unix socket and accept connections in a loop.
+
+        The main thread alternates between accepting new connections and
+        executing queued commands so that all CLI work (including native
+        plugin loading) runs on the main thread.
+        """
         # Remove stale socket file
         if self.sock_path.exists():
             self.sock_path.unlink()
@@ -69,7 +89,7 @@ class VcpiServer:
         self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._server_sock.bind(str(self.sock_path))
         self._server_sock.listen(4)
-        self._server_sock.settimeout(1.0)
+        self._server_sock.settimeout(0.05)
 
         # Allow non-root users in the same group to connect
         os.chmod(str(self.sock_path), 0o770)
@@ -79,17 +99,36 @@ class VcpiServer:
 
         try:
             while self._running:
+                # 1. Accept new connections (non-blocking, short timeout)
                 try:
                     conn, _ = self._server_sock.accept()
+                    t = threading.Thread(target=self._handle_client,
+                                         args=(conn,), daemon=True)
+                    t.start()
                 except socket.timeout:
-                    continue
+                    pass
                 except OSError:
                     break
-                t = threading.Thread(target=self._handle_client, args=(conn,),
-                                     daemon=True)
-                t.start()
+
+                # 2. Drain command queue — execute on main thread
+                self._drain_commands()
         finally:
             self.stop()
+
+    def _drain_commands(self):
+        """Execute all pending commands on the main thread."""
+        while True:
+            try:
+                req = self._cmd_queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                output, shutdown = self._run_command(req.line, req.client_id)
+                req.result_box[:] = [output, shutdown]
+            except Exception as exc:
+                req.result_box[:] = [f"Error: {exc}\n", False]
+            finally:
+                req.result.set()
 
     def stop(self):
         """Shut down the server and clean up."""
@@ -126,8 +165,16 @@ class VcpiServer:
 
     # ------------------------------------------------------------------
 
+    def _submit_command(self, line: str, client_id: str) -> tuple[str | None, bool]:
+        """Enqueue a command for main-thread execution and block for the result."""
+        evt = threading.Event()
+        box: list = [None, False]
+        self._cmd_queue.put(_CommandRequest(line, client_id, evt, box))
+        evt.wait()
+        return box[0], box[1]
+
     def _handle_client(self, conn: socket.socket):
-        """Serve one connected CLI client."""
+        """Serve one connected CLI client (reader thread — I/O only)."""
         client_id = f"client-{id(conn):x}"
         logger.info("%s connected", client_id)
         try:
@@ -148,9 +195,8 @@ class VcpiServer:
                     wfile.flush()
                     continue
 
-                # Execute the command while holding the lock so concurrent
-                # clients don't trample each other.
-                output, shutdown_requested = self._run_command(line, client_id)
+                # Submit to main thread and wait for result
+                output, shutdown_requested = self._submit_command(line, client_id)
 
                 if output is None:
                     # quit / exit / EOF  -> close this client
@@ -186,19 +232,20 @@ class VcpiServer:
         Returns the captured output string, or ``None`` if the command
         requests a disconnect (quit/exit/EOF). The boolean indicates
         whether daemon shutdown was requested.
+
+        Must be called on the main thread.
         """
-        with self._lock:
-            buf = io.StringIO()
+        buf = io.StringIO()
 
-            # Build a throw-away HostCLI that prints into our buffer.
-            cli = HostCLI(self.host, stdout=buf, owns_host=False)
-            cli.use_rawinput = False
+        # Build a throw-away HostCLI that prints into our buffer.
+        cli = HostCLI(self.host, stdout=buf, owns_host=False)
+        cli.use_rawinput = False
 
-            # cmd.Cmd.onecmd() returns True when the command wants to exit.
-            stop = cli.onecmd(line)
+        # cmd.Cmd.onecmd() returns True when the command wants to exit.
+        stop = cli.onecmd(line)
 
-            output = buf.getvalue()
-            shutdown_requested = bool(getattr(cli, "_shutdown_requested", False))
+        output = buf.getvalue()
+        shutdown_requested = bool(getattr(cli, "_shutdown_requested", False))
 
         if shutdown_requested:
             logger.info("cli %s -> shutdown", client_id)
