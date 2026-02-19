@@ -143,9 +143,7 @@ autocomplete command names. `load` also has context-aware argument completion:
 |---|---|
 | `route <ch> <slot>` | Route MIDI channel to slot |
 | `unroute <ch>` | Remove MIDI channel route |
-| `routing` | Show active channel routes |
-| `graph` | Show ASCII route graph |
-| `flow` | Show full signal-flow diagram (all slots, FX chains, master bus) |
+| `mixer` | Show full signal-flow diagram (all slots, FX chains, master bus) |
 
 ### Audio Commands
 
@@ -234,13 +232,13 @@ On startup restore, vcpi attempts to reconnect these targets automatically.
 
 ### Visualization Commands
 
-The `flow`, `info`, and `knobs` commands render ASCII diagrams using metadata
+The `mixer`, `info`, and `knobs` commands render ASCII diagrams using metadata
 exposed by the pedalboard VST3 host library.
 
-**`flow`** shows the full signal chain across all 8 slots:
+**`mixer`** shows the full signal chain across all 8 slots:
 
 ```text
-vcpi> flow
+vcpi> mixer
 +------------------------------------------------+
 |                vcpi Signal Flow                |
 +------------------------------------------------+

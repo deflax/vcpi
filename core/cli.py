@@ -15,7 +15,6 @@ from core.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDD
 from core.host import VcpiCore
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import NUM_SLOTS
-from graph.routes import render_route_graph
 from graph.signal_flow import render_signal_flow
 from graph.plugin_info import render_plugin_info
 from graph.knobs import render_knobs
@@ -631,33 +630,6 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         except Exception as e:
             self._print(f"Error: {e}")
 
-    def _print_slots(self):
-        """Render the slot summary block (used by status)."""
-        any_solo = self.host.engine.any_solo()
-        for i, slot in enumerate(self.host.engine.slots):
-            display_num = i + 1
-            if slot is None:
-                self._print(f"  [{display_num}] (empty)")
-                continue
-            flags = []
-            if slot.muted:
-                flags.append("M")
-            if slot.solo:
-                flags.append("S")
-            chs = ",".join(str(c + 1) for c in sorted(slot.midi_channels)) or "-"
-            audible = (not slot.muted) and (not any_solo or slot.solo)
-            aud_mark = " " if audible else "x"
-            label = slot.display_label
-            self._print(f"  [{display_num}] {aud_mark} {label:<30} ch={chs:<8} "
-                        f"gain={slot.gain:.2f}  {''.join(flags)}")
-            for j, fx in enumerate(slot.effects):
-                self._print(f"        fx[{j + 1}] {Path(fx.path_to_plugin_file).stem}")
-        if self.host.engine.master_effects:
-            self._print("  master bus:")
-            for j, fx in enumerate(self.host.engine.master_effects):
-                self._print(f"    fx[{j + 1}] {Path(fx.path_to_plugin_file).stem}")
-        self._print(f"  master gain: {self.host.engine.master_gain:.2f}")
-
     def do_params(self, arg):
         """Show params: params <slot 1-8>  or  params master <fx_index>"""
         parts = arg.strip().split()
@@ -858,28 +830,10 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             return
         self.host.unroute(ch)
 
-    def do_routing(self, arg):
-        """Show MIDI routing."""
-        if not self.host.channel_map:
-            self._print("  No routes.")
-            return
-        for ch in sorted(self.host.channel_map):
-            idx = self.host.channel_map[ch]
-            slot = self.host.engine.slots[idx]
-            name = slot.name if slot else "(empty)"
-            self._print(f"  ch {ch + 1} -> slot {idx + 1} ({name})")
-
-    def do_graph(self, arg):
-        """Show ASCII route graph."""
+    def do_mixer(self, arg):
+        """Show full signal-flow diagram: mixer"""
         if arg.strip():
-            self._print("Usage: graph")
-            return
-        self._print(render_route_graph(self.host))
-
-    def do_flow(self, arg):
-        """Show full signal-flow diagram: flow"""
-        if arg.strip():
-            self._print("Usage: flow")
+            self._print("Usage: mixer")
             return
         self._print(render_signal_flow(self.host.engine, self.host.channel_map))
 
@@ -1180,7 +1134,6 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print("  Link  : disabled")
 
         self._print()
-        self._print_slots()
 
     def do_deps(self, arg):
         """Check dependencies."""

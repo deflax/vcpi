@@ -96,8 +96,7 @@ midi_mix <index>
 midi_ports_out
 midi_mix_out <index>
 route <ch> <slot>
-graph
-flow
+mixer
 audio_start
 link 120
 status
@@ -150,7 +149,6 @@ vcpi> route 1 1          # BSP ch 1 -> slot 1
 vcpi> route 2 2          # BSP ch 2 -> slot 2
 vcpi> route 10 3         # BSP ch 10 -> slot 3
 vcpi> route 5 1          # keyboard ch 5 -> slot 1
-vcpi> routing
 ```
 
 - There are no device-specific commands; every MIDI input is a peer.
@@ -269,7 +267,7 @@ vcpi> audio_start
 vcpi> link 120
 vcpi> status
 
-vcpi> flow              # signal flow: all slots, FX chains, master bus
+vcpi> mixer             # signal flow: all slots, FX chains, master bus
 vcpi> info 1            # plugin metadata: vendor, category, version, etc.
 vcpi> info 1 fx 1       # info for slot 1's first effect
 vcpi> knobs 1           # ASCII slider view of all parameters
