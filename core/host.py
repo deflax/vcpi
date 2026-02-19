@@ -609,7 +609,7 @@ class VcpiCore:
 
     def shutdown(self):
         self.save_session()
-        self.stop_audio()
+        self.engine.shutdown()  # stops audio stream + render thread pool
         for ctrl in self.midi_inputs:
             ctrl.close()
         self.midi_inputs.clear()

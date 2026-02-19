@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import collections
 import logging
+import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from core.deps import HAS_SOUNDDEVICE, HAS_PEDALBOARD, Pedalboard, sd, np
@@ -45,6 +47,16 @@ class AudioEngine:
         self._stream = None
         self._mixed_buf: Optional[np.ndarray] = None  # pre-allocated mix buffer
         self._master_board = None  # cached Pedalboard for master effects
+
+        # Persistent thread pool for parallel slot rendering.
+        # pedalboard releases the GIL during process(), so threads give
+        # real parallelism across CPU cores.
+        n_workers = min(os.cpu_count() or 2, NUM_SLOTS)
+        self._render_pool = ThreadPoolExecutor(
+            max_workers=n_workers,
+            thread_name_prefix="vcpi-render",
+        )
+        logger.info("[Audio] render pool: %d workers", n_workers)
 
         # Unified MIDI channel -> slot routing (shared by all controllers)
         self.channel_map: dict[int, int] = {}  # MIDI channel (0-15) -> slot index (0-7)
@@ -108,6 +120,57 @@ class AudioEngine:
     def any_solo(self) -> bool:
         return any(s.solo for s in self.slots if s is not None)
 
+    # -- per-slot rendering (called from worker threads) ----------------------
+
+    def _render_slot(self, idx: int, slot: InstrumentSlot,
+                     midi_msgs: list, frames: int) -> Optional[np.ndarray]:
+        """Render one slot and return (frames, channels) audio or None.
+
+        This runs on a pool worker thread.  pedalboard releases the GIL
+        during process(), so multiple slots render in true parallel.
+        """
+        try:
+            if isinstance(slot.plugin, WavSamplerPlugin):
+                for msg in midi_msgs:
+                    try:
+                        slot.plugin.send_midi(msg)
+                    except Exception:
+                        logger.debug("[Audio] send_midi error slot %d", idx,
+                                     exc_info=True)
+                silence = np.zeros((self.output_channels, frames),
+                                   dtype=np.float32)
+                rendered = slot.plugin.process(silence, self.sample_rate)
+            else:
+                duration = frames / self.sample_rate
+                for msg in midi_msgs:
+                    msg.time = 0
+                rendered = slot.plugin.process(
+                    midi_msgs,
+                    duration=duration,
+                    sample_rate=self.sample_rate,
+                    num_channels=self.output_channels,
+                    buffer_size=frames,
+                    reset=False,
+                )
+
+            # Per-slot insert effects
+            if slot.effects and HAS_PEDALBOARD:
+                if not hasattr(slot, '_effects_board') or slot._effects_board is None:
+                    slot._effects_board = Pedalboard(slot.effects)
+                rendered = slot._effects_board(rendered, self.sample_rate, reset=False)
+
+            # rendered: (channels, frames) -> transpose to (frames, channels)
+            rt = rendered.T
+            if rt.shape[1] == 1 and self.output_channels == 2:
+                rt = np.column_stack([rt, rt])
+            elif rt.shape[1] > self.output_channels:
+                rt = rt[:, :self.output_channels]
+            return rt
+
+        except Exception:
+            logger.debug("[Audio] render error slot %d", idx, exc_info=True)
+            return None
+
     # -- audio callback ------------------------------------------------------
 
     def _callback(self, outdata, frames: int, time_info, status):
@@ -151,72 +214,25 @@ class AudioEngine:
 
         has_solo = self.any_solo()
 
+        # -- Parallel slot rendering -----------------------------------------
+        # Dispatch active slots to the thread pool.  Each worker calls
+        # _render_slot() which does process() + insert FX.  pedalboard
+        # releases the GIL in C++, so slots render across CPU cores.
+        futures = []
         for idx, slot in enumerate(self.slots):
             if slot is None:
                 continue
-
-            # Determine audibility
-            if slot.muted:
-                audible = False
-            elif has_solo:
-                audible = slot.solo
-            else:
-                audible = True
-
-            # Deliver MIDI + render audio
-            midi_msgs = queues.get(idx, [])
-
-            if isinstance(slot.plugin, WavSamplerPlugin):
-                # WavSamplerPlugin: two-step send_midi + process
-                for msg in midi_msgs:
-                    try:
-                        slot.plugin.send_midi(msg)
-                    except Exception:
-                        logger.debug("[Audio] send_midi error slot %d", idx,
-                                     exc_info=True)
-                silence = np.zeros((self.output_channels, frames),
-                                   dtype=np.float32)
-                try:
-                    rendered = slot.plugin.process(silence, self.sample_rate)
-                except Exception:
-                    continue
-            else:
-                # pedalboard ExternalPlugin: pass MIDI list into process()
-                duration = frames / self.sample_rate
-                # Stamp all messages at time=0 (start of this block)
-                for msg in midi_msgs:
-                    msg.time = 0
-                try:
-                    rendered = slot.plugin.process(
-                        midi_msgs,
-                        duration=duration,
-                        sample_rate=self.sample_rate,
-                        num_channels=self.output_channels,
-                        buffer_size=frames,
-                        reset=False,
-                    )
-                except Exception:
-                    logger.debug("[Audio] VST3 process error slot %d", idx,
-                                 exc_info=True)
-                    continue
-
-            if not audible:
+            if slot.muted or (has_solo and not slot.solo):
                 continue
+            midi_msgs = queues.get(idx, [])
+            fut = self._render_pool.submit(
+                self._render_slot, idx, slot, midi_msgs, frames)
+            futures.append((idx, slot, fut))
 
-            # Per-slot insert effects
-            if slot.effects and HAS_PEDALBOARD:
-                if not hasattr(slot, '_effects_board') or slot._effects_board is None:
-                    slot._effects_board = Pedalboard(slot.effects)
-                rendered = slot._effects_board(rendered, self.sample_rate, reset=False)
-
-            # rendered: (channels, frames) -> transpose for mixing
-            rt = rendered.T  # (frames, channels)
-            if rt.shape[1] == 1 and self.output_channels == 2:
-                rt = np.column_stack([rt, rt])
-            elif rt.shape[1] > self.output_channels:
-                rt = rt[:, :self.output_channels]
-
-            mixed[:rt.shape[0]] += rt * slot.gain
+        for idx, slot, fut in futures:
+            rt = fut.result()  # blocks until this slot is done
+            if rt is not None:
+                mixed[:rt.shape[0]] += rt * slot.gain
 
         # Master effects
         if self.master_effects and HAS_PEDALBOARD:
@@ -257,6 +273,12 @@ class AudioEngine:
             self._stream.close()
             self._stream = None
             logger.info("[Audio] Stopped")
+
+    def shutdown(self):
+        """Stop audio and release the render thread pool."""
+        self.stop()
+        self._render_pool.shutdown(wait=False)
+        logger.info("[Audio] Render pool shut down")
 
     @property
     def running(self) -> bool:
