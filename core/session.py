@@ -287,7 +287,11 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
 
     midi_inputs = connections.get("midi_inputs")
     if isinstance(midi_inputs, list):
+        already_open = set(host.midi_input_names)
         for port_name in midi_inputs:
+            if port_name in already_open:
+                logger.debug("[Session] MIDI in '%s' already open, skipping", port_name)
+                continue
             _restore_port(f"MIDI in '{port_name}'", port_name, host.open_midi_input)
 
     _restore_port("MIDI mix in", connections.get("midi_mix_in"), host.open_mixer_midi)
