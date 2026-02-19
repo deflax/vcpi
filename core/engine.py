@@ -131,12 +131,17 @@ class AudioEngine:
                 break
             queues.setdefault(slot_idx, []).append(msg)
 
-        # Apply queued parameter changes (drain lock-free deque)
+        # Apply queued parameter changes (drain lock-free deque).
+        # Deduplicate: when a rotary floods CCs, only the final value per
+        # (slot, param) matters — avoids redundant C++ setattr calls.
+        pending_params: dict[tuple[int, str], float] = {}
         while self._param_queue:
             try:
                 slot_idx, param_name, value = self._param_queue.popleft()
             except IndexError:
                 break
+            pending_params[(slot_idx, param_name)] = value
+        for (slot_idx, param_name), value in pending_params.items():
             slot = self.slots[slot_idx]
             if slot is not None and slot.plugin is not None:
                 try:

@@ -52,14 +52,33 @@ class MidiMixController:
         self._in_port = MidiInPort()
         self._out_port = MidiOutPort()
         self._cc_to_fader, self._cc_to_knob = build_cc_lookups()
-        self._param_cache: dict[int, list[str]] = {}  # slot_index -> [param_names]
+        # slot_index -> [(param_name, (min, max)), ...]
+        self._param_cache: dict[int, list[tuple[str, tuple[float, float]]]] = {}
 
     def invalidate_param_cache(self, slot_index: Optional[int] = None):
-        """Clear cached parameter names. Call when instruments are loaded/removed."""
+        """Clear cached parameter names/ranges. Call when instruments are loaded/removed."""
         if slot_index is not None:
             self._param_cache.pop(slot_index, None)
         else:
             self._param_cache.clear()
+
+    def _build_param_cache(self, slot_index: int) -> list[tuple[str, tuple[float, float]]]:
+        """Build and cache param name + range list for a slot (called once, off RT thread)."""
+        slot = self._engine.slots[slot_index]
+        if slot is None or slot.plugin is None:
+            return []
+        entries: list[tuple[str, tuple[float, float]]] = []
+        try:
+            for name in slot.plugin.parameters:
+                try:
+                    r = slot.plugin.parameters[name].range
+                    entries.append((name, (float(r[0]), float(r[1]))))
+                except Exception:
+                    entries.append((name, (0.0, 1.0)))
+        except Exception:
+            pass
+        self._param_cache[slot_index] = entries
+        return entries
 
     @property
     def input_port_name(self) -> Optional[str]:
@@ -168,11 +187,10 @@ class MidiMixController:
             logger.debug("knob on slot %d ignored (empty slot)", slot_idx + 1)
             return
 
-        # Use cached parameter list to avoid rebuilding on every CC
+        # Use cached parameter names + ranges (no C++ access per CC)
         params = self._param_cache.get(slot_idx)
         if params is None:
-            params = list(slot.plugin.parameters.keys())
-            self._param_cache[slot_idx] = params
+            params = self._build_param_cache(slot_idx)
         if knob_idx >= len(params):
             logger.debug(
                 "slot %d knob %d ignored (no mapped param)",
@@ -181,18 +199,10 @@ class MidiMixController:
             )
             return
 
-        param_name = params[knob_idx]
-        try:
-            param_range = slot.plugin.parameters[param_name].range
-            mapped = param_range[0] + (value / 127.0) * (param_range[1] - param_range[0])
-            self._engine.enqueue_param_change(slot_idx, param_name, mapped)
-            logger.info("slot %d %s -> %s", slot_idx + 1, param_name, mapped)
-        except Exception:
-            try:
-                self._engine.enqueue_param_change(slot_idx, param_name, value / 127.0)
-                logger.info("slot %d %s -> %s", slot_idx + 1, param_name, value / 127.0)
-            except Exception:
-                logger.warning("slot %d %s update failed", slot_idx + 1, param_name)
+        param_name, (lo, hi) = params[knob_idx]
+        mapped = lo + (value / 127.0) * (hi - lo)
+        self._engine.enqueue_param_change(slot_idx, param_name, mapped)
+        logger.debug("slot %d %s -> %s", slot_idx + 1, param_name, mapped)
 
     def _handle_note(self, note: int):
         if note in MUTE_NOTES:
