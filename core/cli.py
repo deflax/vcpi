@@ -18,6 +18,7 @@ from core.models import NUM_SLOTS
 from graph.signal_flow import render_signal_flow
 from graph.plugin_info import render_plugin_info
 from graph.knobs import render_knobs
+from graph.status import render_status
 
 
 def _slot_to_internal(user_slot: int) -> int:
@@ -69,51 +70,6 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         """Print to self.stdout so output is captured in server mode."""
         kwargs.setdefault("file", self.stdout)
         print(*args, **kwargs)
-
-    def _audio_backend_label(self) -> str:
-        """Best-effort host-audio backend label (ALSA/JACK/Pulse/PipeWire/etc.)."""
-        if not HAS_SOUNDDEVICE:
-            return "sounddevice unavailable"
-
-        try:
-            device_index = None
-
-            stream = self.host.engine._stream
-            if stream is not None:
-                stream_device = getattr(stream, "device", None)
-                if isinstance(stream_device, (tuple, list)):
-                    if len(stream_device) >= 2 and isinstance(stream_device[1], int):
-                        device_index = stream_device[1]
-                    elif len(stream_device) == 1 and isinstance(stream_device[0], int):
-                        device_index = stream_device[0]
-                elif isinstance(stream_device, int):
-                    device_index = stream_device
-
-            if not isinstance(device_index, int):
-                default_device = sd.default.device
-                if isinstance(default_device, (tuple, list)):
-                    if len(default_device) >= 2 and isinstance(default_device[1], int):
-                        device_index = default_device[1]
-                    elif len(default_device) == 1 and isinstance(default_device[0], int):
-                        device_index = default_device[0]
-                elif isinstance(default_device, int):
-                    device_index = default_device
-
-            if not isinstance(device_index, int) or device_index < 0:
-                return "unknown"
-
-            device_info = sd.query_devices(device_index)
-            hostapi_index = device_info.get("hostapi")
-            if not isinstance(hostapi_index, int):
-                return "unknown"
-
-            hostapi_name = sd.query_hostapis(hostapi_index).get("name", "unknown")
-            device_name = device_info.get("name")
-            if device_name:
-                return f"{hostapi_name} ({device_name})"
-            return str(hostapi_name)
-        except Exception:
-            return "unknown"
 
     @staticmethod
     def _doc_summary(doc: str | None) -> str:
@@ -1114,26 +1070,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
     # -- status --------------------------------------------------------------
 
     def do_status(self, arg):
-        """Overall status."""
-        self._print("=== vcpi Status ===")
-        self._print(f"  Audio  : {'RUNNING' if self.host.engine.running else 'STOPPED'}"
-                    f"  (sr={self.host.sample_rate} buf={self.host.buffer_size})")
-        self._print(f"  Backend: {self._audio_backend_label()}")
-        if self.host.midi_inputs:
-            for i, ctrl in enumerate(self.host.midi_inputs):
-                self._print(f"  MIDI IN[{i + 1}]: {ctrl.port_name or ctrl.label}")
-        else:
-            self._print("  MIDI IN: (none)")
-        self._print(f"  MIDIMix IN : {self.host.mixer_midi_name or 'closed'}")
-        self._print(f"  MIDIMix OUT: {self.host.mixer_midi_out_name or 'closed'}")
-        self._print(f"  Session: {self.host.session_path}")
-        lk = self.host.link
-        if lk.enabled:
-            self._print(f"  Link  : {lk.bpm:.1f} BPM  ({lk.num_peers} peers)")
-        else:
-            self._print("  Link  : disabled")
-
-        self._print()
+        """Overall status: status"""
+        self._print(render_status(self.host))
 
     def do_deps(self, arg):
         """Check dependencies."""
