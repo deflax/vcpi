@@ -631,8 +631,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         except Exception as e:
             self._print(f"Error: {e}")
 
-    def do_slots(self, arg):
-        """Show all 8 instrument slots."""
+    def _print_slots(self):
+        """Render the slot summary block (used by status)."""
         any_solo = self.host.engine.any_solo()
         for i, slot in enumerate(self.host.engine.slots):
             display_num = i + 1
@@ -1180,7 +1180,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print("  Link  : disabled")
 
         self._print()
-        self.do_slots("")
+        self._print_slots()
 
     def do_deps(self, arg):
         """Check dependencies."""

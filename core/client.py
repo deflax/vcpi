@@ -63,7 +63,6 @@ FALLBACK_COMMANDS = (
     "save",
     "set",
     "shutdown",
-    "slots",
     "solo",
     "status",
     "tempo",

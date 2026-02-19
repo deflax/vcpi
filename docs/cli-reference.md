@@ -117,7 +117,6 @@ autocomplete command names. `load` also has context-aware argument completion:
 | `load fx <path\|vst_name> [slot\|master] [name]` | Load effect into slot insert chain or master bus |
 | `unload <slot>` | Unload/clear instrument from slot |
 | `unload fx <slot\|master> <fx_index>` | Remove effect by index |
-| `slots` | Show slot status, routing, gain, and loaded FX |
 | `params <slot>` | Show instrument parameters |
 | `params master <fx_index>` | Show master FX parameters (defaults to first if omitted) |
 | `set <slot> <name> <value>` | Set instrument parameter |
