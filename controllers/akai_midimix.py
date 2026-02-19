@@ -65,9 +65,10 @@ class MidiMixController:
     def _build_param_cache(self, slot_index: int) -> list[tuple[str, tuple[float, float]]]:
         """Build and cache param name + range list for a slot.
 
-        Only caches the result when we successfully read the parameters.
-        A transient failure (e.g. C++ thread-safety issue) returns an
-        empty list *without* caching so the next CC retries.
+        Only caches when we get valid-looking parameter data.  Returns
+        an empty list *without* caching on transient failures or when the
+        plugin reports degenerate ranges (e.g. during reload), so the
+        next CC retries.
         """
         slot = self._engine.slots[slot_index]
         if slot is None or slot.plugin is None:
@@ -77,11 +78,17 @@ class MidiMixController:
             for name in slot.plugin.parameters:
                 try:
                     r = slot.plugin.parameters[name].range
-                    entries.append((name, (float(r[0]), float(r[1]))))
+                    lo, hi = float(r[0]), float(r[1])
+                    entries.append((name, (lo, hi)))
                 except Exception:
                     entries.append((name, (0.0, 1.0)))
         except Exception:
             logger.debug("slot %d param cache build failed (transient)", slot_index + 1)
+            return []  # don't cache — let next CC retry
+        # Reject if all ranges are degenerate (lo==hi) — plugin likely
+        # still initialising after a reload.
+        if entries and all(lo == hi for _, (lo, hi) in entries):
+            logger.debug("slot %d param cache rejected (all ranges degenerate)", slot_index + 1)
             return []  # don't cache — let next CC retry
         self._param_cache[slot_index] = entries
         return entries
