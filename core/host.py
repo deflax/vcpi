@@ -412,6 +412,7 @@ class VcpiCore:
         if deps.load_plugin is None:
             raise RuntimeError("pedalboard loader unavailable")
         plugin = deps.load_plugin(path)
+        plugin._vcpi_path = path  # stash load path for session save
         self._set_plugin_info_type(plugin, "Effect")
         label = name or Path(path).stem
         if slot_index is not None:

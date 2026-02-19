@@ -35,6 +35,24 @@ logger = logging.getLogger(__name__)
 # Snapshot / restore helpers
 # ===========================================================================
 
+def _fx_path(plugin) -> str:
+    """Return the filesystem path for an effect plugin, with safe fallbacks.
+
+    pedalboard C++ plugin objects sometimes raise when accessing
+    ``path_to_plugin_file`` from a non-main thread (``'super' object
+    has no attribute ...``).  We first try the stashed ``_vcpi_path``
+    set at load time, then fall back to the native attribute.
+    """
+    for attr in ("_vcpi_path", "path_to_plugin_file", "path"):
+        try:
+            val = getattr(plugin, attr, None)
+            if val:
+                return str(val)
+        except Exception:
+            continue
+    return ""
+
+
 def _plugin_params(plugin) -> dict[str, float]:
     """Extract all parameter values from a pedalboard plugin."""
     params = {}
@@ -65,9 +83,10 @@ def snapshot(host: VcpiCore) -> dict:
             continue
         effects_data = []
         for fx in slot.effects:
+            fxp = _fx_path(fx)
             effects_data.append({
-                "path": fx.path_to_plugin_file,
-                "name": Path(fx.path_to_plugin_file).stem,
+                "path": fxp,
+                "name": Path(fxp).stem if fxp else "unknown",
                 "params": _plugin_params(fx),
             })
         slot_entry = {
@@ -86,9 +105,10 @@ def snapshot(host: VcpiCore) -> dict:
 
     master_fx_data = []
     for fx in host.engine.master_effects:
+        fxp = _fx_path(fx)
         master_fx_data.append({
-            "path": fx.path_to_plugin_file,
-            "name": Path(fx.path_to_plugin_file).stem,
+            "path": fxp,
+            "name": Path(fxp).stem if fxp else "unknown",
             "params": _plugin_params(fx),
         })
 
