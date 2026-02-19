@@ -352,6 +352,7 @@ class VcpiCore:
         )
         self.engine.slots[slot_index] = slot
         self.midimix.invalidate_param_cache(slot_index)
+        self.midimix._build_param_cache(slot_index)
         return slot
 
     def load_wav(self, slot_index: int, wav_path: str,
@@ -387,6 +388,7 @@ class VcpiCore:
         )
         self.engine.slots[slot_index] = slot
         self.midimix.invalidate_param_cache(slot_index)
+        self.midimix._build_param_cache(slot_index)
         logger.info("[WAV] slot %d loaded from %s", slot_index + 1, resolved)
         return slot
 

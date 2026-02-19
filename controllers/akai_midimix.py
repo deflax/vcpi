@@ -200,10 +200,12 @@ class MidiMixController:
             logger.debug("knob on slot %d ignored (empty slot)", slot_idx + 1)
             return
 
-        # Use cached parameter names + ranges (no C++ access per CC)
+        # Use cached parameter names + ranges (no C++ access on rtmidi thread).
+        # Cache is built eagerly at plugin load time on the main thread.
         params = self._param_cache.get(slot_idx)
-        if params is None:
-            params = self._build_param_cache(slot_idx)
+        if not params:
+            logger.debug("slot %d knob ignored (param cache not ready)", slot_idx + 1)
+            return
         if knob_idx >= len(params):
             logger.debug(
                 "slot %d knob %d ignored (no mapped param)",
