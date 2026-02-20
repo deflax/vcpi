@@ -335,14 +335,10 @@ class VcpiCore:
 
     # -- plugin warmup --------------------------------------------------------
 
-    def _warmup_plugin(self, plugin, num_blocks: int = 4) -> None:
-        """Render a few silent blocks so the plugin's first-render penalty
-        is absorbed here rather than in the real-time audio callback.
-
-        Many VST3 plugins perform lazy initialization (JIT, FFT plans,
-        internal caches) on their first process() call.  By doing it
-        before the plugin is assigned to a slot, we prevent the audio
-        callback from missing its deadline.
+    def _warmup_plugin(self, plugin, num_blocks: int = 2) -> None:
+        """Render a few silent blocks at the runtime sample rate / buffer
+        size so any remaining lazy init (FFT plans, JIT) is paid here
+        rather than inside the real-time audio callback.
         """
         if deps.np is None:
             return
@@ -386,14 +382,16 @@ class VcpiCore:
         logger.info("[INST] loading slot %d '%s' from %s …",
                     slot_index + 1, slot_name, path)
 
-        plugin = deps.load_plugin(path)
+        # Skip pedalboard's internal warmup (attemptToWarmUp) which can
+        # block for up to 10 s sending MIDI and pumping the JUCE message
+        # loop.  Our own lightweight _warmup_plugin() below primes the
+        # plugin at the actual runtime sample-rate / buffer-size instead.
+        plugin = deps.load_plugin(path, initialization_timeout=0)
         if not plugin.is_instrument:
             raise ValueError(f"{path} is not an instrument")
         self._set_plugin_info_type(plugin, "Instrument")
 
-        # Warmup: render silent blocks so the plugin's first-render
-        # penalty (JIT, FFT plans, internal caches) is paid here on
-        # the main thread rather than inside the real-time audio callback.
+        # Light warmup at the correct sr / buffer size.
         self._warmup_plugin(plugin)
 
         slot = InstrumentSlot(
@@ -472,7 +470,7 @@ class VcpiCore:
             raise RuntimeError("pedalboard not installed")
         if deps.load_plugin is None:
             raise RuntimeError("pedalboard loader unavailable")
-        plugin = deps.load_plugin(path)
+        plugin = deps.load_plugin(path, initialization_timeout=0)
         plugin._vcpi_path = path  # stash load path for session save
         self._set_plugin_info_type(plugin, "Effect")
         label = name or Path(path).stem
