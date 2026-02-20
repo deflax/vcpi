@@ -8,6 +8,8 @@ Before=NetworkManager-wait-online.service network-online.target
 Type=oneshot
 ExecStart=-/usr/sbin/rfkill unblock all
 ExecStart=-/usr/bin/nmcli radio wifi on
+ExecStart=-/sbin/iwconfig wlan0 power off
+ExecStart=-/usr/sbin/iw dev wlan0 set power_save off
 RemainAfterExit=yes
 
 [Install]
