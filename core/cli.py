@@ -807,10 +807,10 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             return
         self.host.unroute(ch)
 
-    def do_mixer(self, arg):
-        """Show full signal-flow diagram: mixer"""
+    def do_flow(self, arg):
+        """Show full signal-flow diagram: flow"""
         if arg.strip():
-            self._print("Usage: mixer")
+            self._print("Usage: flow")
             return
         self._print(render_signal_flow(self.host.engine, self.host.channel_map))
 
@@ -986,28 +986,20 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         except Exception as e:
             self._print(f"Error: {e}")
 
-    def do_midi_ins(self, arg):
-        """List open MIDI inputs."""
-        if not self.host.midi_inputs:
-            self._print("  No MIDI inputs open.")
-            return
-        for i, ctrl in enumerate(self.host.midi_inputs):
-            self._print(f"  [{i + 1}] {ctrl.port_name or ctrl.label}")
-
-    def do_midi_mix(self, arg):
-        """Open Akai MIDI Mix input: midi_mix <port_index>"""
+    def do_midimix_in(self, arg):
+        """Open Akai MIDI Mix input: midimix_in <port_index>"""
         if not arg.strip():
-            self._print("Usage: midi_mix <port_index>")
+            self._print("Usage: midimix_in <port_index>")
             return
         try:
             self.host.open_mixer_midi(int(arg.strip()))
         except Exception as e:
             self._print(f"Error: {e}")
 
-    def do_midi_mix_out(self, arg):
-        """Open Akai MIDI Mix output (LED feedback): midi_mix_out <port_index>"""
+    def do_midimix_out(self, arg):
+        """Open Akai MIDI Mix output (LED feedback): midimix_out <port_index>"""
         if not arg.strip():
-            self._print("Usage: midi_mix_out <port_index>")
+            self._print("Usage: midimix_out <port_index>")
             return
         try:
             self.host.open_mixer_midi_out(int(arg.strip()))
