@@ -148,7 +148,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         return (
             "load vst <slot 1-8> <path|vst_name> [name] | "
             "load wav <slot 1-8> <pack> <sample> [name] | "
-            "load fx <path|vst_name> [slot 1-8|master] [name] | "
+            "load fx [slot 1-8|master] <path|vst_name> [name] | "
             "load vcv <slot 1-8> <patch_name[.vcv]> [name]"
         )
 
@@ -347,10 +347,10 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
         if mode == "fx":
             if arg_index == 1:
-                return self._filter_prefix(self._vst_names(), text)
-            if arg_index == 2:
                 targets = ["master", *[str(i) for i in range(1, NUM_SLOTS + 1)]]
                 return self._filter_prefix(targets, text)
+            if arg_index == 2:
+                return self._filter_prefix(self._vst_names(), text)
             return []
 
         return []
@@ -403,7 +403,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         return self._complete_slot_fx(text, prefix_tokens)
 
     def do_load(self, arg):
-        """Load instrument/effect/VCV/WAV: load vst <slot 1-8> <path|vst_name> [name] | load wav <slot 1-8> <pack> <sample> [name] | load fx <path|vst_name> [slot 1-8|master] [name] | load vcv <slot 1-8> <patch_name[.vcv]> [name]"""
+        """Load instrument/effect/VCV/WAV: load vst <slot 1-8> <path|vst_name> [name] | load wav <slot 1-8> <pack> <sample> [name] | load fx <slot 1-8|master> <path|vst_name> [name] | load vcv <slot 1-8> <patch_name[.vcv]> [name]"""
         text = arg.strip()
         if not text:
             self._print(f"Usage: {self._load_usage()}")
@@ -520,11 +520,11 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
         if mode == "fx":
             parts = text.split(maxsplit=3)
-            if len(parts) < 2:
-                self._print("Usage: load fx <path|vst_name> [slot 1-8|master] [name]")
+            if len(parts) < 3:
+                self._print("Usage: load fx [slot 1-8|master] <path|vst_name> [name]")
                 return
-            path_token = parts[1]
-            target = parts[2] if len(parts) > 2 else "master"
+            target = parts[1]
+            path_token = parts[2]
             name = parts[3] if len(parts) > 3 else None
             try:
                 slot_idx = None if target == "master" else _slot_to_internal(int(target))
@@ -800,12 +800,17 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     def do_link_cut(self, arg):
         """Unlink MIDI channel: link_cut <ch 1-16>"""
+        token = arg.strip()
+        if not token:
+            self._print("Usage: link_cut <channel 1-16>")
+            return
         try:
-            ch = _ch_to_internal(int(arg.strip()))
+            ch = _ch_to_internal(int(token))
         except ValueError as e:
             self._print(f"Error: {e}")
             return
         self.host.unroute(ch)
+        self._print(f"  ch {token} unlinked")
 
     def do_flow(self, arg):
         """Show full signal-flow diagram: flow"""
