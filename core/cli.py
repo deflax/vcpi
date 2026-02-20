@@ -681,11 +681,42 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     # -- gain / mute / solo --------------------------------------------------
 
+    def complete_gain(self, text, line, begidx, endidx):
+        del endidx
+        prefix_tokens = line[:begidx].split()
+        if not prefix_tokens or prefix_tokens[0] != "gain":
+            return []
+        arg_index = len(prefix_tokens) - 1
+        if arg_index == 0:
+            targets = ["master", *[str(i) for i in range(1, NUM_SLOTS + 1)]]
+            return self._filter_prefix(targets, text)
+        return []
+
     def do_gain(self, arg):
-        """Set slot gain: gain <slot 1-8> <0.0-1.0>"""
+        """Set gain: gain <slot 1-8> <0.0-1.0> | gain master [0.0-1.0]"""
         parts = arg.strip().split()
+        if not parts:
+            self._print("Usage: gain <slot 1-8> <value> | gain master [value]")
+            return
+
+        if parts[0] == "master":
+            if len(parts) < 2:
+                self._print(f"  master gain = {self.host.engine.master_gain:.2f}")
+                return
+            try:
+                gain = float(parts[1])
+            except ValueError:
+                self._print("Error: gain must be a number")
+                return
+            if not 0.0 <= gain <= 1.0:
+                self._print("Error: gain must be between 0.0 and 1.0")
+                return
+            self.host.engine.master_gain = gain
+            self._print(f"  master gain = {self.host.engine.master_gain:.2f}")
+            return
+
         if len(parts) < 2:
-            self._print("Usage: gain <slot 1-8> <value>")
+            self._print("Usage: gain <slot 1-8> <value> | gain master [value]")
             return
         try:
             idx = _slot_to_internal(int(parts[0]))
@@ -749,16 +780,6 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         slot.solo = not slot.solo
         self.host.refresh_mixer_leds([idx])
         self._print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
-
-    def do_master(self, arg):
-        """Set master gain: master <0.0-1.0>"""
-        if not arg.strip():
-            self._print(f"  master gain = {self.host.engine.master_gain:.2f}")
-            return
-        try:
-            self.host.engine.master_gain = float(arg.strip())
-        except ValueError:
-            self._print("Error: master gain must be a number")
 
     # -- routing -------------------------------------------------------------
 
