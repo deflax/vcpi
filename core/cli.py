@@ -783,11 +783,11 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     # -- routing -------------------------------------------------------------
 
-    def do_route(self, arg):
-        """Route MIDI channel to slot: route <ch 1-16> <slot 1-8>"""
+    def do_link(self, arg):
+        """Link MIDI channel to slot: link <ch 1-16> <slot 1-8>"""
         parts = arg.strip().split()
         if len(parts) < 2:
-            self._print("Usage: route <channel 1-16> <slot 1-8>")
+            self._print("Usage: link <channel 1-16> <slot 1-8>")
             return
         try:
             ch = _ch_to_internal(int(parts[0]))
@@ -798,8 +798,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         self.host.route(ch, idx)
         self._print(f"  ch {parts[0]} -> slot {parts[1]}")
 
-    def do_unroute(self, arg):
-        """Unroute MIDI channel: unroute <ch 1-16>"""
+    def do_link_cut(self, arg):
+        """Unlink MIDI channel: link_cut <ch 1-16>"""
         try:
             ch = _ch_to_internal(int(arg.strip()))
         except ValueError as e:
@@ -1032,8 +1032,8 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     # -- link ----------------------------------------------------------------
 
-    def do_link(self, arg):
-        """Enable Link: link [bpm]"""
+    def do_ableton_link(self, arg):
+        """Enable Ableton Link: ableton_link [bpm]"""
         if arg.strip():
             try:
                 bpm = float(arg.strip())
@@ -1044,12 +1044,14 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             bpm = None
         try:
             self.host.start_link(bpm)
+            self._print(f"  Link enabled at {self.host.link.bpm:.1f} BPM")
         except Exception as e:
             self._print(f"Error: {e}")
 
-    def do_unlink(self, arg):
-        """Disable Link."""
+    def do_ableton_cut(self, arg):
+        """Disable Ableton Link: ableton_cut"""
         self.host.stop_link()
+        self._print("  Link disabled")
 
     def do_tempo(self, arg):
         """Get/set tempo: tempo [bpm]"""

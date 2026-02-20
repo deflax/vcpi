@@ -42,7 +42,8 @@ FALLBACK_COMMANDS = (
     "help",
     "info",
     "knobs",
-    "link",
+    "ableton_link",
+    "ableton_cut",
     "load",
     "midi_keys",
     "midi_ports_in",
@@ -56,7 +57,8 @@ FALLBACK_COMMANDS = (
     "params",
     "quit",
     "restore",
-    "route",
+    "link",
+    "link_cut",
     "save",
     "set",
     "shutdown",
@@ -64,8 +66,6 @@ FALLBACK_COMMANDS = (
     "status",
     "tempo",
     "unload",
-    "unlink",
-    "unroute",
 )
 
 LOAD_TYPES = ("vst", "wav", "vcv", "fx")
