@@ -1,4 +1,4 @@
-# vcpi CLI Reference
+# vcpi Usage Reference
 
 This reference covers command-line startup flags and interactive `vcpi>`
 commands.
@@ -78,7 +78,7 @@ VST3 plugin search and name resolution:
 Cardinal/VCV helpers:
 
 - `load vcv` looks for patch files in `patches/` by default.
-- `load vcv` does not auto-route channels; use `route <ch> <slot>` explicitly.
+- `load vcv` does not auto-route channels; use `link <ch> <slot>` explicitly.
 - Override patch directory with `VCPI_PATCHES_DIR`.
 - Override Cardinal plugin path with `CARDINAL_VST3_PATH`.
 
@@ -112,9 +112,9 @@ autocomplete command names. `load` also has context-aware argument completion:
 | Command | Description |
 |---|---|
 | `load vst <slot> <path\|vst_name> [name]` | Load VST instrument into slot |
-| `load wav <slot> <pack> <sample> [name]` | Load `samples/<pack>/<sample>.wav` as one-shot sampler into slot |
-| `load vcv <slot> <patch_name> [name]` | Load Cardinal into explicit slot from `patches/<patch_name>.vcv` |
-| `load fx <path\|vst_name> [slot\|master] [name]` | Load effect into slot insert chain or master bus |
+| `load wav <slot> <pack> <sample> [name]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into slot |
+| `load vcv <slot> <patch_name> [name]` | Load Cardinal into slot from `patches/<patch_name>.vcv` |
+| `load fx <slot\|master> <path\|vst_name> [name]` | Load effect into slot insert chain or master bus |
 | `unload <slot>` | Unload/clear instrument from slot |
 | `unload fx <slot\|master> <fx_index>` | Remove effect by index |
 | `params <slot>` | Show instrument parameters |
@@ -132,18 +132,18 @@ autocomplete command names. `load` also has context-aware argument completion:
 
 | Command | Description |
 |---|---|
-| `gain <slot> <value>` | Set slot gain |
+| `gain <slot> <value>` | Set slot gain (0.0-1.0) |
+| `gain master [value]` | Get or set master gain |
 | `mute <slot>` | Toggle slot mute |
 | `solo <slot>` | Toggle slot solo |
-| `master [value]` | Get or set master gain |
 
 ### Routing Commands
 
 | Command | Description |
 |---|---|
-| `route <ch> <slot>` | Route MIDI channel to slot |
-| `unroute <ch>` | Remove MIDI channel route |
-| `mixer` | Show full signal-flow diagram (all slots, FX chains, master bus) |
+| `link <ch> <slot>` | Route MIDI channel to slot |
+| `link_cut <ch>` | Remove MIDI channel route |
+| `flow` | Show full signal-flow diagram (all slots, FX chains, master bus) |
 
 ### Audio Commands
 
@@ -160,10 +160,9 @@ autocomplete command names. `load` also has context-aware argument completion:
 | `midi_ports_in` | List MIDI input ports |
 | `midi_ports_out` | List MIDI output ports |
 | `midi_in <port_index>` | Open any MIDI input port |
-| `midi_ins` | List open MIDI inputs |
 | `midi_in_close <index>` | Close a MIDI input by its position in the open list |
-| `midi_mix <port_index>` | Open Akai MIDI Mix input |
-| `midi_mix_out <port_index>` | Open Akai MIDI Mix output (LED feedback) |
+| `midimix_in <port_index>` | Open Akai MIDI Mix input |
+| `midimix_out <port_index>` | Open Akai MIDI Mix output (LED feedback) |
 | `note <slot> <note> [vel] [dur_ms]` | Send test note to slot |
 
 Index discovery:
@@ -179,19 +178,19 @@ vcpi> midi_ports_out
 ```
 
 Use the numeric value in `[]` from `midi_ports_in` with `midi_in`
-and `midi_mix`. Use indexes from `midi_ports_out` with `midi_mix_out`.
+and `midimix_in`. Use indexes from `midi_ports_out` with `midimix_out`.
 Indexes may change after reboot or replug.
 
 You can open multiple MIDI inputs simultaneously. All MIDI inputs share the
-same channel routing table (`route <ch> <slot>`).
+same channel routing table (`link <ch> <slot>`).
 
-Important: `route <ch> <slot>` only maps MIDI channels internally. It does
-not open hardware ports; `midi_in` and `midi_mix` do.
+Important: `link <ch> <slot>` only maps MIDI channels internally. It does
+not open hardware ports; `midi_in` and `midimix_in` do.
 
 WAV sampler behavior:
 
 - `load wav` plays the file when MIDI `note_on` events reach that slot.
-- `load wav 2 909 bassdrum` resolves to `samples/909/bassdrum.wav`.
+- `load wav 2 909 bassdrum` resolves to `sampler/samples/909/bassdrum.wav`.
 - Built-in packs: `808`, `909`, `piano`, `organ`, `strings`, `synth-pads`, `synth-leads`.
 - The `.wav` extension is optional in `<sample>`.
 - Notes are pitch-shifted around middle C (MIDI note 60).
@@ -207,12 +206,44 @@ vcpi> load wav 4 synth-pads c4-warm
 vcpi> load wav 5 synth-leads c4-mono-saw
 ```
 
-### Link Commands
+### Sequencer Commands
+
+vcpi has a built-in step sequencer with up to 16 sequence banks. Notes in
+a bank loop over one bar at the current tempo. Notes are evenly spaced:
+1 note plays once per bar, 4 notes play as quarter notes, etc.
 
 | Command | Description |
 |---|---|
-| `link [bpm]` | Enable Link (optionally set BPM) |
-| `unlink` | Disable Link |
+| `seq` | Show all sequence banks |
+| `seq <bank>` | Show a single bank |
+| `seq <bank> <note> [note ...]` | Set notes in a bank (e.g. `seq 1 d c b a`) |
+| `seq <bank> clear` | Clear a bank |
+| `seq link <bank> <slot>` | Attach sequence bank to a slot (starts playback) |
+| `seq detach <slot>` | Remove all sequence links from a slot |
+
+Note names are case-insensitive. Sharps (`C#`), flats (`Bb`), and octave
+suffixes (`C5`, `F#3`) are supported. Default octave is 4 (middle C).
+
+Examples:
+
+```text
+vcpi> seq 1 d c b a        # bank 1: D4 C4 B4 A4, plays as 4 quarter notes
+vcpi> seq 2 c              # bank 2: just C4, plays once per bar
+vcpi> seq 3 C#5 Bb4 G4     # bank 3: 3 notes per bar
+vcpi> seq link 1 5          # play bank 1 through slot 5
+vcpi> seq link 2 3          # play bank 2 through slot 3
+vcpi> seq detach 5          # stop sequence on slot 5
+vcpi> seq 1 clear           # remove bank 1
+```
+
+The sequencer follows the current BPM (set via `tempo` or Ableton Link).
+
+### Ableton Link Commands
+
+| Command | Description |
+|---|---|
+| `ableton_link [bpm]` | Enable Ableton Link (optionally set BPM) |
+| `ableton_cut` | Disable Ableton Link |
 | `tempo [bpm]` | Get or set current BPM |
 
 ### Session Commands
@@ -222,23 +253,27 @@ vcpi> load wav 5 synth-leads c4-mono-saw
 | `save [path]` | Save current session to JSON |
 | `restore [path]` | Restore session from JSON |
 
-Saved/restored session state now also includes selected connection targets for:
+Saved/restored session state includes:
 
-- audio output device
-- all open MIDI inputs (`midi_in`)
-- MIDI Mix input/output (`midi_mix`, `midi_mix_out`)
+- Per-slot instruments, effects, parameters, gain, mute/solo
+- Master effects and master gain
+- MIDI channel routing
+- BPM and Ableton Link state
+- Sequencer banks and links
+- Audio output device and MIDI connections
 
-On startup restore, vcpi attempts to reconnect these targets automatically.
+On startup restore, vcpi attempts to reconnect audio and MIDI targets
+automatically.
 
 ### Visualization Commands
 
-The `mixer`, `info`, and `knobs` commands render ASCII diagrams using metadata
+The `flow`, `info`, and `knobs` commands render ASCII diagrams using metadata
 exposed by the pedalboard VST3 host library.
 
-**`mixer`** shows the full signal chain across all 8 slots:
+**`flow`** shows the full signal chain across all 8 slots:
 
 ```text
-vcpi> mixer
+vcpi> flow
 +------------------------------------------------+
 |                vcpi Signal Flow                |
 +------------------------------------------------+
