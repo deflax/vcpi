@@ -18,6 +18,7 @@ from core.link import LinkSync
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import InstrumentSlot, NUM_SLOTS
 from core.sampler import WavSamplerPlugin
+from core.sequencer import Sequencer
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ class VcpiCore:
 
         self.midi_inputs: list[MidiInputController] = []
         self.midimix = MidiMixController(self.engine)
+        self.sequencer = Sequencer(self)
 
         # Remember the most recently selected/active audio output device name.
         self._audio_output_name: Optional[str] = None
@@ -668,6 +670,7 @@ class VcpiCore:
 
     def shutdown(self):
         self.save_session()
+        self.sequencer.stop()
         self.engine.shutdown()  # stops audio stream + render thread pool
         for ctrl in self.midi_inputs:
             ctrl.close()

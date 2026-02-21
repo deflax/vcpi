@@ -133,6 +133,7 @@ def snapshot(host: VcpiCore) -> dict:
         "slots": slots_data,
         "master_effects": master_fx_data,
         "connections": connections,
+        "sequences": host.sequencer.snapshot(),
     }
 
 
@@ -242,6 +243,11 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
             host.route(ch_internal, slot_internal)
         except Exception as e:
             errors.append(f"route ch {ch_str} -> slot {slot_num}: {e}")
+
+    # -- Sequences -----------------------------------------------------------
+    seq_data = data.get("sequences")
+    if isinstance(seq_data, list):
+        host.sequencer.restore(seq_data)
 
     # -- Device connections --------------------------------------------------
     connections = data.get("connections", {})

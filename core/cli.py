@@ -15,6 +15,7 @@ from core.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDD
 from core.host import VcpiCore
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import NUM_SLOTS
+from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
 from graph.signal_flow import render_signal_flow
 from graph.plugin_info import render_plugin_info
 from graph.knobs import render_knobs
@@ -1034,6 +1035,124 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         if not (0 <= v <= 127):
             self._print(f"Warning: velocity {v} clamped to {max(0, min(127, v))}")
         self.host.send_note(idx, n, v, d)
+
+    # -- sequencer -----------------------------------------------------------
+
+    def do_seq(self, arg):
+        """Sequencer: seq | seq <bank> <notes...> | seq link <bank> <slot> | seq detach <slot> | seq <bank> clear
+
+        Examples:
+          seq                  -- show all sequence banks
+          seq 1 d c b a        -- set bank 1 to D C B A (4 notes per bar)
+          seq 1 c              -- set bank 1 to just C (1 note per bar)
+          seq 3 C#5 Bb4        -- sharps/flats and octave suffixes work
+          seq 1 clear          -- clear bank 1
+          seq link 1 5         -- attach sequence bank 1 to slot 5
+          seq detach 5         -- remove sequences from slot 5
+        """
+        parts = arg.strip().split()
+
+        # No args: display all banks
+        if not parts:
+            seq = self.host.sequencer
+            any_bank = False
+            for bi, bank in enumerate(seq.banks):
+                if bank is None:
+                    continue
+                any_bank = True
+                notes_str = " ".join(midi_to_note_name(n) for n in bank.notes)
+                if bank.linked_slot is not None:
+                    link_str = f" -> slot {bank.linked_slot + 1}"
+                else:
+                    link_str = ""
+                self._print(f"  seq {bi + 1}: {notes_str}{link_str}")
+            if not any_bank:
+                self._print("  No sequences defined. Use: seq <bank> <note> [note ...]")
+            return
+
+        # --- seq link <bank> <slot> -----------------------------------------
+        if parts[0].lower() == "link":
+            if len(parts) < 3:
+                self._print("Usage: seq link <bank 1-16> <slot 1-8>")
+                return
+            try:
+                bi = int(parts[1]) - 1
+                if not 0 <= bi < NUM_SEQ_BANKS:
+                    raise ValueError(f"bank must be 1-{NUM_SEQ_BANKS}")
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+            try:
+                si = _slot_to_internal(int(parts[2]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+            try:
+                self.host.sequencer.link(bi, si)
+                self._print(f"  seq {bi + 1} -> slot {si + 1}")
+            except ValueError as e:
+                self._print(f"Error: {e}")
+            return
+
+        # --- seq detach <slot> ----------------------------------------------
+        if parts[0].lower() == "detach":
+            if len(parts) < 2:
+                self._print("Usage: seq detach <slot 1-8>")
+                return
+            try:
+                si = _slot_to_internal(int(parts[1]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+            self.host.sequencer.detach_slot(si)
+            self._print(f"  slot {si + 1}: sequences detached")
+            return
+
+        # --- remaining forms need a bank number as first arg ----------------
+        try:
+            bank_num = int(parts[0])
+            bi = bank_num - 1
+            if not 0 <= bi < NUM_SEQ_BANKS:
+                raise ValueError
+        except ValueError:
+            self._print(f"Error: bank must be 1-{NUM_SEQ_BANKS}")
+            return
+
+        # seq <bank> -- show single bank
+        if len(parts) == 1:
+            bank = self.host.sequencer.banks[bi]
+            if bank is None:
+                self._print(f"  seq {bank_num}: (empty)")
+            else:
+                notes_str = " ".join(midi_to_note_name(n) for n in bank.notes)
+                if bank.linked_slot is not None:
+                    link_str = f" -> slot {bank.linked_slot + 1}"
+                else:
+                    link_str = ""
+                self._print(f"  seq {bank_num}: {notes_str}{link_str}")
+            return
+
+        # seq <bank> clear
+        if len(parts) == 2 and parts[1].lower() == "clear":
+            self.host.sequencer.clear_bank(bi)
+            self._print(f"  seq {bank_num}: cleared")
+            return
+
+        # seq <bank> <note> [note ...]
+        note_names = parts[1:]
+        try:
+            bank = self.host.sequencer.set_bank(bi, note_names)
+        except ValueError as e:
+            self._print(f"Error: {e}")
+            return
+
+        notes_str = " ".join(midi_to_note_name(n) for n in bank.notes)
+        n = len(bank.notes)
+        if n == 1:
+            timing = "1 note/bar"
+        else:
+            timing = f"{n} notes/bar (1/{n} spacing)"
+        self._print(f"  seq {bank_num}: {notes_str}  ({timing})")
 
     # -- link ----------------------------------------------------------------
 
