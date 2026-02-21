@@ -32,7 +32,7 @@ python main.py cli
 vcpi runs with separate server (`serve`) and client (`cli`) processes.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
-from `vcli` with `audio_start [device]`.
+from `vcli` with `audio start [device]`.
 
 If you are on Linux, you may also need:
 
@@ -100,7 +100,7 @@ Inside the CLI, a typical first run is:
 ```text
 deps
 midi ports input
-audio_devices
+audio devices
 load vst 1 Dexed
 midi input <index>
 midimix input <index>
@@ -108,7 +108,7 @@ midi ports output
 midimix output <index>
 midi link <ch> <slot>
 flow
-audio_start
+audio start
 tempo 120
 status
 info 1
@@ -219,7 +219,7 @@ JC-303, Firefly Synth 2 (+FX), and Dragonfly Reverb.
 
 ```text
 vcpi> load vst 1 Dexed         # Tab completes installed VST names
-vcpi> audio_start
+vcpi> audio start
 vcpi> note 1 60 100 500
 ```
 
@@ -285,8 +285,8 @@ vcpi> midi input 0
 vcpi> midi input 1
 vcpi> midimix input 2
 vcpi> load fx 1 DragonflyRoomReverb Reverb
-vcpi> audio_start
-vcpi> ableton_link 120
+vcpi> audio start
+vcpi> ableton link 120
 vcpi> status
 
 vcpi> flow              # signal flow: all slots, FX chains, master bus

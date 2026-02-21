@@ -33,17 +33,14 @@ HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # Fallback for tab completion in case help parsing fails.
 FALLBACK_COMMANDS = (
-    "audio_start",
-    "audio_stop",
-    "audio_devices",
+    "audio",
     "deps",
     "exit",
     "gain",
     "help",
     "info",
     "knobs",
-    "ableton_link",
-    "ableton_cut",
+    "ableton",
     "load",
     "midi",
     "midimix",

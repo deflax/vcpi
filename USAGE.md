@@ -50,7 +50,7 @@ These flags apply when starting the host server (`python main.py serve`).
 | `--no-restore` | off | Skip session restore at startup |
 
 When running `serve`, vcpi does not start audio automatically. Start audio
-manually from the client with `audio_start [device]`.
+manually from the client with `audio start [device]`.
 
 Only one server instance per user is allowed. If a server is already running
 (e.g. via systemd `payload.service`), `./vcsrv` will refuse to start and
@@ -140,11 +140,13 @@ autocomplete command names. `load` also has context-aware argument completion:
 
 ### Audio Commands
 
+All audio operations are subcommands of `audio`:
+
 | Command | Description |
 |---|---|
-| `audio_start [device]` | Start audio engine |
-| `audio_stop` | Stop audio engine |
-| `audio_devices` | List available output devices |
+| `audio start [device]` | Start audio engine |
+| `audio stop` | Stop audio engine |
+| `audio devices` | List available output devices |
 
 ### MIDI Commands
 
@@ -237,10 +239,12 @@ The sequencer follows the current BPM (set via `tempo` or Ableton Link).
 
 ### Ableton Link Commands
 
+All Ableton Link operations are subcommands of `ableton`:
+
 | Command | Description |
 |---|---|
-| `ableton_link [bpm]` | Enable Ableton Link (optionally set BPM) |
-| `ableton_cut` | Disable Ableton Link |
+| `ableton link [bpm]` | Enable Ableton Link (optionally set BPM) |
+| `ableton cut` | Disable Ableton Link |
 | `tempo [bpm]` | Get or set current BPM |
 
 ### Session Commands

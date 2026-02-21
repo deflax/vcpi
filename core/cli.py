@@ -899,26 +899,41 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     # -- audio ---------------------------------------------------------------
 
-    def do_audio_start(self, arg):
-        """Start audio: audio_start [device]"""
-        dev = arg.strip() or None
-        if dev and dev.isdigit():
-            dev = int(dev)
-        try:
-            self.host.start_audio(dev)
-        except Exception as e:
-            self._print(f"Error: {e}")
+    def do_audio(self, arg):
+        """Audio commands: audio start [device] | audio stop | audio devices
 
-    def do_audio_stop(self, arg):
-        """Stop audio."""
-        self.host.stop_audio()
+        Subcommands:
+          audio start [device]  -- start audio engine
+          audio stop            -- stop audio engine
+          audio devices         -- list available output devices
+        """
+        parts = arg.strip().split()
+        if not parts:
+            self._print("Usage: audio start [device] | audio stop | audio devices")
+            return
 
-    def do_audio_devices(self, arg):
-        """List audio devices: audio_devices"""
-        if HAS_SOUNDDEVICE:
-            self._print(sd.query_devices())
+        sub = parts[0]
+
+        if sub == "start":
+            dev = parts[1] if len(parts) > 1 else None
+            if dev and dev.isdigit():
+                dev = int(dev)
+            try:
+                self.host.start_audio(dev)
+            except Exception as e:
+                self._print(f"Error: {e}")
+
+        elif sub == "stop":
+            self.host.stop_audio()
+
+        elif sub == "devices":
+            if HAS_SOUNDDEVICE:
+                self._print(sd.query_devices())
+            else:
+                self._print("  sounddevice not installed")
+
         else:
-            self._print("  sounddevice not installed")
+            self._print(f"Unknown audio subcommand: {sub}")
 
     # -- MIDI (unified) ------------------------------------------------------
 
@@ -1215,26 +1230,41 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     # -- link ----------------------------------------------------------------
 
-    def do_ableton_link(self, arg):
-        """Enable Ableton Link: ableton_link [bpm]"""
-        if arg.strip():
-            try:
-                bpm = float(arg.strip())
-            except ValueError:
-                self._print("Error: bpm must be a number")
-                return
-        else:
-            bpm = None
-        try:
-            self.host.start_link(bpm)
-            self._print(f"  Link enabled at {self.host.link.bpm:.1f} BPM")
-        except Exception as e:
-            self._print(f"Error: {e}")
+    def do_ableton(self, arg):
+        """Ableton Link commands: ableton link [bpm] | ableton cut
 
-    def do_ableton_cut(self, arg):
-        """Disable Ableton Link: ableton_cut"""
-        self.host.stop_link()
-        self._print("  Link disabled")
+        Subcommands:
+          ableton link [bpm]  -- enable Ableton Link (optionally set BPM)
+          ableton cut         -- disable Ableton Link
+        """
+        parts = arg.strip().split()
+        if not parts:
+            self._print("Usage: ableton link [bpm] | ableton cut")
+            return
+
+        sub = parts[0]
+
+        if sub == "link":
+            if len(parts) > 1:
+                try:
+                    bpm = float(parts[1])
+                except ValueError:
+                    self._print("Error: bpm must be a number")
+                    return
+            else:
+                bpm = None
+            try:
+                self.host.start_link(bpm)
+                self._print(f"  Link enabled at {self.host.link.bpm:.1f} BPM")
+            except Exception as e:
+                self._print(f"Error: {e}")
+
+        elif sub == "cut":
+            self.host.stop_link()
+            self._print("  Link disabled")
+
+        else:
+            self._print(f"Unknown ableton subcommand: {sub}")
 
     def do_tempo(self, arg):
         """Get/set tempo: tempo [bpm]"""
