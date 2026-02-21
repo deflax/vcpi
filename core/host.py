@@ -40,6 +40,8 @@ class VcpiCore:
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
         self.session_path = Path(session_path) if session_path else session.DEFAULT_SESSION_PATH
+        self.loaded_session_name: Optional[str] = None
+        self.loaded_session_path: Optional[Path] = None
 
         self.engine = AudioEngine(sample_rate, buffer_size)
         self.link = LinkSync()

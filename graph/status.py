@@ -114,7 +114,10 @@ def render_status(host: VcpiCore) -> str:
         rows.append(("Link", "disabled"))
 
     # -- Session -------------------------------------------------------------
-    rows.append(("Session", str(host.session_path)))
+    if host.loaded_session_name:
+        rows.append(("Session", f"{host.loaded_session_name}  ({host.session_path})"))
+    else:
+        rows.append(("Session", str(host.session_path)))
 
     # -- render box ----------------------------------------------------------
     title = "vcpi Status"

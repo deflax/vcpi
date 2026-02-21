@@ -1311,17 +1311,21 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         return self._filter_prefix(self._session_names(), text)
 
     def do_save(self, arg):
-        """Save session: save <name>
+        """Save session: save [<name>]
 
         Saves the current session to sessions/<name>.json.
+        If no name is given, saves to the previously loaded session.
         The automatic session at ~/.config/vcpi/session.json is only
         written on shutdown.
         """
         name = arg.strip()
         if not name:
-            self._print("Usage: save <name>")
-            return
-        path = self._resolve_session_path(name)
+            if self.host.loaded_session_path is None:
+                self._print("Usage: save <name>  (no session loaded)")
+                return
+            path = self.host.loaded_session_path
+        else:
+            path = self._resolve_session_path(name)
         try:
             self.host.save_session(str(path))
             self._print(f"  Saved to {path}")
@@ -1331,9 +1335,11 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
     def do_load(self, arg):
         """Load session: load <name>
 
-        Loads from sessions/<name>.json and updates the active
-        session at ~/.config/vcpi/session.json so that shutdown
-        preserves the loaded state.
+        Loads from sessions/<name>.json and sets it as the active
+        session (shown in ``status``).  The auto-save file at
+        ~/.config/vcpi/session.json is updated so that shutdown
+        preserves the loaded state, but the named session file is
+        only written when you explicitly run ``save``.
         """
         name = arg.strip()
         if not name:
@@ -1346,6 +1352,9 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         try:
             self.host.restore_session(str(path))
             self.host.refresh_mixer_leds()
+            # Track the loaded session for save-without-args and status.
+            self.host.loaded_session_name = name
+            self.host.loaded_session_path = path
             # Update the auto-save session so shutdown preserves this state.
             self.host.save_session()
             self._print(f"  Loaded from {path}")
