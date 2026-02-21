@@ -11,7 +11,7 @@ from typing import Optional
 
 from core.deps import HAS_SOUNDDEVICE, HAS_PEDALBOARD, Pedalboard, sd, np
 from core.models import InstrumentSlot, NUM_SLOTS
-from core.sampler import WavSamplerPlugin
+from sampler import WavSamplerPlugin
 
 
 logger = logging.getLogger(__name__)

@@ -17,7 +17,7 @@ from core.engine import AudioEngine
 from core.link import LinkSync
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import InstrumentSlot, NUM_SLOTS
-from core.sampler import WavSamplerPlugin
+from sampler import WavSamplerPlugin
 from core.sequencer import Sequencer
 
 

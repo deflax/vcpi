@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.deps import np
-from core.sampler.wav import read_wav, resample_linear, adapt_channels
+from sampler.wav import read_wav, resample_linear, adapt_channels
 
 
 class WavSamplerPlugin:

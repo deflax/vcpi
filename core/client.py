@@ -81,10 +81,10 @@ def _repo_root() -> Path:
 
 
 def _samples_root() -> Path:
-    cwd_samples = Path.cwd() / "samples"
+    cwd_samples = Path.cwd() / "sampler" / "samples"
     if cwd_samples.exists() and cwd_samples.is_dir():
         return cwd_samples
-    return _repo_root() / "samples"
+    return _repo_root() / "sampler" / "samples"
 
 
 def _sample_pack_names() -> list[str]:

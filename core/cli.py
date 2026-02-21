@@ -158,10 +158,10 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         return Path(__file__).resolve().parent.parent
 
     def _samples_root(self) -> Path:
-        cwd_samples = Path.cwd() / "samples"
+        cwd_samples = Path.cwd() / "sampler" / "samples"
         if cwd_samples.exists() and cwd_samples.is_dir():
             return cwd_samples
-        return self._repo_root() / "samples"
+        return self._repo_root() / "sampler" / "samples"
 
     def _patches_root(self) -> Path:
         patches_dir = self.host.patches_dir
@@ -506,7 +506,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
                 self._print("Error: invalid sample name")
                 return
 
-            wav_path = Path("samples") / pack_path / sample_path
+            wav_path = Path("sampler") / "samples" / pack_path / sample_path
 
             try:
                 slot = self.host.load_wav(idx, str(wav_path), display_name)

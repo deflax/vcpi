@@ -1,7 +1,7 @@
 """Sampler sub-package -- WAV-backed instrument plugin."""
 
-from core.sampler.plugin import WavSamplerPlugin
-from core.sampler.wav import read_wav, resample_linear, adapt_channels, decode_pcm
+from sampler.plugin import WavSamplerPlugin
+from sampler.wav import read_wav, resample_linear, adapt_channels, decode_pcm
 
 __all__ = [
     "WavSamplerPlugin",
