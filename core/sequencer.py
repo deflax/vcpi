@@ -251,9 +251,13 @@ class Sequencer:
             lcm = lcm * n // gcd(lcm, n)
         return 4.0 / lcm  # beats
 
-    def _fire_banks(self, step_index: int, quantum_beats: float,
+    def _fire_banks(self, beat_position: float, quantum_beats: float,
                     mido) -> list[tuple[int, int, float]]:
-        """Fire notes for all banks whose step falls on *step_index*.
+        """Fire notes for all banks whose step falls on the current beat.
+
+        *beat_position* is the current position within the bar (0.0 to
+        4.0).  Each bank's cursor is derived directly from this position
+        so that every bank always starts from the beginning of the bar.
 
         Returns a list of (slot_idx, midi_note, note_dur_seconds) for
         note-off scheduling.
@@ -269,18 +273,16 @@ class Sequencer:
             n_steps = len(bank.notes)
             bank_quantum = 4.0 / n_steps  # beats per step for this bank
 
-            # This bank should fire when the current beat position within
-            # the bar is a multiple of its own step size.  We check
-            # whether step_index (in units of the smallest quantum) is
-            # a multiple of this bank's step ratio.
-            steps_per_bank_step = round(bank_quantum / quantum_beats)
-            if steps_per_bank_step < 1:
-                steps_per_bank_step = 1
-            if step_index % steps_per_bank_step != 0:
+            # Derive the step index for this bank from the bar position.
+            # beat_position 0.0 -> step 0, beat_position bank_quantum -> step 1, etc.
+            bar_step = beat_position / bank_quantum
+            step_idx = round(bar_step) % n_steps
+
+            # Only fire if we are close to an exact step boundary for this bank.
+            if abs(bar_step - round(bar_step)) > 0.01:
                 continue
 
-            cursor = self._cursors[bi]
-            midi_note = bank.notes[cursor % n_steps]
+            midi_note = bank.notes[step_idx]
             slot_idx = bank.linked_slot
             vel = bank.velocity
 
@@ -290,7 +292,7 @@ class Sequencer:
             step_dur_secs = bank_quantum * beat_dur
             fired.append((slot_idx, midi_note, step_dur_secs))
 
-            self._cursors[bi] = (cursor + 1) % n_steps
+            self._cursors[bi] = (step_idx + 1) % n_steps
 
         return fired
 
@@ -330,12 +332,11 @@ class Sequencer:
         """Link-synced loop: sleep on beat-grid boundaries.
 
         Uses ``LinkSync.sync(quantum)`` to block until the shared Link
-        timeline reaches the next grid point.  All banks fire at
-        multiples of the smallest quantum so patterns stay phase-aligned
-        with Ableton Live and other Link peers.
+        timeline reaches the next grid point.  The beat number returned
+        by Link is used to derive the bar-relative position so that all
+        banks always start from the beginning of the bar.
         """
         link = self._host.link
-        step_index = 0
 
         logger.info("[SEQ] entering Link-synced loop")
 
@@ -352,7 +353,7 @@ class Sequencer:
 
             # Block until the next beat-grid boundary.
             try:
-                link.sync(quantum, timeout=4.0)
+                beat = link.sync(quantum, timeout=4.0)
             except RuntimeError:
                 # Link was disabled while we were waiting.
                 break
@@ -364,9 +365,12 @@ class Sequencer:
             if not self._running:
                 break
 
-            fired = self._fire_banks(step_index, quantum, mido)
+            # Derive bar-relative position (0.0 to 4.0) from the
+            # absolute Link beat number.
+            beat_position = beat % 4.0
+
+            fired = self._fire_banks(beat_position, quantum, mido)
             self._schedule_note_offs(fired, mido)
-            step_index += 1
 
         logger.info("[SEQ] leaving Link-synced loop")
 
@@ -376,11 +380,14 @@ class Sequencer:
         Used when Ableton Link is not enabled.  Still reads ``bpm`` from
         the LinkSync object for tempo, but times steps with
         ``time.monotonic()`` sleeps.
+
+        A shared bar-start time ensures all banks align to bar
+        boundaries -- every bank's step position is derived from the
+        elapsed time within the current bar, so all patterns restart
+        together at the top of each bar.
         """
-        next_fire: list[float] = [0.0] * NUM_SEQ_BANKS
         now = time.monotonic()
-        for bi in range(NUM_SEQ_BANKS):
-            next_fire[bi] = now
+        bar_start = now  # shared reference for bar alignment
 
         logger.info("[SEQ] entering freewheel loop")
 
@@ -389,53 +396,61 @@ class Sequencer:
             bar_duration = 240.0 / bpm  # 4 beats in seconds
             now = time.monotonic()
 
-            # Find the earliest fire time among active banks.
-            earliest = None
-            for bi, bank in enumerate(self.banks):
+            # Work out where we are inside the current bar.
+            elapsed = now - bar_start
+            # If we've gone past the bar boundary, snap to a new bar.
+            if elapsed >= bar_duration:
+                # Advance bar_start to the most recent bar boundary.
+                bars_elapsed = int(elapsed / bar_duration)
+                bar_start += bars_elapsed * bar_duration
+                elapsed = now - bar_start
+
+            beat_position = (elapsed / bar_duration) * 4.0  # 0.0 – 4.0
+
+            # Find the smallest step duration across active banks so we
+            # can wake up at the next grid point.
+            smallest_step_dur = None
+            has_active = False
+            for bank in self.banks:
                 if bank is None or bank.linked_slot is None or not bank.notes:
                     continue
-                if earliest is None or next_fire[bi] < earliest:
-                    earliest = next_fire[bi]
+                has_active = True
+                sd = bar_duration / len(bank.notes)
+                if smallest_step_dur is None or sd < smallest_step_dur:
+                    smallest_step_dur = sd
 
-            if earliest is None:
+            if not has_active or smallest_step_dur is None:
                 self._stop_event.wait(timeout=0.05)
                 continue
 
-            sleep_dur = earliest - now
-            if sleep_dur > 0.0005:
-                self._stop_event.wait(timeout=sleep_dur)
+            # Determine the next grid time we should fire at.
+            # Grid times within the bar: 0, smallest_step_dur, 2*smallest_step_dur, ...
+            steps_so_far = elapsed / smallest_step_dur
+            next_step_index = int(steps_so_far + 0.5)  # nearest integer step
+            # Are we close enough to fire now?
+            current_grid_time = next_step_index * smallest_step_dur
+            delta = current_grid_time - elapsed
+
+            if delta > 0.001:
+                # Not yet at a grid point -- sleep until the next one.
+                self._stop_event.wait(timeout=delta)
                 if not self._running:
                     break
+                now = time.monotonic()
+                elapsed = now - bar_start
+                if elapsed >= bar_duration:
+                    bars_elapsed = int(elapsed / bar_duration)
+                    bar_start += bars_elapsed * bar_duration
+                    elapsed = now - bar_start
+                beat_position = (elapsed / bar_duration) * 4.0
 
-            now = time.monotonic()
-
-            fired: list[tuple[int, int, float]] = []
-
-            for bi, bank in enumerate(self.banks):
-                if bank is None or bank.linked_slot is None or not bank.notes:
-                    continue
-                if next_fire[bi] > now + 0.001:
-                    continue
-
-                n_steps = len(bank.notes)
-                step_dur = bar_duration / n_steps
-                cursor = self._cursors[bi]
-
-                midi_note = bank.notes[cursor % n_steps]
-                slot_idx = bank.linked_slot
-                vel = bank.velocity
-
-                on = mido.Message("note_on", note=midi_note, velocity=vel)
-                self._host.engine.enqueue_midi(slot_idx, on)
-                fired.append((slot_idx, midi_note, step_dur))
-
-                self._cursors[bi] = (cursor + 1) % n_steps
-                next_fire[bi] += step_dur
-
-                if next_fire[bi] < now:
-                    next_fire[bi] = now
-
+            # Fire all banks whose step boundary aligns with this moment.
+            quantum = self._smallest_quantum()
+            fired = self._fire_banks(beat_position, quantum, mido)
             self._schedule_note_offs(fired, mido)
+
+            # Brief sleep to avoid busy-spinning on the same grid point.
+            self._stop_event.wait(timeout=0.001)
 
         logger.info("[SEQ] leaving freewheel loop")
 
