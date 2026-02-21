@@ -5,11 +5,25 @@ names that loop over one bar.  When a bank is linked to a slot the
 sequencer thread sends note-on / note-off messages into that slot's MIDI
 queue at the correct tempo-derived intervals.
 
-Timing model:
+Timing model
+~~~~~~~~~~~~
   - One bar = 4 beats at the current BPM.
   - Notes are evenly spaced across the bar.  If there is 1 note it plays
     once per bar (on beat 1).  If there are 4 notes each plays on a
     quarter-note boundary, etc.
+
+Ableton Link bar alignment
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+When Ableton Link is enabled (``ableton link``), the sequencer uses
+``LinkSync.sync()`` to sleep until the shared Link beat-grid boundary
+rather than free-running on wall-clock time.  This means:
+
+  - The first note of every bar aligns with the downbeat as seen by
+    Ableton Live and all other Link peers.
+  - Tempo changes from any peer are followed automatically.
+  - If Link is disabled or aalink is not installed, the sequencer falls
+    back to the original wall-clock timing (still tempo-synced via the
+    ``bpm`` property, but not phase-aligned with external peers).
 
 Note names are case-insensitive: c, C#, Db, d, ... b.  The default octave
 is 4 (middle C = C4 = MIDI 60).  An explicit octave suffix is allowed:
@@ -208,16 +222,96 @@ class Sequencer:
     def _bpm(self) -> float:
         return self._host.link.bpm
 
-    def _run(self):
-        """Main sequencer loop with per-bank timing.
+    @property
+    def _link_enabled(self) -> bool:
+        return self._host.link.enabled
 
-        Each bank has its own next-fire timestamp so that a 1-note bank
-        fires once per bar while a 4-note bank fires every quarter-note,
-        even when both are active simultaneously.
+    # -- internal helpers ----------------------------------------------------
 
-        The loop sleeps until the earliest upcoming bank step, fires all
-        banks that are due, and schedules note-off timers.
+    def _smallest_quantum(self) -> float:
+        """Return the smallest step size (in beats) across all active banks.
+
+        When Link is enabled the sequencer sleeps in increments of this
+        quantum so that every active bank's steps land on the grid.
+        A bank with *n* notes has a step size of 4/n beats (4 beats per
+        bar).  The GCD-style smallest value ensures we wake up often
+        enough for the densest pattern while still aligning coarser
+        patterns to the same grid.
         """
+        from math import gcd
+        nums: list[int] = []
+        for bank in self.banks:
+            if bank is not None and bank.linked_slot is not None and bank.notes:
+                nums.append(len(bank.notes))
+        if not nums:
+            return 1.0  # quarter note fallback
+        # LCM of all step counts gives the common grid divisor.
+        lcm = nums[0]
+        for n in nums[1:]:
+            lcm = lcm * n // gcd(lcm, n)
+        return 4.0 / lcm  # beats
+
+    def _fire_banks(self, step_index: int, quantum_beats: float,
+                    mido) -> list[tuple[int, int, float]]:
+        """Fire notes for all banks whose step falls on *step_index*.
+
+        Returns a list of (slot_idx, midi_note, note_dur_seconds) for
+        note-off scheduling.
+        """
+        bpm = self._bpm
+        beat_dur = 60.0 / bpm  # seconds per beat
+        fired: list[tuple[int, int, float]] = []
+
+        for bi, bank in enumerate(self.banks):
+            if bank is None or bank.linked_slot is None or not bank.notes:
+                continue
+
+            n_steps = len(bank.notes)
+            bank_quantum = 4.0 / n_steps  # beats per step for this bank
+
+            # This bank should fire when the current beat position within
+            # the bar is a multiple of its own step size.  We check
+            # whether step_index (in units of the smallest quantum) is
+            # a multiple of this bank's step ratio.
+            steps_per_bank_step = round(bank_quantum / quantum_beats)
+            if steps_per_bank_step < 1:
+                steps_per_bank_step = 1
+            if step_index % steps_per_bank_step != 0:
+                continue
+
+            cursor = self._cursors[bi]
+            midi_note = bank.notes[cursor % n_steps]
+            slot_idx = bank.linked_slot
+            vel = bank.velocity
+
+            on = mido.Message("note_on", note=midi_note, velocity=vel)
+            self._host.engine.enqueue_midi(slot_idx, on)
+
+            step_dur_secs = bank_quantum * beat_dur
+            fired.append((slot_idx, midi_note, step_dur_secs))
+
+            self._cursors[bi] = (cursor + 1) % n_steps
+
+        return fired
+
+    def _schedule_note_offs(self, fired: list[tuple[int, int, float]],
+                            mido) -> None:
+        """Schedule note-off messages for all recently fired notes."""
+        for slot_idx, midi_note, step_dur in fired:
+            off_delay = step_dur * self.NOTE_OFF_RATIO
+
+            def _send_off(si=slot_idx, mn=midi_note, _mido=mido):
+                off = _mido.Message("note_off", note=mn)
+                self._host.engine.enqueue_midi(si, off)
+
+            off_timer = threading.Timer(off_delay, _send_off)
+            off_timer.daemon = True
+            off_timer.start()
+
+    # -- main playback loops -------------------------------------------------
+
+    def _run(self):
+        """Main sequencer entry point -- delegates to Link or wall-clock loop."""
         from core import deps  # late import to avoid circular deps
 
         mido = deps.mido
@@ -226,13 +320,71 @@ class Sequencer:
             self._running = False
             return
 
-        # Per-bank next-fire timestamps (initialised on first active tick).
+        while self._running:
+            if self._link_enabled:
+                self._run_link(mido)
+            else:
+                self._run_freewheel(mido)
+
+    def _run_link(self, mido):
+        """Link-synced loop: sleep on beat-grid boundaries.
+
+        Uses ``LinkSync.sync(quantum)`` to block until the shared Link
+        timeline reaches the next grid point.  All banks fire at
+        multiples of the smallest quantum so patterns stay phase-aligned
+        with Ableton Live and other Link peers.
+        """
+        link = self._host.link
+        step_index = 0
+
+        logger.info("[SEQ] entering Link-synced loop")
+
+        while self._running and self._link_enabled:
+            quantum = self._smallest_quantum()
+
+            # No active banks -- idle briefly.
+            if quantum >= 4.0 and not any(
+                b is not None and b.linked_slot is not None and b.notes
+                for b in self.banks
+            ):
+                self._stop_event.wait(timeout=0.05)
+                continue
+
+            # Block until the next beat-grid boundary.
+            try:
+                link.sync(quantum, timeout=4.0)
+            except RuntimeError:
+                # Link was disabled while we were waiting.
+                break
+            except Exception as exc:
+                logger.warning("[SEQ] link.sync error: %s", exc)
+                self._stop_event.wait(timeout=0.01)
+                continue
+
+            if not self._running:
+                break
+
+            fired = self._fire_banks(step_index, quantum, mido)
+            self._schedule_note_offs(fired, mido)
+            step_index += 1
+
+        logger.info("[SEQ] leaving Link-synced loop")
+
+    def _run_freewheel(self, mido):
+        """Wall-clock loop (original behaviour, no Link phase alignment).
+
+        Used when Ableton Link is not enabled.  Still reads ``bpm`` from
+        the LinkSync object for tempo, but times steps with
+        ``time.monotonic()`` sleeps.
+        """
         next_fire: list[float] = [0.0] * NUM_SEQ_BANKS
         now = time.monotonic()
         for bi in range(NUM_SEQ_BANKS):
-            next_fire[bi] = now  # all banks start immediately
+            next_fire[bi] = now
 
-        while self._running:
+        logger.info("[SEQ] entering freewheel loop")
+
+        while self._running and not self._link_enabled:
             bpm = self._bpm
             bar_duration = 240.0 / bpm  # 4 beats in seconds
             now = time.monotonic()
@@ -246,27 +398,24 @@ class Sequencer:
                     earliest = next_fire[bi]
 
             if earliest is None:
-                # No active banks -- sleep briefly and re-check.
                 self._stop_event.wait(timeout=0.05)
                 continue
 
-            # Sleep until the earliest bank is due.
             sleep_dur = earliest - now
-            if sleep_dur > 0.0005:  # > 0.5 ms
+            if sleep_dur > 0.0005:
                 self._stop_event.wait(timeout=sleep_dur)
                 if not self._running:
                     break
 
             now = time.monotonic()
 
-            # Fire all banks whose step time has arrived (within 1 ms tolerance).
-            fired: list[tuple[int, int, float]] = []  # (slot_idx, midi_note, step_dur)
+            fired: list[tuple[int, int, float]] = []
 
             for bi, bank in enumerate(self.banks):
                 if bank is None or bank.linked_slot is None or not bank.notes:
                     continue
                 if next_fire[bi] > now + 0.001:
-                    continue  # not due yet
+                    continue
 
                 n_steps = len(bank.notes)
                 step_dur = bar_duration / n_steps
@@ -280,25 +429,15 @@ class Sequencer:
                 self._host.engine.enqueue_midi(slot_idx, on)
                 fired.append((slot_idx, midi_note, step_dur))
 
-                # Advance cursor and schedule next fire.
                 self._cursors[bi] = (cursor + 1) % n_steps
                 next_fire[bi] += step_dur
 
-                # Guard against drift: if we fell behind, snap forward.
                 if next_fire[bi] < now:
                     next_fire[bi] = now
 
-            # Schedule note-off for each fired note at 90% of its step duration.
-            for slot_idx, midi_note, step_dur in fired:
-                off_delay = step_dur * self.NOTE_OFF_RATIO
+            self._schedule_note_offs(fired, mido)
 
-                def _send_off(si=slot_idx, mn=midi_note, _mido=mido):
-                    off = _mido.Message("note_off", note=mn)
-                    self._host.engine.enqueue_midi(si, off)
-
-                off_timer = threading.Timer(off_delay, _send_off)
-                off_timer.daemon = True
-                off_timer.start()
+        logger.info("[SEQ] leaving freewheel loop")
 
     # -- serialisation helpers -----------------------------------------------
 

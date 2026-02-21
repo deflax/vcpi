@@ -259,7 +259,7 @@ vcpi> load wav 4 synth-pads c4-warm
 vcpi> load wav 5 synth-leads c4-mono-saw
 ```
 
-Internal sequencer:
+Internal sequencer (bar-aligned with Ableton Link when enabled):
 
 ```text
 vcpi> seq 1 d c b a          # define 4-note pattern in bank 1

@@ -1,15 +1,34 @@
-"""Ableton Link synchronisation (aalink wrapper)."""
+"""Ableton Link synchronisation (aalink wrapper).
+
+LinkSync wraps the ``aalink`` library to provide:
+
+* Shared tempo (``bpm`` property, bidirectional with Link peers).
+* Beat-grid synchronisation via :meth:`sync` -- blocks the calling
+  thread until the shared Link timeline reaches the next *n*-th beat
+  boundary.  This is the mechanism the internal sequencer uses to
+  align its bar start/end with Ableton Live and other Link peers.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import logging
 import threading
 
 from core.deps import HAS_LINK, aalink
 
+logger = logging.getLogger(__name__)
+
 
 class LinkSync:
-    """Minimal wrapper around aalink for tempo sync."""
+    """Minimal wrapper around aalink for tempo sync.
+
+    The async ``aalink.Link.sync(quantum)`` call is bridged to a
+    blocking :meth:`sync` that any thread can call.  Internally it
+    schedules the coroutine on the dedicated aalink event loop and
+    waits on a :class:`concurrent.futures.Future`.
+    """
 
     def __init__(self, bpm: float = 120.0):
         self._link = None
@@ -101,3 +120,41 @@ class LinkSync:
     @property
     def num_peers(self) -> int:
         return self._link.num_peers if self._link else 0
+
+    # -- beat-grid sync (thread-safe) ----------------------------------------
+
+    def sync(self, beats: float, timeout: float = 4.0) -> float:
+        """Block until the Link timeline reaches the next *beats* boundary.
+
+        This is a thread-safe wrapper around ``await link.sync(beats)``.
+        It schedules the coroutine on the aalink event loop and waits
+        for the result.
+
+        Args:
+            beats:   Quantum value -- e.g. 4 for a full bar, 1 for a
+                     quarter-note, 0.5 for an eighth-note.
+            timeout: Maximum seconds to wait (safety net).
+
+        Returns:
+            The beat number at which the sync resolved (from aalink).
+
+        Raises:
+            RuntimeError: If Link is not enabled or the event loop is
+                not running.
+        """
+        link = self._link
+        loop = self._loop
+        if link is None or loop is None or not self._enabled:
+            raise RuntimeError("Link is not enabled")
+
+        fut: concurrent.futures.Future[float] = concurrent.futures.Future()
+
+        async def _sync():
+            try:
+                beat = await link.sync(beats)
+                fut.set_result(beat)
+            except Exception as exc:
+                fut.set_exception(exc)
+
+        loop.call_soon_threadsafe(asyncio.ensure_future, _sync())
+        return fut.result(timeout=timeout)

@@ -236,6 +236,10 @@ vcpi> seq clear 1           # remove bank 1
 ```
 
 The sequencer follows the current BPM (set via `tempo` or Ableton Link).
+When Ableton Link is enabled, the sequencer phase-locks to the shared
+Link beat grid -- bar boundaries align with Ableton Live and any other
+Link peers on the network. Without Link the sequencer still follows
+tempo but free-runs from the moment playback starts.
 
 ### Ableton Link Commands
 
