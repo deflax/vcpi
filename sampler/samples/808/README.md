@@ -2,12 +2,12 @@
 
 Roland TR-808 drum machine one-shots.
 
-These WAV files are intended for the `load wav` sampler command.
+These WAV files are intended for the `slot <n> wav` sampler command.
 
 Example:
 
 ```text
-vcpi> load wav 2 808 bassdrum
+vcpi> slot 2 wav 808 bassdrum
 ```
 
 This resolves to `samples/808/bassdrum.wav`.

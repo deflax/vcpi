@@ -1,8 +1,8 @@
 # Built-in Sample Packs
 
-These WAV files are intended for the `load wav` sampler command.
+These WAV files are intended for the `slot <n> wav` sampler command.
 
-`load wav <slot> <pack> <sample>` resolves to `samples/<pack>/<sample>.wav`.
+`slot <n> wav <pack> <sample>` resolves to `samples/<pack>/<sample>.wav`.
 
 Available packs:
 
@@ -17,9 +17,9 @@ Available packs:
 Examples:
 
 ```text
-vcpi> load wav 2 piano c4-soft
-vcpi> load wav 3 organ c4-drawbar
-vcpi> load wav 4 strings c4-ensemble
-vcpi> load wav 5 synth-pads c4-warm
-vcpi> load wav 6 synth-leads c4-mono-saw
+vcpi> slot 2 wav piano c4-soft
+vcpi> slot 3 wav organ c4-drawbar
+vcpi> slot 4 wav strings c4-ensemble
+vcpi> slot 5 wav synth-pads c4-warm
+vcpi> slot 6 wav synth-leads c4-mono-saw
 ```

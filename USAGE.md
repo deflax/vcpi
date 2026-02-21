@@ -63,22 +63,22 @@ The Raspberry Pi `payload.service` also sets `LOG_LEVEL=DEBUG`.
 
 VST3 plugin search and name resolution:
 
-- `load vst` and `load fx` accept a plugin **name** (e.g. `Dexed`) or a full
-  path (e.g. `/usr/lib/vst3/Dexed.vst3`). Names are resolved by scanning
+- `slot <n> vst` and `slot <n> fx` accept a plugin **name** (e.g. `Dexed`) or a
+  full path (e.g. `/usr/lib/vst3/Dexed.vst3`). Names are resolved by scanning
   known search directories.
 - Search order: `vst3/` in the repo root, `~/.vst3`,
   `/usr/lib/vst3`, `/usr/local/lib/vst3`, and macOS standard paths.
 - Name matching: exact stem match first, then case-insensitive, then unique
   prefix match. Ambiguous names produce an error listing the candidates.
-- Tab completion for `load vst` and `load fx` lists all detected plugin names.
+- Tab completion for `slot <n> vst` and `slot <n> fx` lists all detected plugin names.
 - Run `./vst3/fetch-vsts-amd64` on x86_64/amd64 systems.
 - Run `./vst3/fetch-vsts-aarch64` on Raspberry Pi / Linux aarch64 systems.
 - Override with `VST3_PATH` or `VST_PATH` environment variables.
 
 Cardinal/VCV helpers:
 
-- `load vcv` looks for patch files in `patches/` by default.
-- `load vcv` does not auto-route channels; use `midi link <ch> <slot>` explicitly.
+- `slot <n> vcv` looks for patch files in `patches/` by default.
+- `slot <n> vcv` does not auto-route channels; use `midi link <ch> <slot>` explicitly.
 - Override patch directory with `VCPI_PATCHES_DIR`.
 - Override Cardinal plugin path with `CARDINAL_VST3_PATH`.
 
@@ -99,24 +99,25 @@ Server/client specific:
 ## Interactive Commands
 
 When connected with `./vcli` (or `python main.py cli`), press `Tab` to
-autocomplete command names. `load` also has context-aware argument completion:
+autocomplete command names. `slot` has context-aware argument completion:
 
-- `load` -> `vst`, `wav`, `vcv`, `fx`
-- `load wav` -> sample pack names and sample names
-- `load vcv` -> patch names from `patches/`
-- `load vst` / `load fx` -> detected VST names
+- `slot` -> slot numbers `1`-`8`, `master`
+- `slot <n>` -> `vst`, `wav`, `vcv`, `fx`, `clear`
+- `slot <n> wav` -> sample pack names and sample names
+- `slot <n> vcv` -> patch names from `patches/`
+- `slot <n> vst` / `slot <n> fx` -> detected VST names
 - `info` / `knobs` -> slot numbers, `master`, `fx`
 
 ### Plugin Commands
 
 | Command | Description |
 |---|---|
-| `load vst <slot> <path\|vst_name> [name]` | Load VST instrument into slot |
-| `load wav <slot> <pack> <sample> [name]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into slot |
-| `load vcv <slot> <patch_name> [name]` | Load Cardinal into slot from `patches/<patch_name>.vcv` |
-| `load fx <slot\|master> <path\|vst_name> [name]` | Load effect into slot insert chain or master bus |
-| `unload <slot>` | Unload/clear instrument from slot |
-| `unload fx <slot\|master> <fx_index>` | Remove effect by index |
+| `slot <slot> vst <path\|vst_name> [name]` | Load VST instrument into slot |
+| `slot <slot> wav <pack> <sample> [name]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into slot |
+| `slot <slot> vcv <patch_name> [name]` | Load Cardinal into slot from `patches/<patch_name>.vcv` |
+| `slot <slot\|master> fx <path\|vst_name> [name]` | Load effect into slot insert chain or master bus |
+| `slot <slot> clear` | Clear instrument from slot |
+| `slot <slot\|master> fx clear <fx_index>` | Remove effect by index |
 | `params <slot>` | Show instrument parameters |
 | `params master <fx_index>` | Show master FX parameters (defaults to first if omitted) |
 | `set <slot> <name> <value>` | Set instrument parameter |
@@ -188,8 +189,8 @@ not open hardware ports; `midi input` and `midimix input` do.
 
 WAV sampler behavior:
 
-- `load wav` plays the file when MIDI `note_on` events reach that slot.
-- `load wav 2 909 bassdrum` resolves to `sampler/samples/909/bassdrum.wav`.
+- `slot <n> wav` plays the file when MIDI `note_on` events reach that slot.
+- `slot 2 wav 909 bassdrum` resolves to `sampler/samples/909/bassdrum.wav`.
 - Built-in packs: `808`, `909`, `piano`, `organ`, `strings`, `synth-pads`, `synth-leads`.
 - The `.wav` extension is optional in `<sample>`.
 - Notes are pitch-shifted around middle C (MIDI note 60).
@@ -198,11 +199,11 @@ WAV sampler behavior:
 Melodic examples:
 
 ```text
-vcpi> load wav 1 piano c4-soft
-vcpi> load wav 2 organ c4-drawbar
-vcpi> load wav 3 strings c4-ensemble
-vcpi> load wav 4 synth-pads c4-warm
-vcpi> load wav 5 synth-leads c4-mono-saw
+vcpi> slot 1 wav piano c4-soft
+vcpi> slot 2 wav organ c4-drawbar
+vcpi> slot 3 wav strings c4-ensemble
+vcpi> slot 4 wav synth-pads c4-warm
+vcpi> slot 5 wav synth-leads c4-mono-saw
 ```
 
 ### Sequencer Commands

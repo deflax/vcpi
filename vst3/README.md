@@ -1,7 +1,7 @@
 # Bundled VST3 Plugins
 
 This directory holds open-license VST3 plugins for use with vcpi's
-`load vst` and `load fx` commands.
+`slot <n> vst` and `slot <n> fx` commands.
 
 ## Architecture-specific fetch scripts
 
@@ -30,9 +30,9 @@ You can also target groups or individual plugins:
 After fetching, load plugins by name:
 
 ```text
-vcpi> load vst 1 Surge XT
-vcpi> load vst 2 OB-Xf
-vcpi> load fx DragonflyHallReverb master
+vcpi> slot 1 vst Surge XT
+vcpi> slot 2 vst OB-Xf
+vcpi> slot master fx DragonflyHallReverb
 ```
 
 ## Plugin Catalog

@@ -41,7 +41,6 @@ FALLBACK_COMMANDS = (
     "info",
     "knobs",
     "ableton",
-    "load",
     "midi",
     "midimix",
     "flow",
@@ -53,13 +52,13 @@ FALLBACK_COMMANDS = (
     "save",
     "set",
     "shutdown",
+    "slot",
     "solo",
     "status",
     "tempo",
-    "unload",
 )
 
-LOAD_TYPES = ("vst", "wav", "vcv", "fx")
+SLOT_TYPES = ("vst", "wav", "vcv", "fx", "clear")
 
 
 def _filter_prefix(values: list[str], prefix: str) -> list[str]:
@@ -197,47 +196,58 @@ def _complete_slot_fx_args(text: str, prefix_tokens: list[str]) -> list[str]:
     return []
 
 
-def _complete_load_args(text: str, prefix_tokens: list[str]) -> list[str]:
+def _complete_slot_args(text: str, prefix_tokens: list[str]) -> list[str]:
+    """Tab completion for the unified slot command."""
     arg_index = len(prefix_tokens) - 1
     args_before = prefix_tokens[1:]
+    slots = [str(i) for i in range(1, 9)]
 
+    # slot <slot|master>
     if arg_index == 0:
-        return _filter_prefix(list(LOAD_TYPES), text)
+        return _filter_prefix(["master", *slots], text)
 
     if not args_before:
         return []
 
-    mode = args_before[0].lower()
-    slots = [str(i) for i in range(1, 9)]
+    target = args_before[0]
+
+    if target == "master":
+        # slot master fx ...
+        if arg_index == 1:
+            return _filter_prefix(["fx"], text)
+        if arg_index == 2 and len(args_before) >= 2 and args_before[1] == "fx":
+            return _filter_prefix(["clear", *_vst_names()], text)
+        return []
+
+    # slot <num> <subcommand> ...
+    if arg_index == 1:
+        return _filter_prefix(list(SLOT_TYPES), text)
+
+    if len(args_before) < 2:
+        return []
+
+    mode = args_before[1].lower()
+
+    if mode == "vst":
+        if arg_index == 2:
+            return _filter_prefix(_vst_names(), text)
+        return []
+
+    if mode == "vcv":
+        if arg_index == 2:
+            return _filter_prefix(_vcv_patch_names(), text)
+        return []
 
     if mode == "wav":
-        if arg_index == 1:
-            return _filter_prefix(slots, text)
         if arg_index == 2:
             return _filter_prefix(_sample_pack_names(), text)
         if arg_index == 3 and len(args_before) >= 3:
             return _filter_prefix(_sample_names(args_before[2]), text)
         return []
 
-    if mode == "vcv":
-        if arg_index == 1:
-            return _filter_prefix(slots, text)
-        if arg_index == 2:
-            return _filter_prefix(_vcv_patch_names(), text)
-        return []
-
-    if mode == "vst":
-        if arg_index == 1:
-            return _filter_prefix(slots, text)
-        if arg_index == 2:
-            return _filter_prefix(_vst_names(), text)
-        return []
-
     if mode == "fx":
-        if arg_index == 1:
-            return _filter_prefix(_vst_names(), text)
         if arg_index == 2:
-            return _filter_prefix(["master", *slots], text)
+            return _filter_prefix(["clear", *_vst_names()], text)
         return []
 
     return []
@@ -325,8 +335,8 @@ def _configure_tab_completion(command_names: list[str]):
 
         if not prefix_tokens:
             matches = _filter_prefix(names, text)
-        elif prefix_tokens[0] == "load":
-            matches = _complete_load_args(text, prefix_tokens)
+        elif prefix_tokens[0] == "slot":
+            matches = _complete_slot_args(text, prefix_tokens)
         elif prefix_tokens[0] in ("info", "knobs"):
             matches = _complete_slot_fx_args(text, prefix_tokens)
         else:

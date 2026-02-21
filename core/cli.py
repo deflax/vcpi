@@ -53,7 +53,7 @@ Type 'help' for available commands.
 Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 """
     prompt = "vcpi> "
-    LOAD_TYPES = ("vst", "wav", "vcv", "fx")
+    SLOT_TYPES = ("vst", "wav", "vcv", "fx", "clear")
 
     def __init__(self, host: VcpiCore, stdout=None, owns_host: bool = True):
         super().__init__(stdout=stdout)
@@ -145,12 +145,14 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     # -- plugins -------------------------------------------------------------
 
-    def _load_usage(self) -> str:
+    def _slot_usage(self) -> str:
         return (
-            "load vst <slot 1-8> <path|vst_name> [name] | "
-            "load wav <slot 1-8> <pack> <sample> [name] | "
-            "load fx [slot 1-8|master] <path|vst_name> [name] | "
-            "load vcv <slot 1-8> <patch_name[.vcv]> [name]"
+            "slot <1-8> vst <path|vst_name> [name] | "
+            "slot <1-8> wav <pack> <sample> [name] | "
+            "slot <1-8> vcv <patch_name[.vcv]> [name] | "
+            "slot <1-8|master> fx <path|vst_name> [name] | "
+            "slot <1-8> clear | "
+            "slot <1-8|master> fx clear <fx_index>"
         )
 
     @staticmethod
@@ -306,52 +308,63 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
     def _vst_names(self) -> list[str]:
         return sorted({path.stem for path in self._iter_vst_plugin_paths()})
 
-    def complete_load(self, text, line, begidx, endidx):
+    def complete_slot(self, text, line, begidx, endidx):
+        """Tab completion for the unified slot command."""
         del endidx
         prefix_tokens = line[:begidx].split()
-        if not prefix_tokens or prefix_tokens[0] != "load":
+        if not prefix_tokens or prefix_tokens[0] != "slot":
             return []
 
         arg_index = len(prefix_tokens) - 1
         args_before = prefix_tokens[1:]
 
+        # slot <slot|master>
         if arg_index == 0:
-            return self._filter_prefix(list(self.LOAD_TYPES), text)
+            targets = ["master", *[str(i) for i in range(1, NUM_SLOTS + 1)]]
+            return self._filter_prefix(targets, text)
 
         if not args_before:
             return []
 
-        mode = args_before[0]
+        target = args_before[0]
+
+        if target == "master":
+            # slot master fx ...
+            if arg_index == 1:
+                return self._filter_prefix(["fx"], text)
+            if arg_index == 2 and len(args_before) >= 2 and args_before[1] == "fx":
+                return self._filter_prefix(["clear", *self._vst_names()], text)
+            return []
+
+        # slot <num> <subcommand> ...
+        if arg_index == 1:
+            return self._filter_prefix(list(self.SLOT_TYPES), text)
+
+        if len(args_before) < 2:
+            return []
+
+        mode = args_before[1]
+
+        if mode == "vst":
+            if arg_index == 2:
+                return self._filter_prefix(self._vst_names(), text)
+            return []
+
+        if mode == "vcv":
+            if arg_index == 2:
+                return self._filter_prefix(self._vcv_patch_names(), text)
+            return []
 
         if mode == "wav":
-            if arg_index == 1:
-                return self._filter_prefix([str(i) for i in range(1, NUM_SLOTS + 1)], text)
             if arg_index == 2:
                 return self._filter_prefix(self._sample_pack_names(), text)
             if arg_index == 3 and len(args_before) >= 3:
                 return self._filter_prefix(self._sample_names(args_before[2]), text)
             return []
 
-        if mode == "vcv":
-            if arg_index == 1:
-                return self._filter_prefix([str(i) for i in range(1, NUM_SLOTS + 1)], text)
-            if arg_index == 2:
-                return self._filter_prefix(self._vcv_patch_names(), text)
-            return []
-
-        if mode == "vst":
-            if arg_index == 1:
-                return self._filter_prefix([str(i) for i in range(1, NUM_SLOTS + 1)], text)
-            if arg_index == 2:
-                return self._filter_prefix(self._vst_names(), text)
-            return []
-
         if mode == "fx":
-            if arg_index == 1:
-                targets = ["master", *[str(i) for i in range(1, NUM_SLOTS + 1)]]
-                return self._filter_prefix(targets, text)
             if arg_index == 2:
-                return self._filter_prefix(self._vst_names(), text)
+                return self._filter_prefix(["clear", *self._vst_names()], text)
             return []
 
         return []
@@ -403,90 +416,143 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             return []
         return self._complete_slot_fx(text, prefix_tokens)
 
-    def do_load(self, arg):
-        """Load instrument/effect/VCV/WAV: load vst <slot 1-8> <path|vst_name> [name] | load wav <slot 1-8> <pack> <sample> [name] | load fx <slot 1-8|master> <path|vst_name> [name] | load vcv <slot 1-8> <patch_name[.vcv]> [name]"""
+    def do_slot(self, arg):
+        """Slot management: slot <1-8> vst <path|name> [name] | slot <1-8> wav <pack> <sample> [name] | slot <1-8> vcv <patch> [name] | slot <1-8|master> fx <path|name> [name] | slot <1-8> clear | slot <1-8|master> fx clear <fx_index>"""
         text = arg.strip()
         if not text:
-            self._print(f"Usage: {self._load_usage()}")
+            self._print(f"Usage: {self._slot_usage()}")
             return
 
-        mode = text.split(maxsplit=1)[0].lower()
+        parts = text.split()
+        target = parts[0]
 
-        if mode not in self.LOAD_TYPES:
-            if mode.isdigit():
-                self._print("Error: instrument loads now use 'load vst <slot 1-8> <path|vst_name> [name]'")
-            else:
-                self._print("Error: load type must be one of: vst, wav, vcv, fx")
-            self._print(f"Usage: {self._load_usage()}")
-            return
-
-        if mode == "vst":
-            parts = text.split(maxsplit=3)
-            if len(parts) < 3:
-                self._print("Usage: load vst <slot 1-8> <path|vst_name> [name]")
-                return
+        # Determine slot index (or None for master).
+        if target == "master":
+            slot_num = None
+        else:
             try:
-                idx = _slot_to_internal(int(parts[1]))
+                slot_num = int(target)
+                _slot_to_internal(slot_num)  # validate
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                self._print(f"Usage: {self._slot_usage()}")
+                return
+
+        if len(parts) < 2:
+            self._print(f"Usage: {self._slot_usage()}")
+            return
+
+        mode = parts[1].lower()
+
+        # -- slot <num> clear ------------------------------------------------
+        if mode == "clear" and slot_num is not None:
+            idx = _slot_to_internal(slot_num)
+            try:
+                removed = self.host.remove_instrument(idx)
+                self.host.refresh_mixer_leds([idx])
+                self._print(f"  slot {slot_num} cleared ({removed.name})")
+            except Exception as e:
+                self._print(f"Error: {e}")
+            return
+
+        # -- slot <num|master> fx ... ----------------------------------------
+        if mode == "fx":
+            if len(parts) < 3:
+                self._print(f"Usage: slot <1-8|master> fx <path|vst_name> [name] | slot <1-8|master> fx clear <fx_index>")
+                return
+
+            slot_idx = None if slot_num is None else _slot_to_internal(slot_num)
+
+            # slot <num|master> fx clear <fx_index>
+            if parts[2].lower() == "clear":
+                if len(parts) < 4:
+                    self._print(f"Usage: slot <1-8|master> fx clear <fx_index>")
+                    return
+                try:
+                    fx_idx = int(parts[3]) - 1
+                except ValueError:
+                    self._print("Error: fx_index must be a positive integer")
+                    return
+                if fx_idx < 0:
+                    self._print("Error: fx_index must be >= 1")
+                    return
+                try:
+                    self.host.remove_effect(slot_idx, fx_idx)
+                    self._print("  Removed.")
+                except Exception as e:
+                    self._print(f"Error: {e}")
+                return
+
+            # slot <num|master> fx <path|vst_name> [name]
+            path_token = parts[2]
+            name = " ".join(parts[3:]) if len(parts) > 3 else None
+            try:
+                path = self._resolve_vst_token(path_token)
             except ValueError as e:
                 self._print(f"Error: {e}")
                 return
+            try:
+                self.host.load_effect(path, slot_idx, name)
+            except Exception as e:
+                self._print(f"Error: {e}")
+            return
 
-            path_token = parts[2]
-            name = parts[3] if len(parts) > 3 else None
+        # Remaining modes require a numeric slot.
+        if slot_num is None:
+            self._print("Error: master only supports 'fx' subcommand")
+            self._print(f"Usage: {self._slot_usage()}")
+            return
+
+        idx = _slot_to_internal(slot_num)
+
+        # -- slot <num> vst <path|name> [name] -------------------------------
+        if mode == "vst":
+            rest = text.split(maxsplit=3)  # [target, "vst", path, name?]
+            if len(rest) < 3:
+                self._print(f"Usage: slot <1-8> vst <path|vst_name> [name]")
+                return
+            path_token = rest[2]
+            name = rest[3] if len(rest) > 3 else None
             try:
                 path = self._resolve_vst_token(path_token)
                 slot = self.host.load_instrument(idx, path, name)
-                self._print(f"  slot {parts[1]} = {slot.name}")
+                self._print(f"  slot {slot_num} = {slot.name}")
                 self._print(f"  vst      : {slot.path}")
             except Exception as e:
                 self._print(f"Error: {e}")
             return
 
+        # -- slot <num> vcv <patch> [name] -----------------------------------
         if mode == "vcv":
-            parts = text.split(maxsplit=3)
-            if len(parts) < 3:
-                self._print("Usage: load vcv <slot 1-8> <patch_name[.vcv]> [name]")
+            rest = text.split(maxsplit=3)
+            if len(rest) < 3:
+                self._print(f"Usage: slot <1-8> vcv <patch_name[.vcv]> [name]")
                 return
-            try:
-                idx = _slot_to_internal(int(parts[1]))
-            except ValueError as e:
-                self._print(f"Error: {e}")
-                return
-
-            patch_name = parts[2]
-            name = parts[3] if len(parts) > 3 else None
+            patch_name = rest[2]
+            name = rest[3] if len(rest) > 3 else None
             try:
                 slot, patch_result, cardinal_path, patch_path = self.host.load_vcv_patch(
-                    idx,
-                    patch_name,
-                    name=name,
+                    idx, patch_name, name=name,
                 )
             except Exception as e:
                 self._print(f"Error: {e}")
                 return
-
-            self._print(f"  slot {parts[1]} = {slot.name}")
+            self._print(f"  slot {slot_num} = {slot.name}")
             self._print(f"  patch    : {patch_path}")
             self._print(f"  cardinal : {cardinal_path}")
             self._print(f"  result   : {patch_result}")
-            self._print(f"  route with: route <channel 1-16> {parts[1]}")
+            self._print(f"  route with: midi link <channel 1-16> {slot_num}")
             return
 
+        # -- slot <num> wav <pack> <sample> [name] ---------------------------
         if mode == "wav":
-            parts = text.split(maxsplit=4)
-            if len(parts) < 4:
-                self._print("Usage: load wav <slot 1-8> <pack> <sample> [name]")
+            rest = text.split(maxsplit=4)
+            if len(rest) < 4:
+                self._print(f"Usage: slot <1-8> wav <pack> <sample> [name]")
                 return
-
-            try:
-                idx = _slot_to_internal(int(parts[1]))
-            except ValueError as e:
-                self._print(f"Error: {e}")
-                return
-
-            pack_name = parts[2].strip().strip("/")
-            sample_name = parts[3].strip()
-            display_name = parts[4].strip() if len(parts) > 4 else None
+            pack_name = rest[2].strip().strip("/")
+            sample_name = rest[3].strip()
+            display_name = rest[4].strip() if len(rest) > 4 else None
 
             if not pack_name:
                 self._print("Error: pack name is required")
@@ -514,78 +580,13 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
                 self._print(f"Error: {e}")
                 return
 
-            self._print(f"  slot {parts[1]} = {slot.name}")
+            self._print(f"  slot {slot_num} = {slot.name}")
             self._print(f"  wav      : {slot.path}")
-            self._print(f"  route with: route <channel 1-16> {parts[1]}")
+            self._print(f"  route with: midi link <channel 1-16> {slot_num}")
             return
 
-        if mode == "fx":
-            parts = text.split(maxsplit=3)
-            if len(parts) < 3:
-                self._print("Usage: load fx [slot 1-8|master] <path|vst_name> [name]")
-                return
-            target = parts[1]
-            path_token = parts[2]
-            name = parts[3] if len(parts) > 3 else None
-            try:
-                slot_idx = None if target == "master" else _slot_to_internal(int(target))
-                path = self._resolve_vst_token(path_token)
-            except ValueError as e:
-                self._print(f"Error: {e}")
-                return
-            try:
-                self.host.load_effect(path, slot_idx, name)
-            except Exception as e:
-                self._print(f"Error: {e}")
-            return
-
-    def do_unload(self, arg):
-        """Unload instrument/effect: unload <slot 1-8> | unload fx <slot 1-8|master> <fx_index>"""
-        parts = arg.strip().split()
-        if not parts:
-            self._print("Usage: unload <slot 1-8> | unload fx <slot 1-8|master> <fx_index>")
-            return
-
-        if parts[0] == "fx":
-            if len(parts) < 3:
-                self._print("Usage: unload fx <slot 1-8|master> <fx_index>")
-                return
-            try:
-                slot_idx = None if parts[1] == "master" else _slot_to_internal(int(parts[1]))
-            except ValueError as e:
-                self._print(f"Error: {e}")
-                return
-            try:
-                fx_idx = int(parts[2]) - 1
-            except ValueError:
-                self._print("Error: fx_index must be a positive integer")
-                return
-            if fx_idx < 0:
-                self._print("Error: fx_index must be >= 1")
-                return
-            try:
-                self.host.remove_effect(slot_idx, fx_idx)
-                self._print("  Removed.")
-            except Exception as e:
-                self._print(f"Error: {e}")
-            return
-
-        if len(parts) != 1:
-            self._print("Usage: unload <slot 1-8> | unload fx <slot 1-8|master> <fx_index>")
-            return
-
-        try:
-            idx = _slot_to_internal(int(parts[0]))
-        except ValueError as e:
-            self._print(f"Error: {e}")
-            return
-
-        try:
-            removed = self.host.remove_instrument(idx)
-            self.host.refresh_mixer_leds([idx])
-            self._print(f"  slot {parts[0]} cleared ({removed.name})")
-        except Exception as e:
-            self._print(f"Error: {e}")
+        self._print(f"Error: unknown subcommand '{mode}'")
+        self._print(f"Usage: {self._slot_usage()}")
 
     def do_params(self, arg):
         """Show params: params <slot 1-8>  or  params master <fx_index>"""

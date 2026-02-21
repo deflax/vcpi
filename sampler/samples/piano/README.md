@@ -2,12 +2,12 @@
 
 Procedurally generated piano-style one-shots.
 
-These WAV files are intended for the `load wav` sampler command.
+These WAV files are intended for the `slot <n> wav` sampler command.
 
 Example:
 
 ```text
-vcpi> load wav 2 piano c4-soft
+vcpi> slot 2 wav piano c4-soft
 ```
 
 This resolves to `samples/piano/c4-soft.wav`.

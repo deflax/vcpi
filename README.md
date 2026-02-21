@@ -90,10 +90,11 @@ LOG_LEVEL=INFO ./vcsrv
 
 Full CLI and startup flag reference: `USAGE.md`
 
-Inside `./vcli`, press `Tab` to autocomplete command names. The `load`
-command has context-aware completion: `load vst` and `load fx` complete
-detected VST3 plugin names, `load wav` completes pack and sample names,
-and `load vcv` completes patch names. You do not need to type full paths.
+Inside `./vcli`, press `Tab` to autocomplete command names. The `slot`
+command has context-aware completion: `slot <n> vst` and `slot <n> fx`
+complete detected VST3 plugin names, `slot <n> wav` completes pack and
+sample names, and `slot <n> vcv` completes patch names. You do not need
+to type full paths.
 
 Inside the CLI, a typical first run is:
 
@@ -101,7 +102,7 @@ Inside the CLI, a typical first run is:
 deps
 midi ports input
 audio devices
-load vst 1 Dexed
+slot 1 vst Dexed
 midi input <index>
 midimix input <index>
 midi ports output
@@ -199,11 +200,11 @@ Cardinal + VCV patch quick load:
 
 ```text
 # place patch files under ./patches, e.g. ./patches/ambient.vcv
-vcpi> load vcv 1 ambient
+vcpi> slot 1 vcv ambient
 vcpi> midi link 1 1
 ```
 
-`load vcv` loads a fresh Cardinal instance into the slot you specify.
+`slot <n> vcv` loads a fresh Cardinal instance into the slot you specify.
 Routing remains explicit via `midi link <ch> <slot>`.
 
 Fetch bundled open-license VST3 plugins and load one:
@@ -218,7 +219,7 @@ Bundled plugins currently include Dexed, Surge XT, Odin 2, OB-Xf, Geonkick,
 JC-303, Firefly Synth 2 (+FX), and Dragonfly Reverb.
 
 ```text
-vcpi> load vst 1 Dexed         # Tab completes installed VST names
+vcpi> slot 1 vst Dexed         # Tab completes installed VST names
 vcpi> audio start
 vcpi> note 1 60 100 500
 ```
@@ -226,18 +227,18 @@ vcpi> note 1 60 100 500
 Full paths also work:
 
 ```text
-vcpi> load vst 1 /path/to/Synth.vst3 Lead
+vcpi> slot 1 vst /path/to/Synth.vst3 Lead
 ```
 
 Load a WAV sample into a slot and trigger it from MIDI routing:
 
 ```text
-vcpi> load wav 2 909 bassdrum
+vcpi> slot 2 wav 909 bassdrum
 vcpi> midi link 10 2
 vcpi> midi input 0
 ```
 
-`load wav` resolves to `sampler/samples/<pack>/<sample>.wav` (for example,
+`slot <n> wav` resolves to `sampler/samples/<pack>/<sample>.wav` (for example,
 `sampler/samples/909/bassdrum.wav`) and plays one-shot sample voices on note-on.
 You can include or omit the `.wav` extension in `<sample>`.
 
@@ -252,11 +253,11 @@ Built-in packs include drums (`808`, `909`) plus melodic/synth packs:
 Examples:
 
 ```text
-vcpi> load wav 1 piano c4-soft
-vcpi> load wav 2 organ c4-drawbar
-vcpi> load wav 3 strings c4-ensemble
-vcpi> load wav 4 synth-pads c4-warm
-vcpi> load wav 5 synth-leads c4-mono-saw
+vcpi> slot 1 wav piano c4-soft
+vcpi> slot 2 wav organ c4-drawbar
+vcpi> slot 3 wav strings c4-ensemble
+vcpi> slot 4 wav synth-pads c4-warm
+vcpi> slot 5 wav synth-leads c4-mono-saw
 ```
 
 Internal sequencer (bar-aligned with Ableton Link when enabled):
@@ -273,9 +274,9 @@ vcpi> seq                    # show all banks
 Typical multi-instrument setup:
 
 ```text
-vcpi> load vst 1 Dexed Lead
-vcpi> load vst 2 OB-Xf Bass
-vcpi> load vst 3 Geonkick Drums
+vcpi> slot 1 vst Dexed Lead
+vcpi> slot 2 vst OB-Xf Bass
+vcpi> slot 3 vst Geonkick Drums
 
 vcpi> midi link 1 1
 vcpi> midi link 2 2
@@ -284,7 +285,7 @@ vcpi> midi link 10 3
 vcpi> midi input 0
 vcpi> midi input 1
 vcpi> midimix input 2
-vcpi> load fx 1 DragonflyRoomReverb Reverb
+vcpi> slot 1 fx DragonflyRoomReverb Reverb
 vcpi> audio start
 vcpi> ableton link 120
 vcpi> status

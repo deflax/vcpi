@@ -1,11 +1,11 @@
 # 909 Sample Pack
 
-These WAV files are intended for the `load wav` sampler command.
+These WAV files are intended for the `slot <n> wav` sampler command.
 
 Example:
 
 ```text
-vcpi> load wav 2 909 bassdrum
+vcpi> slot 2 wav 909 bassdrum
 ```
 
 This resolves to `samples/909/bassdrum.wav`.
