@@ -1279,20 +1279,76 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
 
     # -- session -------------------------------------------------------------
 
+    def _sessions_root(self) -> Path:
+        """Return the sessions directory (CWD or repo root)."""
+        cwd_sessions = Path.cwd() / "sessions"
+        if cwd_sessions.exists() and cwd_sessions.is_dir():
+            return cwd_sessions
+        return self._repo_root() / "sessions"
+
+    def _resolve_session_path(self, name: str) -> Path:
+        """Resolve a session name to a full path in the sessions directory."""
+        if name.lower().endswith(".json"):
+            name = name[:-5]
+        return self._sessions_root() / f"{name}.json"
+
+    def _session_names(self) -> list[str]:
+        """List available session names for tab completion."""
+        root = self._sessions_root()
+        if not root.exists() or not root.is_dir():
+            return []
+        return sorted(
+            f.stem for f in root.glob("*.json")
+            if f.is_file() and not f.name.startswith(".")
+        )
+
+    def complete_save(self, text, line, begidx, endidx):
+        del endidx
+        return self._filter_prefix(self._session_names(), text)
+
+    def complete_load(self, text, line, begidx, endidx):
+        del endidx
+        return self._filter_prefix(self._session_names(), text)
+
     def do_save(self, arg):
-        """Save session: save [path]"""
-        path = arg.strip() or None
+        """Save session: save <name>
+
+        Saves the current session to sessions/<name>.json.
+        The automatic session at ~/.config/vcpi/session.json is only
+        written on shutdown.
+        """
+        name = arg.strip()
+        if not name:
+            self._print("Usage: save <name>")
+            return
+        path = self._resolve_session_path(name)
         try:
-            self.host.save_session(path)
+            self.host.save_session(str(path))
+            self._print(f"  Saved to {path}")
         except Exception as e:
             self._print(f"Error: {e}")
 
-    def do_restore(self, arg):
-        """Restore session: restore [path]"""
-        path = arg.strip() or None
+    def do_load(self, arg):
+        """Load session: load <name>
+
+        Loads from sessions/<name>.json and updates the active
+        session at ~/.config/vcpi/session.json so that shutdown
+        preserves the loaded state.
+        """
+        name = arg.strip()
+        if not name:
+            self._print("Usage: load <name>")
+            return
+        path = self._resolve_session_path(name)
+        if not path.exists():
+            self._print(f"Error: session not found: {path}")
+            return
         try:
-            self.host.restore_session(path)
+            self.host.restore_session(str(path))
             self.host.refresh_mixer_leds()
+            # Update the auto-save session so shutdown preserves this state.
+            self.host.save_session()
+            self._print(f"  Loaded from {path}")
         except Exception as e:
             self._print(f"Error: {e}")
 

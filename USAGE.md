@@ -256,8 +256,16 @@ All Ableton Link operations are subcommands of `ableton`:
 
 | Command | Description |
 |---|---|
-| `save [path]` | Save current session to JSON |
-| `restore [path]` | Restore session from JSON |
+| `save <name>` | Save current session to `sessions/<name>.json` |
+| `load <name>` | Load session from `sessions/<name>.json` |
+
+Sessions are saved to the `sessions/` directory in the repo root. Tab
+completion lists available session names.
+
+`save` always requires a name. The automatic session at
+`~/.config/vcpi/session.json` is only written on shutdown (not by the
+`save` command). `load` restores the named session and also updates the
+auto-save session so that shutdown preserves the loaded state.
 
 Saved/restored session state includes:
 

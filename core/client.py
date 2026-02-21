@@ -47,8 +47,8 @@ FALLBACK_COMMANDS = (
     "mute",
     "note",
     "params",
+    "load",
     "quit",
-    "restore",
     "save",
     "set",
     "shutdown",
@@ -172,6 +172,23 @@ def _vst_names() -> list[str]:
             if entry.suffix.lower() == ".vst3":
                 names.add(entry.stem)
     return sorted(names)
+
+
+def _sessions_root() -> Path:
+    cwd_sessions = Path.cwd() / "sessions"
+    if cwd_sessions.exists() and cwd_sessions.is_dir():
+        return cwd_sessions
+    return _repo_root() / "sessions"
+
+
+def _session_names() -> list[str]:
+    root = _sessions_root()
+    if not root.exists() or not root.is_dir():
+        return []
+    return sorted(
+        f.stem for f in root.glob("*.json")
+        if f.is_file() and not f.name.startswith(".")
+    )
 
 
 def _complete_slot_fx_args(text: str, prefix_tokens: list[str]) -> list[str]:
@@ -339,6 +356,8 @@ def _configure_tab_completion(command_names: list[str]):
             matches = _complete_slot_args(text, prefix_tokens)
         elif prefix_tokens[0] in ("info", "knobs"):
             matches = _complete_slot_fx_args(text, prefix_tokens)
+        elif prefix_tokens[0] in ("save", "load"):
+            matches = _filter_prefix(_session_names(), text)
         else:
             return None
 

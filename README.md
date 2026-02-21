@@ -61,6 +61,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
   graph/              # ASCII visualization renderers (signal flow, plugin info, knobs)
   vst3/               # Open-license VST3 plugins (run arch-specific fetch scripts)
   patches/            # VCV/Cardinal .vcv patch files
+  sessions/           # User-saved session files (save/load commands)
   main.py             # Top-level Python entry point
   vcsrv               # Server launcher (creates .venv on first run)
   vcli                # Client launcher (creates .venv on first run)
