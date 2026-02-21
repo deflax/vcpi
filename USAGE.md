@@ -78,7 +78,7 @@ VST3 plugin search and name resolution:
 Cardinal/VCV helpers:
 
 - `load vcv` looks for patch files in `patches/` by default.
-- `load vcv` does not auto-route channels; use `link <ch> <slot>` explicitly.
+- `load vcv` does not auto-route channels; use `midi link <ch> <slot>` explicitly.
 - Override patch directory with `VCPI_PATCHES_DIR`.
 - Override Cardinal plugin path with `CARDINAL_VST3_PATH`.
 
@@ -136,13 +136,6 @@ autocomplete command names. `load` also has context-aware argument completion:
 | `gain master [value]` | Get or set master gain |
 | `mute <slot>` | Toggle slot mute |
 | `solo <slot>` | Toggle slot solo |
-
-### Routing Commands
-
-| Command | Description |
-|---|---|
-| `link <ch> <slot>` | Route MIDI channel to slot |
-| `link_cut <ch>` | Remove MIDI channel route |
 | `flow` | Show full signal-flow diagram (all slots, FX chains, master bus) |
 
 ### Audio Commands
@@ -155,37 +148,41 @@ autocomplete command names. `load` also has context-aware argument completion:
 
 ### MIDI Commands
 
+All MIDI operations are subcommands of `midi`:
+
 | Command | Description |
 |---|---|
-| `midi_ports_in` | List MIDI input ports |
-| `midi_ports_out` | List MIDI output ports |
-| `midi_in <port_index>` | Open any MIDI input port |
-| `midi_in_close <index>` | Close a MIDI input by its position in the open list |
-| `midimix_in <port_index>` | Open Akai MIDI Mix input |
-| `midimix_out <port_index>` | Open Akai MIDI Mix output (LED feedback) |
+| `midi ports input` | List MIDI input ports |
+| `midi ports output` | List MIDI output ports |
+| `midi input <port>` | Open any MIDI input port |
+| `midi input close <index>` | Close a MIDI input by its position in the open list |
+| `midi link <ch> <slot>` | Route MIDI channel to slot |
+| `midi cut <ch>` | Remove MIDI channel route |
+| `midimix input <port>` | Open Akai MIDI Mix input |
+| `midimix output <port>` | Open Akai MIDI Mix output (LED feedback) |
 | `note <slot> <note> [vel] [dur_ms]` | Send test note to slot |
 
 Index discovery:
 
 ```text
-vcpi> midi_ports_in
+vcpi> midi ports input
   [0] Arturia BeatStep Pro MIDI 1
   [1] Novation 25 LE
   [2] MIDI Mix MIDI 1
 
-vcpi> midi_ports_out
+vcpi> midi ports output
   [0] MIDI Mix MIDI 1
 ```
 
-Use the numeric value in `[]` from `midi_ports_in` with `midi_in`
-and `midimix_in`. Use indexes from `midi_ports_out` with `midimix_out`.
+Use the numeric value in `[]` from `midi ports input` with `midi input`
+and `midimix input`. Use indexes from `midi ports output` with `midimix output`.
 Indexes may change after reboot or replug.
 
 You can open multiple MIDI inputs simultaneously. All MIDI inputs share the
-same channel routing table (`link <ch> <slot>`).
+same channel routing table (`midi link <ch> <slot>`).
 
-Important: `link <ch> <slot>` only maps MIDI channels internally. It does
-not open hardware ports; `midi_in` and `midimix_in` do.
+Important: `midi link <ch> <slot>` only maps MIDI channels internally. It does
+not open hardware ports; `midi input` and `midimix input` do.
 
 WAV sampler behavior:
 
@@ -217,9 +214,9 @@ a bank loop over one bar at the current tempo. Notes are evenly spaced:
 | `seq` | Show all sequence banks |
 | `seq <bank>` | Show a single bank |
 | `seq <bank> <note> [note ...]` | Set notes in a bank (e.g. `seq 1 d c b a`) |
-| `seq <bank> clear` | Clear a bank |
+| `seq clear <bank>` | Clear a bank |
 | `seq link <bank> <slot>` | Attach sequence bank to a slot (starts playback) |
-| `seq detach <slot>` | Remove all sequence links from a slot |
+| `seq cut <slot>` | Remove all sequence links from a slot |
 
 Note names are case-insensitive. Sharps (`C#`), flats (`Bb`), and octave
 suffixes (`C5`, `F#3`) are supported. Default octave is 4 (middle C).
@@ -232,8 +229,8 @@ vcpi> seq 2 c              # bank 2: just C4, plays once per bar
 vcpi> seq 3 C#5 Bb4 G4     # bank 3: 3 notes per bar
 vcpi> seq link 1 5          # play bank 1 through slot 5
 vcpi> seq link 2 3          # play bank 2 through slot 3
-vcpi> seq detach 5          # stop sequence on slot 5
-vcpi> seq 1 clear           # remove bank 1
+vcpi> seq cut 5             # stop sequence on slot 5
+vcpi> seq clear 1           # remove bank 1
 ```
 
 The sequencer follows the current BPM (set via `tempo` or Ableton Link).

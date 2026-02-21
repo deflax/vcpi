@@ -99,14 +99,14 @@ Inside the CLI, a typical first run is:
 
 ```text
 deps
-midi_ports_in
+midi ports input
 audio_devices
 load vst 1 Dexed
-midi_in <index>
-midimix_in <index>
-midi_ports_out
-midimix_out <index>
-link <ch> <slot>
+midi input <index>
+midimix input <index>
+midi ports output
+midimix output <index>
+midi link <ch> <slot>
 flow
 audio_start
 tempo 120
@@ -117,61 +117,61 @@ knobs 1
 
 ### Finding MIDI port indexes
 
-Use these commands to discover indexes used by `midi_in`,
-`midimix_in`, and `midimix_out`:
+Use these commands to discover indexes used by `midi input`,
+`midimix input`, and `midimix output`:
 
 ```text
-vcpi> midi_ports_in
+vcpi> midi ports input
   [0] Arturia BeatStep Pro MIDI 1
   [1] Novation 25 LE
   [2] MIDI Mix MIDI 1
 
-vcpi> midi_ports_out
+vcpi> midi ports output
   [0] MIDI Mix MIDI 1
 ```
 
 Use the number in brackets:
 
 ```text
-vcpi> midi_in 0
-vcpi> midi_in 1
-vcpi> midimix_in 2
-vcpi> midimix_out 0
+vcpi> midi input 0
+vcpi> midi input 1
+vcpi> midimix input 2
+vcpi> midimix output 0
 ```
 
-You can open any number of MIDI inputs. Use `midi_in_close <index>` to
+You can open any number of MIDI inputs. Use `midi input close <index>` to
 close one.
 
 Port indexes can change after reboot/replug, so always re-check with
-`midi_ports_in` and `midi_ports_out`.
+`midi ports input` and `midi ports output`.
 
 ## Controller Setup
 
 ### MIDI inputs (any keyboard, sequencer, etc.)
 
 All MIDI input devices are handled identically. Open any device with
-`midi_in <port_index>` and route its MIDI channels to slots:
+`midi input <port_index>` and route its MIDI channels to slots:
 
 ```text
-vcpi> midi_ports_in
-vcpi> midi_in 0          # e.g. BeatStep Pro
-vcpi> midi_in 1          # e.g. keyboard
-vcpi> link 1 1           # BSP ch 1 -> slot 1
-vcpi> link 2 2           # BSP ch 2 -> slot 2
-vcpi> link 10 3          # BSP ch 10 -> slot 3
-vcpi> link 5 1           # keyboard ch 5 -> slot 1
+vcpi> midi ports input
+vcpi> midi input 0       # e.g. BeatStep Pro
+vcpi> midi input 1       # e.g. keyboard
+vcpi> midi link 1 1      # BSP ch 1 -> slot 1
+vcpi> midi link 2 2      # BSP ch 2 -> slot 2
+vcpi> midi link 10 3     # BSP ch 10 -> slot 3
+vcpi> midi link 5 1      # keyboard ch 5 -> slot 1
 ```
 
 - There are no device-specific commands; every MIDI input is a peer.
-- Routing is channel-based: `link <ch> <slot>` maps a MIDI channel to a slot.
+- Routing is channel-based: `midi link <ch> <slot>` maps a MIDI channel to a slot.
 - Each device sends on its own channel(s); configure channels on the hardware.
-- Use `midi_in_close <index>` to close an open input.
+- Use `midi input close <index>` to close an open input.
 
 ### Akai MIDI Mix (hardware mixer)
 
 - MIDI Mix uses its own dedicated input port (separate from note routing).
-- Connect control input with `midimix_in <port_index>` (from `midi_ports_in`).
-- Optional LED feedback is via MIDI output with `midimix_out <port_index>` (from `midi_ports_out`).
+- Connect control input with `midimix input <port_index>` (from `midi ports input`).
+- Optional LED feedback is via MIDI output with `midimix output <port_index>` (from `midi ports output`).
 - Factory mapping is used by default:
   - Channel faders 1-8 -> slot gain
   - Master fader -> master gain
@@ -200,11 +200,11 @@ Cardinal + VCV patch quick load:
 ```text
 # place patch files under ./patches, e.g. ./patches/ambient.vcv
 vcpi> load vcv 1 ambient
-vcpi> link 1 1
+vcpi> midi link 1 1
 ```
 
 `load vcv` loads a fresh Cardinal instance into the slot you specify.
-Routing remains explicit via `link <ch> <slot>`.
+Routing remains explicit via `midi link <ch> <slot>`.
 
 Fetch bundled open-license VST3 plugins and load one:
 
@@ -233,8 +233,8 @@ Load a WAV sample into a slot and trigger it from MIDI routing:
 
 ```text
 vcpi> load wav 2 909 bassdrum
-vcpi> link 10 2
-vcpi> midi_in 0
+vcpi> midi link 10 2
+vcpi> midi input 0
 ```
 
 `load wav` resolves to `sampler/samples/<pack>/<sample>.wav` (for example,
@@ -266,7 +266,7 @@ vcpi> seq 1 d c b a          # define 4-note pattern in bank 1
 vcpi> seq 2 c                # single note in bank 2
 vcpi> seq link 1 5           # play bank 1 through slot 5
 vcpi> seq link 2 3           # play bank 2 through slot 3
-vcpi> seq detach 5           # stop sequence on slot 5
+vcpi> seq cut 5              # stop sequence on slot 5
 vcpi> seq                    # show all banks
 ```
 
@@ -277,13 +277,13 @@ vcpi> load vst 1 Dexed Lead
 vcpi> load vst 2 OB-Xf Bass
 vcpi> load vst 3 Geonkick Drums
 
-vcpi> link 1 1
-vcpi> link 2 2
-vcpi> link 10 3
+vcpi> midi link 1 1
+vcpi> midi link 2 2
+vcpi> midi link 10 3
 
-vcpi> midi_in 0
-vcpi> midi_in 1
-vcpi> midimix_in 2
+vcpi> midi input 0
+vcpi> midi input 1
+vcpi> midimix input 2
 vcpi> load fx 1 DragonflyRoomReverb Reverb
 vcpi> audio_start
 vcpi> ableton_link 120

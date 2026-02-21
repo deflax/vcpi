@@ -782,36 +782,7 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         self.host.refresh_mixer_leds([idx])
         self._print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
 
-    # -- routing -------------------------------------------------------------
-
-    def do_link(self, arg):
-        """Link MIDI channel to slot: link <ch 1-16> <slot 1-8>"""
-        parts = arg.strip().split()
-        if len(parts) < 2:
-            self._print("Usage: link <channel 1-16> <slot 1-8>")
-            return
-        try:
-            ch = _ch_to_internal(int(parts[0]))
-            idx = _slot_to_internal(int(parts[1]))
-        except ValueError as e:
-            self._print(f"Error: {e}")
-            return
-        self.host.route(ch, idx)
-        self._print(f"  ch {parts[0]} -> slot {parts[1]}")
-
-    def do_link_cut(self, arg):
-        """Unlink MIDI channel: link_cut <ch 1-16>"""
-        token = arg.strip()
-        if not token:
-            self._print("Usage: link_cut <channel 1-16>")
-            return
-        try:
-            ch = _ch_to_internal(int(token))
-        except ValueError as e:
-            self._print(f"Error: {e}")
-            return
-        self.host.unroute(ch)
-        self._print(f"  ch {token} unlinked")
+    # -- routing / MIDI ------------------------------------------------------
 
     def do_flow(self, arg):
         """Show full signal-flow diagram: flow"""
@@ -949,68 +920,145 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
         else:
             self._print("  sounddevice not installed")
 
-    # -- MIDI ports ----------------------------------------------------------
+    # -- MIDI (unified) ------------------------------------------------------
 
-    def do_midi_ports_in(self, arg):
-        """List MIDI input ports: midi_ports_in"""
-        ports = list_midi_input_ports()
-        if not ports:
-            self._print("  No MIDI input ports found.")
-            return
-        for i, name in enumerate(ports):
-            self._print(f"  [{i}] {name}")
+    def do_midi(self, arg):
+        """MIDI commands: midi ports input | midi ports output | midi input <port> | midi input close <index> | midi link <ch> <slot> | midi cut <ch>
 
-    def do_midi_ports_out(self, arg):
-        """List MIDI output ports: midi_ports_out"""
-        ports = list_midi_output_ports()
-        if not ports:
-            self._print("  No MIDI output ports found.")
+        Subcommands:
+          midi ports input       -- list MIDI input ports
+          midi ports output      -- list MIDI output ports
+          midi input <port>      -- open a MIDI input port
+          midi input close <idx> -- close a MIDI input by index
+          midi link <ch> <slot>  -- route MIDI channel to slot
+          midi cut <ch>          -- remove MIDI channel route
+        """
+        parts = arg.strip().split()
+        if not parts:
+            self._print(
+                "Usage: midi ports input | midi ports output | "
+                "midi input <port> | midi input close <index> | "
+                "midi link <ch> <slot> | midi cut <ch>"
+            )
             return
-        for i, name in enumerate(ports):
-            self._print(f"  [{i}] {name}")
 
-    def do_midi_in(self, arg):
-        """Open a MIDI input port: midi_in <port_index>"""
-        if not arg.strip():
-            self._print("Usage: midi_in <port_index>")
-            return
-        try:
-            ctrl = self.host.open_midi_input(arg.strip())
-            self._print(f"  Opened: {ctrl.port_name}")
-        except Exception as e:
-            self._print(f"Error: {e}")
+        sub = parts[0].lower()
 
-    def do_midi_in_close(self, arg):
-        """Close a MIDI input: midi_in_close <index 1-N>"""
-        if not arg.strip():
-            self._print("Usage: midi_in_close <index>")
+        # --- midi ports input / midi ports output ---------------------------
+        if sub == "ports":
+            if len(parts) < 2:
+                self._print("Usage: midi ports input | midi ports output")
+                return
+            direction = parts[1].lower()
+            if direction == "input":
+                ports = list_midi_input_ports()
+                if not ports:
+                    self._print("  No MIDI input ports found.")
+                    return
+                for i, name in enumerate(ports):
+                    self._print(f"  [{i}] {name}")
+            elif direction == "output":
+                ports = list_midi_output_ports()
+                if not ports:
+                    self._print("  No MIDI output ports found.")
+                    return
+                for i, name in enumerate(ports):
+                    self._print(f"  [{i}] {name}")
+            else:
+                self._print("Usage: midi ports input | midi ports output")
             return
-        try:
-            idx = int(arg.strip()) - 1
-            self.host.close_midi_input(idx)
-            self._print("  Closed.")
-        except Exception as e:
-            self._print(f"Error: {e}")
 
-    def do_midimix_in(self, arg):
-        """Open Akai MIDI Mix input: midimix_in <port_index>"""
-        if not arg.strip():
-            self._print("Usage: midimix_in <port_index>")
+        # --- midi input <port> / midi input close <index> -------------------
+        if sub == "input":
+            if len(parts) < 2:
+                self._print("Usage: midi input <port> | midi input close <index>")
+                return
+            if parts[1].lower() == "close":
+                if len(parts) < 3:
+                    self._print("Usage: midi input close <index>")
+                    return
+                try:
+                    idx = int(parts[2]) - 1
+                    self.host.close_midi_input(idx)
+                    self._print("  Closed.")
+                except Exception as e:
+                    self._print(f"Error: {e}")
+            else:
+                try:
+                    ctrl = self.host.open_midi_input(parts[1])
+                    self._print(f"  Opened: {ctrl.port_name}")
+                except Exception as e:
+                    self._print(f"Error: {e}")
             return
-        try:
-            self.host.open_mixer_midi(int(arg.strip()))
-        except Exception as e:
-            self._print(f"Error: {e}")
 
-    def do_midimix_out(self, arg):
-        """Open Akai MIDI Mix output (LED feedback): midimix_out <port_index>"""
-        if not arg.strip():
-            self._print("Usage: midimix_out <port_index>")
+        # --- midi link <ch> <slot> ------------------------------------------
+        if sub == "link":
+            if len(parts) < 3:
+                self._print("Usage: midi link <channel 1-16> <slot 1-8>")
+                return
+            try:
+                ch = _ch_to_internal(int(parts[1]))
+                idx = _slot_to_internal(int(parts[2]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+            self.host.route(ch, idx)
+            self._print(f"  ch {parts[1]} -> slot {parts[2]}")
             return
-        try:
-            self.host.open_mixer_midi_out(int(arg.strip()))
-        except Exception as e:
-            self._print(f"Error: {e}")
+
+        # --- midi cut <ch> --------------------------------------------------
+        if sub == "cut":
+            if len(parts) < 2:
+                self._print("Usage: midi cut <channel 1-16>")
+                return
+            try:
+                ch = _ch_to_internal(int(parts[1]))
+            except ValueError as e:
+                self._print(f"Error: {e}")
+                return
+            self.host.unroute(ch)
+            self._print(f"  ch {parts[1]} unlinked")
+            return
+
+        self._print(
+            "Unknown midi subcommand. Use: ports, input, link, cut"
+        )
+
+    def do_midimix(self, arg):
+        """Akai MIDI Mix: midimix input <port> | midimix output <port>
+
+        Subcommands:
+          midimix input <port>   -- open MIDI Mix control input
+          midimix output <port>  -- open MIDI Mix LED feedback output
+        """
+        parts = arg.strip().split()
+        if not parts:
+            self._print("Usage: midimix input <port> | midimix output <port>")
+            return
+
+        sub = parts[0].lower()
+
+        if sub == "input":
+            if len(parts) < 2:
+                self._print("Usage: midimix input <port_index>")
+                return
+            try:
+                self.host.open_mixer_midi(int(parts[1]))
+            except Exception as e:
+                self._print(f"Error: {e}")
+            return
+
+        if sub == "output":
+            if len(parts) < 2:
+                self._print("Usage: midimix output <port_index>")
+                return
+            try:
+                self.host.open_mixer_midi_out(int(parts[1]))
+            except Exception as e:
+                self._print(f"Error: {e}")
+            return
+
+        self._print("Usage: midimix input <port> | midimix output <port>")
 
     def do_note(self, arg):
         """Test note: note <slot 1-8> <midi_note> [vel] [dur_ms]"""
@@ -1039,16 +1087,16 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
     # -- sequencer -----------------------------------------------------------
 
     def do_seq(self, arg):
-        """Sequencer: seq | seq <bank> <notes...> | seq link <bank> <slot> | seq detach <slot> | seq <bank> clear
+        """Sequencer: seq | seq <bank> <notes...> | seq link <bank> <slot> | seq cut <slot> | seq clear <bank>
 
         Examples:
           seq                  -- show all sequence banks
           seq 1 d c b a        -- set bank 1 to D C B A (4 notes per bar)
           seq 1 c              -- set bank 1 to just C (1 note per bar)
           seq 3 C#5 Bb4        -- sharps/flats and octave suffixes work
-          seq 1 clear          -- clear bank 1
+          seq clear 1          -- clear bank 1
           seq link 1 5         -- attach sequence bank 1 to slot 5
-          seq detach 5         -- remove sequences from slot 5
+          seq cut 5            -- remove sequences from slot 5
         """
         parts = arg.strip().split()
 
@@ -1094,10 +1142,10 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
                 self._print(f"Error: {e}")
             return
 
-        # --- seq detach <slot> ----------------------------------------------
-        if parts[0].lower() == "detach":
+        # --- seq cut <slot> -------------------------------------------------
+        if parts[0].lower() == "cut":
             if len(parts) < 2:
-                self._print("Usage: seq detach <slot 1-8>")
+                self._print("Usage: seq cut <slot 1-8>")
                 return
             try:
                 si = _slot_to_internal(int(parts[1]))
@@ -1106,6 +1154,23 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
                 return
             self.host.sequencer.detach_slot(si)
             self._print(f"  slot {si + 1}: sequences detached")
+            return
+
+        # --- seq clear <bank> -----------------------------------------------
+        if parts[0].lower() == "clear":
+            if len(parts) < 2:
+                self._print(f"Usage: seq clear <bank 1-{NUM_SEQ_BANKS}>")
+                return
+            try:
+                bank_num = int(parts[1])
+                bi = bank_num - 1
+                if not 0 <= bi < NUM_SEQ_BANKS:
+                    raise ValueError
+            except ValueError:
+                self._print(f"Error: bank must be 1-{NUM_SEQ_BANKS}")
+                return
+            self.host.sequencer.clear_bank(bi)
+            self._print(f"  seq {bank_num}: cleared")
             return
 
         # --- remaining forms need a bank number as first arg ----------------
@@ -1130,12 +1195,6 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
                 else:
                     link_str = ""
                 self._print(f"  seq {bank_num}: {notes_str}{link_str}")
-            return
-
-        # seq <bank> clear
-        if len(parts) == 2 and parts[1].lower() == "clear":
-            self.host.sequencer.clear_bank(bi)
-            self._print(f"  seq {bank_num}: cleared")
             return
 
         # seq <bank> <note> [note ...]
