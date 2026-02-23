@@ -361,6 +361,7 @@ knobs master      # first master bus effect (index defaults to 1)
 
 | Command | Description |
 |---|---|
+| `about` | Print the vcpi logo and basic project info |
 | `status` | Print combined system status |
 | `deps` | Check optional dependency availability |
 | `shutdown` | Shut down the vcpi daemon process |

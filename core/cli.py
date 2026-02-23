@@ -22,6 +22,21 @@ from graph.knobs import render_knobs
 from graph.status import render_status
 
 
+VCPI_ASCII_LOGO = r"""
+                             ███
+                            ░░░
+ █████ █████  ██████  ████████  ████
+░░███ ░░███  ███░░███░░███░░███░░███
+ ░███  ░███ ░███ ░░░  ░███ ░███ ░███
+ ░░███ ███  ░███  ███ ░███ ░███ ░███
+  ░░█████   ░░██████  ░███████  █████
+   ░░░░░     ░░░░░░   ░███░░░  ░░░░░
+                      ░███
+                      █████
+                     ░░░░░
+""".strip("\n")
+
+
 def _slot_to_internal(user_slot: int) -> int:
     """Convert 1-based user slot to 0-based index, with validation."""
     if not 1 <= user_slot <= NUM_SLOTS:
@@ -37,21 +52,12 @@ def _ch_to_internal(user_ch: int) -> int:
 
 
 class HostCLI(cmd.Cmd):
-    intro = r"""
-                                 ███
-                                ░░░
- █████ █████  ██████  ████████  ████
-░░███ ░░███  ███░░███░░███░░███░░███
- ░███  ░███ ░███ ░░░  ░███ ░███ ░███
- ░░███ ███  ░███  ███ ░███ ░███ ░███
-  ░░█████   ░░██████  ░███████  █████
-   ░░░░░     ░░░░░░   ░███░░░  ░░░░░
-                      ░███
-                      █████
-                     ░░░░░
-Type 'help' for available commands.
-Slots are numbered 1-8.  MIDI channels are numbered 1-16.
-"""
+    intro = (
+        "\n"
+        f"{VCPI_ASCII_LOGO}\n"
+        "Type 'help' for available commands.\n"
+        "Slots are numbered 1-8.  MIDI channels are numbered 1-16."
+    )
     prompt = "vcpi> "
     SLOT_TYPES = ("vst", "wav", "vcv", "fx", "clear")
 
@@ -1362,6 +1368,17 @@ Slots are numbered 1-8.  MIDI channels are numbered 1-16.
             self._print(f"Error: {e}")
 
     # -- status --------------------------------------------------------------
+
+    def do_about(self, arg):
+        """Show vcpi logo and project info: about"""
+        if arg.strip():
+            self._print("Usage: about")
+            return
+
+        self._print(VCPI_ASCII_LOGO)
+        self._print()
+        self._print("vcpi - Python VST3 host with Ableton Link tempo sync")
+        self._print("License: GPL-3.0")
 
     def do_status(self, arg):
         """Overall status: status"""

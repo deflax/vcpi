@@ -33,6 +33,7 @@ HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # Fallback for tab completion in case help parsing fails.
 FALLBACK_COMMANDS = (
+    "about",
     "audio",
     "deps",
     "exit",
