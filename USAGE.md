@@ -136,13 +136,15 @@ client-side interval. It slows while the tab is hidden, skips polling during
 typed control updates, and keeps the Refresh button available for an immediate
 manual read. Loaded slot cards include an Unload action that calls the typed
 slot clear endpoint, an Info action that opens a read-only details panel from
-`/api/slots/<slot>/info`, a Params action that opens a read-only parameter
-inspector from `/api/slots/<slot>/params`, and an Audition control that sends one
-short test note to that loaded slot. The signal-flow panel displays the current
-ASCII mixer diagram returned by the read-only flow endpoint. The session field can suggest
-saved sessions from the picker, while manual safe-name entry remains supported.
-The audio-device picker uses the read-only device list and sends the selected
-value to `/api/audio/start` as `{"device": "name or index"}`. Tempo and Link
+`/api/slots/<slot>/info`, a Params action that opens a parameter inspector from
+`/api/slots/<slot>/params`, and an Audition control that sends one short test
+note to that loaded slot. The Params panel shows inline Apply controls only for
+supported numeric instrument parameters. The signal-flow panel displays the
+current ASCII mixer diagram returned by the read-only flow endpoint. The session
+field can suggest saved sessions from the picker, while manual safe-name entry
+remains supported. The audio-device picker uses the read-only device list and
+sends the selected value to `/api/audio/start` as `{"device": "name or index"}`.
+Tempo and Link
 browser controls call typed POST routes for BPM, Link start, and Link stop
 actions. MIDI browser controls call typed POST routes to map 1-based channels to
 1-based slots and to cut channel routes. The Audition control is only a
@@ -164,6 +166,7 @@ requirements.
 | `GET` | `/api/slots` | none | All 8 slots with slot number, loaded name, source type, routed MIDI channels, gain, mute, solo, and effect count |
 | `GET` | `/api/slots/<slot>/info` | none | Read-only slot diagnostics and plugin metadata for `<slot>` 1-8, returned as `{"ok": true, "slot": {...}, "instrument": {...}, "effects": [...], "rendered": "..."}`. Empty slots return `instrument: null`, an empty effects list, and a `message`. |
 | `GET` | `/api/slots/<slot>/params` | none | Read-only parameter metadata for a loaded slot, returned as `{"ok": true, "slot": {...}, "parameters": [...], "count": 3}`. Empty slots and invalid slot numbers are rejected. |
+| `POST` | `/api/slots/<slot>/params` | `{"name": "cutoff", "value": 0.42}` | Set one supported numeric instrument parameter on a loaded slot. Requires CSRF. |
 | `GET` | `/api/sessions` | none | Saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `GET` | `/api/audio/devices` | none | Output-capable audio devices for the browser picker, returned as `{"ok": true, "available": true, "current": "Built-in Output", "default_device": 1, "devices": [{"id": 1, "name": "Built-in Output", "output_channels": 2, "default": true, "selected": true}]}` |
 | `GET` | `/api/flow` | none | Current ASCII signal-flow diagram for the browser diagnostics panel, returned as `{"ok": true, "flow": "..."}` |
@@ -217,9 +220,15 @@ system-default option available. `GET /api/flow` returns the same current ASCII
 signal-flow diagram shown by the CLI `flow` command. `GET /api/slots/<slot>/info`
 is diagnostics only for the browser Info panel. `GET /api/slots/<slot>/params`
 powers the Params UI with names, values, units, and safe range metadata for an
-already-loaded plugin. It does not edit parameters, set MIDI Mix mappings, load
-plugins, or change slot state. Starting audio still uses a state-changing POST
-and must include the CSRF token, even when the device value came from the picker.
+already-loaded plugin. It remains read-only and does not change slot state.
+Starting audio still uses a state-changing POST and must include the CSRF token,
+even when the device value came from the picker.
+
+`POST /api/slots/<slot>/params` is state-changing and requires the CSRF token.
+It only edits instrument parameters on an already-loaded slot. Payload names
+must exactly match supported parameter names, and values must be finite JSON
+numbers. Boolean, string, enum, FX, and master parameters are not supported.
+When metadata provides numeric minimum or maximum values, the range is enforced.
 
 Read-only requests can be called directly:
 
@@ -253,6 +262,11 @@ curl -X POST http://127.0.0.1:8765/api/slots/1/mute \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"toggle": true}'
+
+curl -X POST http://127.0.0.1:8765/api/slots/1/params \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"name": "cutoff", "value": 0.42}'
 
 curl -X POST http://127.0.0.1:8765/api/tempo \
   -H "Content-Type: application/json" \
