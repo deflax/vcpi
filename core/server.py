@@ -332,6 +332,8 @@ class VcpiServer:
                 return self._sessions_payload()
             case "audio.devices":
                 return self._audio_devices_payload()
+            case "flow":
+                return {"ok": True, "flow": self._flow_payload()}
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -599,6 +601,13 @@ class VcpiServer:
         if slot is None:
             raise _JsonOperationError(f"slot {idx + 1} is empty")
         return slot
+
+    def _flow_payload(self) -> str:
+        buf = io.StringIO()
+        cli = HostCLI(self.host, stdout=buf, owns_host=False)
+        cli.use_rawinput = False
+        _ = cli.onecmd("flow")
+        return buf.getvalue().rstrip("\n")
 
     def _status_payload(self) -> dict[str, Any]:
         routing = {str(ch + 1): slot_idx + 1 for ch, slot_idx in sorted(self.host.channel_map.items())}

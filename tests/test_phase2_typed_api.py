@@ -32,6 +32,7 @@ class FakeSlot:
     def __init__(self, name: str = "Dexed", source_type: str = "vst") -> None:
         self.name: str = name
         self.path: str = "/plugins/Dexed.vst3"
+        self.plugin: SimpleNamespace = SimpleNamespace(name=name)
         self.display_label: str = name
         self.source_type: str = source_type
         self.vcv_patch_path: str | None = None
@@ -58,6 +59,9 @@ class FakeEngine:
 
     def stop(self) -> None:
         self.running = False
+
+    def any_solo(self) -> bool:
+        return any(slot.solo for slot in self.slots if slot is not None)
 
 
 class FakeHost:
@@ -216,6 +220,20 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertEqual(result["current"], "Built-in Output")
         self.assertIsNone(result["default_device"])
         self.assertEqual(result["devices"], [])
+
+    def test_json_flow_returns_current_ascii_signal_flow(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        result = daemon._handle_json_operation("flow", {})
+
+        self.assertTrue(result["ok"])
+        self.assertIsInstance(result["flow"], str)
+        self.assertIn("vcpi Signal Flow", result["flow"])
+        self.assertIn("Dexed -> Room", result["flow"])
+        self.assertIn("Master", result["flow"])
 
     def test_json_slot_mutations_validate_gain_and_toggle(self) -> None:
         if server is None:
@@ -691,6 +709,27 @@ class WebSafetyTests(unittest.TestCase):
 
         execute_json_operation.assert_called_once_with(
             "audio.devices",
+            {},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_flow_route_maps_to_read_only_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/flow"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "flow": "vcpi Signal Flow\n"}
+
+        with mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_GET()
+
+        execute_json_operation.assert_called_once_with(
+            "flow",
             {},
             Path("/tmp/vcpi.sock"),
             daemon_timeout=1.0,

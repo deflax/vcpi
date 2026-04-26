@@ -478,6 +478,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_json_get("sessions")
         elif path == "/api/audio/devices":
             self._handle_json_get("audio.devices")
+        elif path == "/api/flow":
+            self._handle_json_get("flow")
         else:
             _send_json(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
