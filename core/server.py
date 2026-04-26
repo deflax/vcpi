@@ -41,6 +41,8 @@ from core.paths import DEFAULT_SOCK_PATH
 END_OF_RESPONSE = "\x00"
 JSON_REQUEST_PREFIX = "__vcpi_json__ "
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+MIN_BPM = 20.0
+MAX_BPM = 300.0
 
 
 logger = logging.getLogger(__name__)
@@ -334,6 +336,17 @@ class VcpiServer:
             case "audio.stop":
                 self.host.stop_audio()
                 return {"ok": True, "status": self._status_payload()}
+            case "tempo.set":
+                bpm = self._bpm_from_payload(payload)
+                self.host.link.bpm = bpm
+                return {"ok": True, "status": self._status_payload()}
+            case "link.start":
+                bpm = self._optional_bpm_from_payload(payload)
+                self.host.start_link(bpm)
+                return {"ok": True, "status": self._status_payload()}
+            case "link.stop":
+                self.host.stop_link()
+                return {"ok": True, "status": self._status_payload()}
             case "slot.gain":
                 idx = self._slot_index_from_payload(payload)
                 gain = self._gain_from_payload(payload)
@@ -395,6 +408,22 @@ class VcpiServer:
         if not 0.0 <= gain <= 1.0:
             raise _JsonOperationError("gain must be between 0.0 and 1.0")
         return gain
+
+    @staticmethod
+    def _bpm_from_payload(payload: dict[str, Any]) -> float:
+        value = payload.get("bpm")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise _JsonOperationError(f"bpm must be a number between {MIN_BPM:.1f} and {MAX_BPM:.1f}")
+        bpm = float(value)
+        if not MIN_BPM <= bpm <= MAX_BPM:
+            raise _JsonOperationError(f"bpm must be between {MIN_BPM:.1f} and {MAX_BPM:.1f}")
+        return bpm
+
+    @classmethod
+    def _optional_bpm_from_payload(cls, payload: dict[str, Any]) -> float | None:
+        if "bpm" not in payload or payload["bpm"] is None:
+            return None
+        return cls._bpm_from_payload(payload)
 
     @staticmethod
     def _bool_from_payload(payload: dict[str, Any], key: str, default: bool) -> bool:

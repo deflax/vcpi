@@ -79,6 +79,8 @@ class FakeHost:
         self.save_calls: list[str | None] = []
         self.restore_calls: list[str | None] = []
         self.removed_slots: list[int] = []
+        self.start_link_calls: list[float | None] = []
+        self.stop_link_calls: int = 0
 
     def start_audio(self, output_device: object | None = None) -> None:
         self.started_with = output_device
@@ -103,6 +105,16 @@ class FakeHost:
             raise ValueError(f"Slot {idx + 1} is already empty")
         self.engine.slots[idx] = None
         return slot
+
+    def start_link(self, bpm: float | None = None) -> None:
+        self.start_link_calls.append(bpm)
+        if bpm is not None:
+            self.link.bpm = bpm
+        self.link.enabled = True
+
+    def stop_link(self) -> None:
+        self.stop_link_calls += 1
+        self.link.enabled = False
 
 
 class TypedDaemonApiContractTests(unittest.TestCase):
@@ -245,6 +257,72 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         response = json.loads(daemon._run_json_request('{"op":"master.gain","payload":{"gain":"loud"}}', "test"))
         self.assertFalse(response["ok"])
         self.assertEqual(response["status"], 400)
+
+    def test_json_tempo_set_updates_bpm_and_rejects_invalid_values(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("tempo.set", {"bpm": 128})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.link.bpm, 128.0)
+        self.assertEqual(result["status"]["link"]["bpm"], 128.0)
+        invalid_payloads = [
+            {"bpm": "fast"},
+            {"bpm": True},
+            {"bpm": 19.99},
+            {"bpm": 300.01},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                with self.assertRaises(server._JsonOperationError):
+                    daemon._handle_json_operation("tempo.set", payload)
+
+    def test_json_link_start_accepts_optional_bpm_and_stop_disables_link(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        start_default = daemon._handle_json_operation("link.start", {})
+        start_with_bpm = daemon._handle_json_operation("link.start", {"bpm": 132.5})
+        stop = daemon._handle_json_operation("link.stop", {})
+
+        self.assertTrue(start_default["ok"])
+        self.assertTrue(start_with_bpm["ok"])
+        self.assertTrue(stop["ok"])
+        self.assertEqual(host.start_link_calls, [None, 132.5])
+        self.assertEqual(host.stop_link_calls, 1)
+        self.assertFalse(host.link.enabled)
+        self.assertEqual(start_with_bpm["status"]["link"]["bpm"], 132.5)
+        self.assertFalse(stop["status"]["link"]["enabled"])
+
+    def test_json_link_start_rejects_invalid_bpm_values(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+        invalid_payloads = [
+            {"bpm": "fast"},
+            {"bpm": False},
+            {"bpm": 19.99},
+            {"bpm": 300.01},
+        ]
+
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "link.start", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
 
     def test_json_session_save_with_name_updates_loaded_session(self) -> None:
         if server is None:
@@ -413,6 +491,113 @@ class WebSafetyTests(unittest.TestCase):
         self.assertEqual(unload_match.group(2), "unload")
         with self.assertRaises(ValueError):
             web.VcpiWebHandler._validate_slot_number(bad_slot_match.group(1))
+
+    def test_typed_web_bpm_validation_accepts_numeric_range(self) -> None:
+        web.VcpiWebHandler._validate_bpm_payload({"bpm": 20.0}, required=True)
+        web.VcpiWebHandler._validate_bpm_payload({"bpm": 300}, required=True)
+        web.VcpiWebHandler._validate_bpm_payload({}, required=False)
+        with self.assertRaises(ValueError):
+            web.VcpiWebHandler._validate_bpm_payload({"bpm": "fast"}, required=True)
+        with self.assertRaises(ValueError):
+            web.VcpiWebHandler._validate_bpm_payload({"bpm": True}, required=True)
+        with self.assertRaises(ValueError):
+            web.VcpiWebHandler._validate_bpm_payload({"bpm": 19.99}, required=True)
+        with self.assertRaises(ValueError):
+            web.VcpiWebHandler._validate_bpm_payload({"bpm": 300.01}, required=True)
+
+    def test_typed_web_tempo_route_maps_to_tempo_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/tempo"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "status": {"link": {"bpm": 128.0}}}
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"bpm": 128},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "tempo.set",
+            {"bpm": 128},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_link_routes_map_to_link_operations(self) -> None:
+        cases = [
+            ("/api/link/start", {"bpm": 126.5}, "link.start", {"bpm": 126.5}),
+            ("/api/link/start", {}, "link.start", {}),
+            ("/api/link/stop", {}, "link.stop", {}),
+        ]
+
+        for path, body, operation, expected_payload in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+                payload: dict[str, object] = {"ok": True, "status": {"link": {"enabled": path.endswith("start")}}}
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_validate_post_security",
+                    return_value=None,
+                ), mock.patch.object(
+                    web,
+                    "execute_json_operation",
+                    return_value=SimpleNamespace(payload=payload),
+                ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_called_once_with(
+                    operation,
+                    expected_payload,
+                    Path("/tmp/vcpi.sock"),
+                    daemon_timeout=1.0,
+                )
+                send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_tempo_and_link_routes_reject_invalid_bpm(self) -> None:
+        cases = [
+            ("/api/tempo", {"bpm": "fast"}),
+            ("/api/link/start", {"bpm": True}),
+            ("/api/link/start", {"bpm": 19.99}),
+            ("/api/tempo", {"bpm": 300.01}),
+        ]
+
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
 
     def test_typed_web_sessions_route_maps_to_sessions_operation(self) -> None:
         handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)

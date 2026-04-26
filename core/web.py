@@ -36,6 +36,8 @@ HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload)$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
+MIN_BPM = 20.0
+MAX_BPM = 300.0
 
 logger = logging.getLogger(__name__)
 
@@ -485,6 +487,12 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_audio_start()
         elif path == "/api/audio/stop":
             self._handle_json_post("audio.stop", {})
+        elif path == "/api/tempo":
+            self._handle_tempo_set()
+        elif path == "/api/link/start":
+            self._handle_link_start()
+        elif path == "/api/link/stop":
+            self._handle_json_post("link.stop", {})
         elif path == "/api/master/gain":
             self._handle_master_gain()
         elif path == "/api/session/save":
@@ -655,6 +663,30 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             )
             return
         self._handle_json_post("audio.start", payload)
+
+    def _handle_tempo_set(self) -> None:
+        try:
+            payload = self._read_secure_optional_json_body()
+            if payload is None:
+                return
+            self._validate_bpm_payload(payload)
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("tempo.set", payload)
+
+    def _handle_link_start(self) -> None:
+        try:
+            payload = self._read_secure_optional_json_body()
+            if payload is None:
+                return
+            self._validate_bpm_payload(payload, required=False)
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("link.start", payload)
 
     def _handle_master_gain(self) -> None:
         try:
@@ -846,6 +878,18 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             raise ValueError("gain must be a number between 0.0 and 1.0")
         if not 0.0 <= float(gain) <= 1.0:
             raise ValueError("gain must be between 0.0 and 1.0")
+
+    @staticmethod
+    def _validate_bpm_payload(payload: dict[str, object], *, required: bool = True) -> None:
+        bpm = payload.get("bpm")
+        if bpm is None:
+            if required:
+                raise ValueError(f"bpm must be a number between {MIN_BPM:.1f} and {MAX_BPM:.1f}")
+            return
+        if isinstance(bpm, bool) or not isinstance(bpm, (int, float)):
+            raise ValueError(f"bpm must be a number between {MIN_BPM:.1f} and {MAX_BPM:.1f}")
+        if not MIN_BPM <= float(bpm) <= MAX_BPM:
+            raise ValueError(f"bpm must be between {MIN_BPM:.1f} and {MAX_BPM:.1f}")
 
     @staticmethod
     def _validate_optional_bool_payload(payload: dict[str, object], key: str) -> None:
