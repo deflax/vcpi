@@ -500,6 +500,10 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_link_start()
         elif path == "/api/link/stop":
             self._handle_json_post("link.stop", {})
+        elif path == "/api/midi/link":
+            self._handle_midi_link()
+        elif path == "/api/midi/cut":
+            self._handle_midi_cut()
         elif path == "/api/master/gain":
             self._handle_master_gain()
         elif path == "/api/session/save":
@@ -709,6 +713,31 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
 
         self._handle_json_post("link.start", payload)
 
+    def _handle_midi_link(self) -> None:
+        try:
+            payload = self._read_secure_optional_json_body()
+            if payload is None:
+                return
+            self._validate_midi_channel_payload(payload)
+            self._validate_midi_slot_payload(payload)
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("midi.link", payload)
+
+    def _handle_midi_cut(self) -> None:
+        try:
+            payload = self._read_secure_optional_json_body()
+            if payload is None:
+                return
+            self._validate_midi_channel_payload(payload)
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("midi.cut", payload)
+
     def _handle_master_gain(self) -> None:
         try:
             payload = self._read_secure_optional_json_body()
@@ -911,6 +940,22 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             raise ValueError(f"bpm must be a number between {MIN_BPM:.1f} and {MAX_BPM:.1f}")
         if not MIN_BPM <= float(bpm) <= MAX_BPM:
             raise ValueError(f"bpm must be between {MIN_BPM:.1f} and {MAX_BPM:.1f}")
+
+    @staticmethod
+    def _validate_midi_channel_payload(payload: dict[str, object]) -> None:
+        channel = payload.get("channel")
+        if isinstance(channel, bool) or not isinstance(channel, int):
+            raise ValueError("channel must be an integer 1-16")
+        if not 1 <= channel <= 16:
+            raise ValueError("channel must be 1-16")
+
+    @staticmethod
+    def _validate_midi_slot_payload(payload: dict[str, object]) -> None:
+        slot = payload.get("slot")
+        if isinstance(slot, bool) or not isinstance(slot, int):
+            raise ValueError("slot must be an integer 1-8")
+        if not 1 <= slot <= 8:
+            raise ValueError("slot must be 1-8")
 
     @staticmethod
     def _validate_optional_bool_payload(payload: dict[str, object], key: str) -> None:

@@ -120,6 +120,26 @@ class FakeHost:
         self.stop_link_calls += 1
         self.link.enabled = False
 
+    def route(self, midi_channel: int, slot_index: int) -> None:
+        previous = self.channel_map.get(midi_channel)
+        if previous is not None and previous != slot_index:
+            previous_slot = self.engine.slots[previous]
+            if previous_slot is not None:
+                previous_slot.midi_channels.discard(midi_channel)
+        self.channel_map[midi_channel] = slot_index
+        self.engine.routes[midi_channel + 1] = slot_index
+        slot = self.engine.slots[slot_index]
+        if slot is not None:
+            slot.midi_channels.add(midi_channel)
+
+    def unroute(self, midi_channel: int) -> None:
+        previous = self.channel_map.pop(midi_channel, None)
+        self.engine.routes.pop(midi_channel + 1, None)
+        if previous is not None:
+            previous_slot = self.engine.slots[previous]
+            if previous_slot is not None:
+                previous_slot.midi_channels.discard(midi_channel)
+
 
 class TypedDaemonApiContractTests(unittest.TestCase):
     def test_daemon_preserves_main_thread_command_queue(self) -> None:
@@ -462,6 +482,113 @@ class TypedDaemonApiContractTests(unittest.TestCase):
                 self.assertFalse(response["ok"])
                 self.assertEqual(response["status"], 400)
 
+    def test_json_midi_link_routes_channel_to_loaded_slot(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("midi.link", {"channel": 2, "slot": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.channel_map[1], 0)
+        self.assertEqual(result["route"], {"channel": 2, "slot": 1})
+        self.assertEqual(result["status"]["midi"]["routing"], {"1": 1, "2": 1, "10": 1})
+        self.assertEqual(result["slots"][0]["midi_channels"], [1, 2, 10])
+
+    def test_json_midi_link_allows_route_to_empty_slot(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("midi.link", {"channel": 3, "slot": 2})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.channel_map[2], 1)
+        self.assertFalse(result["slots"][1]["loaded"])
+        self.assertEqual(result["slots"][1]["midi_channels"], [3])
+
+    def test_json_midi_link_reroutes_previous_assignment(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        host.engine.slots[1] = FakeSlot("Surge")
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("midi.link", {"channel": 1, "slot": 2})
+
+        slot_one = host.engine.slots[0]
+        slot_two = host.engine.slots[1]
+        if slot_one is None or slot_two is None:
+            self.fail("FakeHost slots 1 and 2 should be loaded")
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.channel_map[0], 1)
+        self.assertNotIn(0, slot_one.midi_channels)
+        self.assertIn(0, slot_two.midi_channels)
+        self.assertEqual(result["status"]["midi"]["routing"]["1"], 2)
+
+    def test_json_midi_cut_removes_routed_channel(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("midi.cut", {"channel": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["route"], {"channel": 1, "slot": None})
+        self.assertNotIn(0, host.channel_map)
+        self.assertEqual(result["status"]["midi"]["routing"], {"10": 1})
+        self.assertEqual(result["slots"][0]["midi_channels"], [10])
+
+    def test_json_midi_cut_unrouted_channel_is_noop(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        result = daemon._handle_json_operation("midi.cut", {"channel": 16})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["route"], {"channel": 16, "slot": None})
+        self.assertEqual(result["status"]["midi"]["routing"], {"1": 1, "10": 1})
+
+    def test_json_midi_link_and_cut_reject_invalid_channel_and_slot_payloads(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+        cases = [
+            ("midi.link", {"channel": 0, "slot": 1}),
+            ("midi.link", {"channel": 17, "slot": 1}),
+            ("midi.link", {"channel": "1", "slot": 1}),
+            ("midi.link", {"channel": True, "slot": 1}),
+            ("midi.link", {"channel": 1, "slot": 0}),
+            ("midi.link", {"channel": 1, "slot": 9}),
+            ("midi.link", {"channel": 1, "slot": "1"}),
+            ("midi.link", {"channel": 1, "slot": False}),
+            ("midi.cut", {"channel": 0}),
+            ("midi.cut", {"channel": 17}),
+            ("midi.cut", {"channel": "1"}),
+            ("midi.cut", {"channel": True}),
+        ]
+
+        for operation, payload in cases:
+            with self.subTest(operation=operation, payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": operation, "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+
     def test_json_session_save_with_name_updates_loaded_session(self) -> None:
         if server is None:
             self.skipTest("core.server import needs optional native dependencies in this checkout")
@@ -715,6 +842,78 @@ class WebSafetyTests(unittest.TestCase):
             ("/api/link/start", {"bpm": True}),
             ("/api/link/start", {"bpm": 19.99}),
             ("/api/tempo", {"bpm": 300.01}),
+        ]
+
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_midi_routes_map_to_midi_operations(self) -> None:
+        cases = [
+            ("/api/midi/link", {"channel": 2, "slot": 3}, "midi.link", {"channel": 2, "slot": 3}),
+            ("/api/midi/cut", {"channel": 10}, "midi.cut", {"channel": 10}),
+        ]
+
+        for path, body, operation, expected_payload in cases:
+            with self.subTest(path=path):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+                payload: dict[str, object] = {"ok": True, "route": {"channel": body["channel"]}}
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_validate_post_security",
+                    return_value=None,
+                ), mock.patch.object(
+                    web,
+                    "execute_json_operation",
+                    return_value=SimpleNamespace(payload=payload),
+                ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_called_once_with(
+                    operation,
+                    expected_payload,
+                    Path("/tmp/vcpi.sock"),
+                    daemon_timeout=1.0,
+                )
+                send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_midi_routes_reject_invalid_payload_before_daemon(self) -> None:
+        cases = [
+            ("/api/midi/link", {"channel": 0, "slot": 1}),
+            ("/api/midi/link", {"channel": 17, "slot": 1}),
+            ("/api/midi/link", {"channel": "1", "slot": 1}),
+            ("/api/midi/link", {"channel": True, "slot": 1}),
+            ("/api/midi/link", {"channel": 1, "slot": 0}),
+            ("/api/midi/link", {"channel": 1, "slot": 9}),
+            ("/api/midi/link", {"channel": 1, "slot": "1"}),
+            ("/api/midi/link", {"channel": 1, "slot": False}),
+            ("/api/midi/cut", {"channel": 0}),
+            ("/api/midi/cut", {"channel": 17}),
+            ("/api/midi/cut", {"channel": "1"}),
+            ("/api/midi/cut", {"channel": True}),
         ]
 
         for path, body in cases:

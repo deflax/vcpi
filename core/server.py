@@ -356,6 +356,25 @@ class VcpiServer:
             case "link.stop":
                 self.host.stop_link()
                 return {"ok": True, "status": self._status_payload()}
+            case "midi.link":
+                channel = self._midi_channel_from_payload(payload)
+                idx = self._slot_index_from_payload(payload)
+                self.host.route(channel - 1, idx)
+                return {
+                    "ok": True,
+                    "route": {"channel": channel, "slot": idx + 1},
+                    "status": self._status_payload(),
+                    "slots": self._slots_payload(),
+                }
+            case "midi.cut":
+                channel = self._midi_channel_from_payload(payload)
+                self.host.unroute(channel - 1)
+                return {
+                    "ok": True,
+                    "route": {"channel": channel, "slot": None},
+                    "status": self._status_payload(),
+                    "slots": self._slots_payload(),
+                }
             case "slot.gain":
                 idx = self._slot_index_from_payload(payload)
                 gain = self._gain_from_payload(payload)
@@ -407,6 +426,15 @@ class VcpiServer:
         if not 1 <= value <= NUM_SLOTS:
             raise _JsonOperationError(f"slot must be 1-{NUM_SLOTS}")
         return value - 1
+
+    @staticmethod
+    def _midi_channel_from_payload(payload: dict[str, Any]) -> int:
+        value = payload.get("channel")
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise _JsonOperationError("channel must be an integer 1-16")
+        if not 1 <= value <= 16:
+            raise _JsonOperationError("channel must be 1-16")
+        return value
 
     @staticmethod
     def _gain_from_payload(payload: dict[str, Any]) -> float:
