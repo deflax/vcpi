@@ -36,7 +36,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLOT_READ_RE = re.compile(r"^/api/slots/([^/]+)/(info|params)$")
-SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload|note|params)$")
+SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload|note|params|wav)$")
 SLOT_FX_CLEAR_RE = re.compile(r"^/api/slots/([^/]+)/fx/([^/]+)/clear$")
 MASTER_FX_PARAMS_RE = re.compile(r"^/api/master/fx/([^/]+)/params$")
 MASTER_FX_CLEAR_RE = re.compile(r"^/api/master/fx/([^/]+)/clear$")
@@ -48,6 +48,7 @@ DEFAULT_NOTE_DURATION_MS = 300
 MIN_NOTE_DURATION_MS = 1
 MAX_NOTE_DURATION_MS = 5000
 MAX_PARAMETER_NAME_LENGTH = 256
+MAX_SAMPLE_DISPLAY_NAME_LENGTH = 128
 
 logger = logging.getLogger(__name__)
 
@@ -484,6 +485,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_json_get("status")
         elif path == "/api/slots":
             self._handle_json_get("slots")
+        elif path == "/api/samples":
+            self._handle_json_get("samples")
         elif path == "/api/sessions":
             self._handle_json_get("sessions")
         elif path == "/api/audio/devices":
@@ -871,7 +874,7 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
     def _handle_slot_action(self, path: str) -> None:
         match = SLOT_ACTION_RE.fullmatch(path)
         if match is None:
-            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot route must be /api/slots/{1-8}/{gain|mute|solo|clear|unload|note|params}"})
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot route must be /api/slots/{1-8}/{gain|mute|solo|clear|unload|note|params|wav}"})
             return
 
         try:
@@ -880,6 +883,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             if body is None:
                 return
             action = match.group(2)
+            if action == "wav" and "slot" in body:
+                raise ValueError("slot WAV payload must contain only pack, sample, and optional name")
             payload = dict(body)
             payload["slot"] = slot
             if action == "params":
@@ -897,6 +902,9 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             elif action == "note":
                 self._validate_note_payload(payload)
                 operation = "slot.note"
+            elif action == "wav":
+                self._validate_wav_load_payload(payload)
+                operation = "slot.wav.load"
             else:
                 operation = f"slot.{action}"
         except json.JSONDecodeError as exc:
@@ -1140,6 +1148,43 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             MAX_NOTE_DURATION_MS,
             default=DEFAULT_NOTE_DURATION_MS,
         )
+
+    @staticmethod
+    def _safe_sample_segment(raw_value: object, key: str) -> str:
+        if not isinstance(raw_value, str):
+            raise ValueError(f"{key} must be a string")
+        value = raw_value.strip()
+        if not value:
+            raise ValueError(f"{key} must not be empty")
+        if ".." in value:
+            raise ValueError(f"{key} must not contain '..'")
+        if any(separator in value for separator in ("/", "\\")):
+            raise ValueError(f"{key} must not contain path separators")
+        if Path(value).is_absolute():
+            raise ValueError(f"{key} must not be an absolute path")
+        return value
+
+    @classmethod
+    def _validate_wav_load_payload(cls, payload: dict[str, object]) -> None:
+        body_keys = set(payload) - {"slot"}
+        if not body_keys.issubset({"pack", "sample", "name"}):
+            raise ValueError("slot WAV payload must contain only pack, sample, and optional name")
+
+        pack = cls._safe_sample_segment(payload.get("pack"), "pack")
+        sample = cls._safe_sample_segment(payload.get("sample"), "sample")
+        if sample.lower().endswith(".wav"):
+            sample = sample[:-4].strip()
+            if not sample:
+                raise ValueError("sample must not be empty")
+
+        payload["pack"] = pack
+        payload["sample"] = sample
+
+        if "name" in payload:
+            name = cls._safe_sample_segment(payload.get("name"), "name")
+            if len(name) > MAX_SAMPLE_DISPLAY_NAME_LENGTH:
+                raise ValueError(f"name must be at most {MAX_SAMPLE_DISPLAY_NAME_LENGTH} characters")
+            payload["name"] = name
 
     @staticmethod
     def _validate_slot_param_payload(payload: dict[str, object]) -> None:

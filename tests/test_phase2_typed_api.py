@@ -29,9 +29,15 @@ except ModuleNotFoundError:
 
 
 class FakeSlot:
-    def __init__(self, name: str = "Dexed", source_type: str = "vst") -> None:
+    def __init__(
+        self,
+        name: str = "Dexed",
+        source_type: str = "vst",
+        path: str = "/plugins/Dexed.vst3",
+        effects: list[SimpleNamespace] | None = None,
+    ) -> None:
         self.name: str = name
-        self.path: str = "/plugins/Dexed.vst3"
+        self.path: str = path
         self.plugin: SimpleNamespace = SimpleNamespace(
             name=name,
             cutoff=0.42,
@@ -50,7 +56,7 @@ class FakeSlot:
         self.solo: bool = True
         self.enabled: bool = True
         self.midi_channels: set[int] = set()
-        self.effects: list[SimpleNamespace] = [
+        self.effects: list[SimpleNamespace] = effects if effects is not None else [
             SimpleNamespace(
                 name="Room",
                 mix=0.25,
@@ -118,6 +124,7 @@ class FakeHost:
         self.start_link_calls: list[float | None] = []
         self.stop_link_calls: int = 0
         self.sent_notes: list[tuple[int, int, int, float]] = []
+        self.loaded_wavs: list[tuple[int, str, str | None]] = []
 
     def start_audio(self, output_device: object | None = None) -> None:
         self.started_with = output_device
@@ -151,6 +158,17 @@ class FakeHost:
         if slot is None:
             raise ValueError(f"Slot {slot_index + 1} is empty")
         return slot.effects.pop(effect_index)
+
+    def load_wav(self, slot_index: int, wav_path: str, name: str | None = None) -> FakeSlot:
+        self.loaded_wavs.append((slot_index, wav_path, name))
+        slot = FakeSlot(
+            name=name or Path(wav_path).stem,
+            source_type="wav",
+            path=wav_path,
+            effects=[],
+        )
+        self.engine.slots[slot_index] = slot
+        return slot
 
     def start_link(self, bpm: float | None = None) -> None:
         self.start_link_calls.append(bpm)
@@ -286,6 +304,108 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertEqual(result["current"], "Built-in Output")
         self.assertIsNone(result["default_device"])
         self.assertEqual(result["devices"], [])
+
+    def test_json_samples_lists_safe_builtin_wav_catalog(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+        with tempfile.TemporaryDirectory() as tmp:
+            samples_root = Path(tmp) / "sampler" / "samples"
+            pack_root = samples_root / "808"
+            pack_root.mkdir(parents=True)
+            _ = (pack_root / "kick.wav").write_bytes(b"")
+            _ = (pack_root / "snare.txt").write_text("not a wav")
+            hidden_root = samples_root / ".hidden"
+            hidden_root.mkdir()
+            _ = (hidden_root / "secret.wav").write_bytes(b"")
+            daemon._samples_root = lambda: samples_root
+
+            result = daemon._handle_json_operation("samples", {})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["packs"],
+            [{"name": "808", "samples": [{"name": "kick", "filename": "kick.wav"}]}],
+        )
+        self.assertEqual(result["samples"], {"808": ["kick"]})
+
+    def test_json_slot_wav_load_loads_catalog_sample_and_returns_updated_state(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        with tempfile.TemporaryDirectory() as tmp:
+            samples_root = Path(tmp) / "sampler" / "samples"
+            pack_root = samples_root / "808"
+            pack_root.mkdir(parents=True)
+            sample_path = pack_root / "kick.wav"
+            _ = sample_path.write_bytes(b"")
+            daemon._samples_root = lambda: samples_root
+
+            result = daemon._handle_json_operation(
+                "slot.wav.load",
+                {"slot": 2, "pack": "808", "sample": "kick", "name": "Kick"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.loaded_wavs, [(1, str(sample_path), "Kick")])
+        self.assertEqual(result["slot"]["slot"], 2)
+        self.assertEqual(result["slot"]["name"], "Kick")
+        self.assertEqual(result["slot"]["source_type"], "wav")
+        self.assertEqual(result["slot"]["path"], str(sample_path))
+        self.assertEqual(result["slots"][1]["source_type"], "wav")
+        self.assertEqual(result["status"]["slots_loaded"], 2)
+
+    def test_json_slot_wav_load_rejects_invalid_inputs_before_mutation(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        cases = [
+            ({"slot": 2, "pack": "808", "sample": "kick", "extra": True}, 400, "only slot"),
+            ({"slot": 0, "pack": "808", "sample": "kick"}, 400, "slot must be 1-8"),
+            ({"slot": 9, "pack": "808", "sample": "kick"}, 400, "slot must be 1-8"),
+            ({"slot": "2", "pack": "808", "sample": "kick"}, 400, "slot must be an integer"),
+            ({"slot": True, "pack": "808", "sample": "kick"}, 400, "slot must be an integer"),
+            ({"slot": 2, "pack": "", "sample": "kick"}, 400, "pack must not be empty"),
+            ({"slot": 2, "pack": 808, "sample": "kick"}, 400, "pack must be a string"),
+            ({"slot": 2, "pack": "../808", "sample": "kick"}, 400, "pack must not contain '..'"),
+            ({"slot": 2, "pack": "/tmp", "sample": "kick"}, 400, "pack must not contain path separators"),
+            ({"slot": 2, "pack": "80/8", "sample": "kick"}, 400, "pack must not contain path separators"),
+            ({"slot": 2, "pack": "808", "sample": ""}, 400, "sample must not be empty"),
+            ({"slot": 2, "pack": "808", "sample": 123}, 400, "sample must be a string"),
+            ({"slot": 2, "pack": "808", "sample": "../kick"}, 400, "sample must not contain '..'"),
+            ({"slot": 2, "pack": "808", "sample": "drums/kick"}, 400, "sample must not contain path separators"),
+            ({"slot": 2, "pack": "808", "sample": "kick", "name": ""}, 400, "name must not be empty"),
+            ({"slot": 2, "pack": "808", "sample": "kick", "name": 123}, 400, "name must be a string"),
+            ({"slot": 2, "pack": "808", "sample": "kick", "name": "Bad/Name"}, 400, "name must not contain path separators"),
+            ({"slot": 2, "pack": "909", "sample": "kick"}, 404, "sample pack not found"),
+            ({"slot": 2, "pack": "808", "sample": "snare"}, 404, "sample not found"),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            samples_root = Path(tmp) / "sampler" / "samples"
+            pack_root = samples_root / "808"
+            pack_root.mkdir(parents=True)
+            _ = (pack_root / "kick.wav").write_bytes(b"")
+
+            for payload, status, message in cases:
+                with self.subTest(payload=payload):
+                    host = FakeHost()
+                    daemon = server.VcpiServer(host)
+                    daemon._samples_root = lambda: samples_root
+                    response = json.loads(
+                        daemon._run_json_request(
+                            json.dumps({"op": "slot.wav.load", "payload": payload}),
+                            "test",
+                        )
+                    )
+                    self.assertFalse(response["ok"])
+                    self.assertEqual(response["status"], status)
+                    self.assertIn(message, response["error"])
+                    self.assertEqual(host.loaded_wavs, [])
+                    self.assertIsNone(host.engine.slots[1])
 
     def test_json_flow_returns_current_ascii_signal_flow(self) -> None:
         if server is None:
@@ -1341,6 +1461,7 @@ class WebSafetyTests(unittest.TestCase):
         unload_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/8/unload")
         note_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/4/note")
         params_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/3/params")
+        wav_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/2/wav")
         fx_clear_match = web.SLOT_FX_CLEAR_RE.fullmatch("/api/slots/1/fx/2/clear")
         bad_slot_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/9/clear")
 
@@ -1356,6 +1477,9 @@ class WebSafetyTests(unittest.TestCase):
         self.assertIsNotNone(params_match)
         self.assertEqual(params_match.group(1), "3")
         self.assertEqual(params_match.group(2), "params")
+        self.assertIsNotNone(wav_match)
+        self.assertEqual(wav_match.group(1), "2")
+        self.assertEqual(wav_match.group(2), "wav")
         self.assertIsNotNone(fx_clear_match)
         self.assertEqual(fx_clear_match.group(1), "1")
         self.assertEqual(fx_clear_match.group(2), "2")
@@ -1388,6 +1512,34 @@ class WebSafetyTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     web.VcpiWebHandler._validate_note_payload(value)
+
+    def test_typed_web_wav_load_validation_accepts_safe_catalog_payload(self) -> None:
+        payload: dict[str, object] = {"slot": 2, "pack": " 808 ", "sample": " kick.wav ", "name": " Kick "}
+
+        web.VcpiWebHandler._validate_wav_load_payload(payload)
+
+        self.assertEqual(payload, {"slot": 2, "pack": "808", "sample": "kick", "name": "Kick"})
+
+    def test_typed_web_wav_load_validation_rejects_invalid_payloads(self) -> None:
+        invalid_payloads = [
+            {"slot": 2, "pack": "808", "sample": "kick", "extra": True},
+            {"slot": 2, "pack": "", "sample": "kick"},
+            {"slot": 2, "pack": 808, "sample": "kick"},
+            {"slot": 2, "pack": "../808", "sample": "kick"},
+            {"slot": 2, "pack": "/tmp", "sample": "kick"},
+            {"slot": 2, "pack": "80/8", "sample": "kick"},
+            {"slot": 2, "pack": "808", "sample": ""},
+            {"slot": 2, "pack": "808", "sample": 123},
+            {"slot": 2, "pack": "808", "sample": "../kick"},
+            {"slot": 2, "pack": "808", "sample": "drums/kick"},
+            {"slot": 2, "pack": "808", "sample": "kick", "name": ""},
+            {"slot": 2, "pack": "808", "sample": "kick", "name": 123},
+            {"slot": 2, "pack": "808", "sample": "kick", "name": "Bad/Name"},
+        ]
+        for value in invalid_payloads:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    web.VcpiWebHandler._validate_wav_load_payload(value)
 
     def test_typed_web_slot_param_validation_accepts_numeric_payload(self) -> None:
         payload: dict[str, object] = {"name": " cutoff ", "value": 0.75}
@@ -1638,6 +1790,88 @@ class WebSafetyTests(unittest.TestCase):
         )
         send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
 
+    def test_typed_web_slot_wav_route_maps_to_load_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/2/wav"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "slot": {"slot": 2, "source_type": "wav"}}
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"pack": "808", "sample": " kick.wav ", "name": " Kick "},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "slot.wav.load",
+            {"pack": "808", "sample": "kick", "name": "Kick", "slot": 2},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_slot_wav_rejects_invalid_payload_before_daemon(self) -> None:
+        cases = [
+            ("/api/slots/9/wav", {"pack": "808", "sample": "kick"}),
+            ("/api/slots/1/wav", {"slot": 1, "pack": "808", "sample": "kick"}),
+            ("/api/slots/1/wav", {"pack": "808", "sample": "kick", "extra": True}),
+            ("/api/slots/1/wav", {"pack": "", "sample": "kick"}),
+            ("/api/slots/1/wav", {"pack": "80/8", "sample": "kick"}),
+            ("/api/slots/1/wav", {"pack": "808", "sample": "../kick"}),
+            ("/api/slots/1/wav", {"pack": "808", "sample": "kick", "name": "Bad/Name"}),
+        ]
+
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_slot_wav_requires_csrf(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/wav"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            side_effect=PermissionError("missing or invalid CSRF token"),
+        ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+            web,
+            "_send_json",
+        ) as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_not_called()
+        send_json.assert_called_once_with(
+            handler,
+            web.HTTPStatus.FORBIDDEN,
+            {"ok": False, "error": "missing or invalid CSRF token"},
+        )
+
     def test_typed_web_slot_note_rejects_invalid_payload_before_daemon(self) -> None:
         cases = [
             ("/api/slots/9/note", {"note": 60}),
@@ -1734,6 +1968,27 @@ class WebSafetyTests(unittest.TestCase):
 
         execute_json_operation.assert_called_once_with(
             "flow",
+            {},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_samples_route_maps_to_read_only_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/samples"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "packs": [], "samples": {}}
+
+        with mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_GET()
+
+        execute_json_operation.assert_called_once_with(
+            "samples",
             {},
             Path("/tmp/vcpi.sock"),
             daemon_timeout=1.0,

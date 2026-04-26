@@ -52,6 +52,8 @@ MIN_NOTE_DURATION_MS = 1
 MAX_NOTE_DURATION_MS = 5000
 MAX_SLOT_PARAMETERS = 512
 MAX_PARAMETER_STRING_LENGTH = 256
+MAX_SAMPLE_DISPLAY_NAME_LENGTH = 128
+SAMPLES_ROOT = Path(__file__).resolve().parent.parent / "sampler" / "samples"
 
 
 logger = logging.getLogger(__name__)
@@ -336,6 +338,8 @@ class VcpiServer:
                 return {"ok": True, "status": self._status_payload()}
             case "slots":
                 return {"ok": True, "slots": self._slots_payload()}
+            case "samples":
+                return self._samples_payload()
             case "sessions":
                 return self._sessions_payload()
             case "audio.devices":
@@ -430,6 +434,17 @@ class VcpiServer:
                         "duration_ms": duration_ms,
                     },
                 }
+            case "slot.wav.load":
+                self._require_payload_keys(
+                    payload,
+                    {"slot", "pack", "sample", "name"},
+                    "slot.wav.load payload must contain only slot, pack, sample, and optional name",
+                )
+                idx = self._slot_index_from_payload(payload)
+                pack = self._sample_catalog_segment_from_payload(payload, "pack")
+                sample = self._sample_name_from_payload(payload)
+                name = self._optional_sample_display_name_from_payload(payload)
+                return self._slot_wav_load_payload(idx, pack, sample, name)
             case "master.gain":
                 gain = self._gain_from_payload(payload)
                 self.host.engine.master_gain = gain
@@ -607,6 +622,48 @@ class VcpiServer:
         return numeric_value
 
     @staticmethod
+    def _require_payload_keys(payload: dict[str, Any], allowed: set[str], message: str) -> None:
+        if not set(payload).issubset(allowed):
+            raise _JsonOperationError(message)
+
+    @staticmethod
+    def _safe_catalog_segment(raw_value: object, key: str) -> str:
+        if not isinstance(raw_value, str):
+            raise _JsonOperationError(f"{key} must be a string")
+        value = raw_value.strip()
+        if not value:
+            raise _JsonOperationError(f"{key} must not be empty")
+        if ".." in value:
+            raise _JsonOperationError(f"{key} must not contain '..'")
+        if any(separator in value for separator in ("/", "\\")):
+            raise _JsonOperationError(f"{key} must not contain path separators")
+        if Path(value).is_absolute():
+            raise _JsonOperationError(f"{key} must not be an absolute path")
+        return value
+
+    @classmethod
+    def _sample_catalog_segment_from_payload(cls, payload: dict[str, Any], key: str) -> str:
+        return cls._safe_catalog_segment(payload.get(key), key)
+
+    @classmethod
+    def _sample_name_from_payload(cls, payload: dict[str, Any]) -> str:
+        sample = cls._sample_catalog_segment_from_payload(payload, "sample")
+        if sample.lower().endswith(".wav"):
+            sample = sample[:-4].strip()
+            if not sample:
+                raise _JsonOperationError("sample must not be empty")
+        return sample
+
+    @classmethod
+    def _optional_sample_display_name_from_payload(cls, payload: dict[str, Any]) -> str | None:
+        if "name" not in payload:
+            return None
+        name = cls._safe_catalog_segment(payload.get("name"), "name")
+        if len(name) > MAX_SAMPLE_DISPLAY_NAME_LENGTH:
+            raise _JsonOperationError(f"name must be at most {MAX_SAMPLE_DISPLAY_NAME_LENGTH} characters")
+        return name
+
+    @staticmethod
     def _parameter_target_from_payload(payload: dict[str, Any], slot: InstrumentSlot) -> tuple[str, int | None]:
         target = payload.get("target", "instrument")
         if target == "instrument":
@@ -674,6 +731,9 @@ class VcpiServer:
     def _session_cli(self) -> HostCLI:
         return HostCLI(self.host, stdout=io.StringIO(), owns_host=False)
 
+    def _samples_root(self) -> Path:
+        return SAMPLES_ROOT.resolve()
+
     def _sessions_root(self) -> Path:
         root = self._session_cli()._sessions_root().expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
@@ -686,6 +746,15 @@ class VcpiServer:
             resolved.relative_to(root)
         except ValueError as exc:
             raise _JsonOperationError("session path must stay inside the session directory") from exc
+        return resolved
+
+    @staticmethod
+    def _require_sample_path_within_root(path: Path, root: Path) -> Path:
+        resolved = path.expanduser().resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise _JsonOperationError("sample path must stay inside the sample directory") from exc
         return resolved
 
     def _session_path_for_name(self, name: str) -> Path:
@@ -1002,6 +1071,64 @@ class VcpiServer:
                 "effect": effect_idx + 1,
                 "name": removed_name,
             },
+            "status": status,
+        }
+
+    def _samples_payload(self) -> dict[str, Any]:
+        root = self._samples_root()
+        packs: list[dict[str, Any]] = []
+        samples_by_pack: dict[str, list[str]] = {}
+        if root.exists() and root.is_dir():
+            for pack_dir in sorted(root.iterdir(), key=lambda path: path.name.lower()):
+                if not pack_dir.is_dir() or pack_dir.name.startswith("."):
+                    continue
+                try:
+                    pack_name = self._safe_catalog_segment(pack_dir.name, "pack")
+                    safe_pack_dir = self._require_sample_path_within_root(pack_dir, root)
+                except _JsonOperationError:
+                    continue
+
+                sample_entries: list[dict[str, str]] = []
+                for wav_file in sorted(safe_pack_dir.glob("*.wav"), key=lambda path: path.name.lower()):
+                    if not wav_file.is_file():
+                        continue
+                    try:
+                        safe_wav_file = self._require_sample_path_within_root(wav_file, root)
+                        sample_name = self._safe_catalog_segment(safe_wav_file.stem, "sample")
+                    except _JsonOperationError:
+                        continue
+                    sample_entries.append({"name": sample_name, "filename": safe_wav_file.name})
+
+                sample_names = [entry["name"] for entry in sample_entries]
+                packs.append({"name": pack_name, "samples": sample_entries})
+                samples_by_pack[pack_name] = sample_names
+        return {"ok": True, "packs": packs, "samples": samples_by_pack}
+
+    def _sample_file_path(self, pack: str, sample: str) -> Path:
+        root = self._samples_root()
+        pack_dir = self._require_sample_path_within_root(root / pack, root)
+        if not pack_dir.exists() or not pack_dir.is_dir():
+            raise _JsonOperationError(f"sample pack not found: {pack}", status=404)
+
+        sample_path = self._require_sample_path_within_root(pack_dir / f"{sample}.wav", root)
+        if not sample_path.exists() or not sample_path.is_file():
+            raise _JsonOperationError(f"sample not found: {pack}/{sample}", status=404)
+        return sample_path
+
+    def _slot_wav_load_payload(
+        self,
+        idx: int,
+        pack: str,
+        sample: str,
+        name: str | None,
+    ) -> dict[str, Any]:
+        sample_path = self._sample_file_path(pack, sample)
+        self.host.load_wav(idx, str(sample_path), name)
+        status = self._status_payload()
+        return {
+            "ok": True,
+            "slot": self._slot_payload(idx, self.host.engine.slots[idx]),
+            "slots": self._slots_payload(),
             "status": status,
         }
 
