@@ -355,6 +355,11 @@ class VcpiServer:
                 name = self._parameter_name_from_payload(payload)
                 value = self._parameter_value_from_payload(payload)
                 return self._slot_param_set_payload(idx, slot, target, name, value)
+            case "slot.fx.clear":
+                idx = self._slot_index_from_payload(payload)
+                slot = self._loaded_slot(idx)
+                effect_idx = self._slot_effect_index_from_payload(payload, slot)
+                return self._slot_fx_clear_payload(idx, slot, effect_idx)
             case "master.fx.params":
                 effect_idx = self._master_effect_index_from_payload(payload)
                 return self._master_fx_params_payload(effect_idx)
@@ -363,6 +368,9 @@ class VcpiServer:
                 name = self._parameter_name_from_payload(payload)
                 value = self._parameter_value_from_payload(payload)
                 return self._master_fx_param_set_payload(effect_idx, name, value)
+            case "master.fx.clear":
+                effect_idx = self._master_effect_index_from_payload(payload)
+                return self._master_fx_clear_payload(effect_idx)
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -606,6 +614,10 @@ class VcpiServer:
         if target != "effect":
             raise _JsonOperationError("target must be 'instrument' or 'effect'")
 
+        return "effect", VcpiServer._slot_effect_index_from_payload(payload, slot)
+
+    @staticmethod
+    def _slot_effect_index_from_payload(payload: dict[str, Any], slot: InstrumentSlot) -> int:
         effect_index = payload.get("effect")
         if isinstance(effect_index, bool) or not isinstance(effect_index, int):
             raise _JsonOperationError("effect must be an integer 1-N")
@@ -617,7 +629,7 @@ class VcpiServer:
             effect_count = 0
         if not 1 <= effect_index <= effect_count:
             raise _JsonOperationError("effect index is out of range")
-        return "effect", effect_index - 1
+        return effect_index - 1
 
     def _master_effect_index_from_payload(self, payload: dict[str, Any]) -> int:
         effect_index = payload.get("effect")
@@ -918,6 +930,26 @@ class VcpiServer:
         refreshed["parameter"] = refreshed_parameter
         return refreshed
 
+    def _slot_fx_clear_payload(self, idx: int, slot: InstrumentSlot, effect_idx: int) -> dict[str, Any]:
+        effect = slot.effects[effect_idx]
+        removed_name = self._safe_plugin_attr(effect, "name", type(effect).__name__)
+
+        self.host.remove_effect(idx, effect_idx)
+
+        status = self._status_payload()
+        return {
+            "ok": True,
+            "removed": {
+                "kind": "effect",
+                "slot": idx + 1,
+                "effect": effect_idx + 1,
+                "name": removed_name,
+            },
+            "slot": self._slot_payload(idx, self.host.engine.slots[idx]),
+            "status": status,
+            "slots": self._slots_payload(),
+        }
+
     def _master_fx_params_payload(self, effect_idx: int) -> dict[str, Any]:
         effect = self.host.engine.master_effects[effect_idx]
         effect_payload = self._plugin_params_group_payload(
@@ -955,6 +987,23 @@ class VcpiServer:
             refreshed_parameter["value"] = value
         refreshed["parameter"] = refreshed_parameter
         return refreshed
+
+    def _master_fx_clear_payload(self, effect_idx: int) -> dict[str, Any]:
+        effect = self.host.engine.master_effects[effect_idx]
+        removed_name = self._safe_plugin_attr(effect, "name", type(effect).__name__)
+
+        self.host.remove_effect(None, effect_idx)
+
+        status = self._status_payload()
+        return {
+            "ok": True,
+            "removed": {
+                "kind": "master_effect",
+                "effect": effect_idx + 1,
+                "name": removed_name,
+            },
+            "status": status,
+        }
 
     @staticmethod
     def _find_parameter_payload(parameters: object, name: str) -> dict[str, Any] | None:

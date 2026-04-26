@@ -37,7 +37,9 @@ HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLOT_READ_RE = re.compile(r"^/api/slots/([^/]+)/(info|params)$")
 SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload|note|params)$")
+SLOT_FX_CLEAR_RE = re.compile(r"^/api/slots/([^/]+)/fx/([^/]+)/clear$")
 MASTER_FX_PARAMS_RE = re.compile(r"^/api/master/fx/([^/]+)/params$")
+MASTER_FX_CLEAR_RE = re.compile(r"^/api/master/fx/([^/]+)/clear$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 MIN_BPM = 20.0
 MAX_BPM = 300.0
@@ -516,11 +518,13 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
         elif path == "/api/master/gain":
             self._handle_master_gain()
         elif path.startswith("/api/master/fx/"):
-            self._handle_master_fx_params_post(path)
+            self._handle_master_fx_post(path)
         elif path == "/api/session/save":
             self._handle_session_save()
         elif path == "/api/session/load":
             self._handle_session_load()
+        elif path.startswith("/api/slots/") and "/fx/" in path:
+            self._handle_slot_fx_clear_post(path)
         elif path.startswith("/api/slots/"):
             self._handle_slot_action(path)
         else:
@@ -804,6 +808,37 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
 
         self._handle_json_post("master.fx.param.set", payload)
 
+    def _handle_master_fx_post(self, path: str) -> None:
+        if MASTER_FX_CLEAR_RE.fullmatch(path) is not None:
+            self._handle_master_fx_clear_post(path)
+            return
+        self._handle_master_fx_params_post(path)
+
+    def _handle_master_fx_clear_post(self, path: str) -> None:
+        match = MASTER_FX_CLEAR_RE.fullmatch(path)
+        if match is None:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "master FX clear route must be /api/master/fx/{1-N}/clear"})
+            return
+
+        try:
+            effect = self._validate_effect_number(match.group(1))
+            body = self._read_secure_optional_json_body()
+            if body is None:
+                return
+            self._validate_empty_payload(body, "master FX clear payload must be empty")
+            payload: dict[str, object] = {"effect": effect}
+        except json.JSONDecodeError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        except PermissionError as exc:
+            _send_json(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("master.fx.clear", payload)
+
     def _handle_session_save(self) -> None:
         payload = self._read_secure_optional_json_body()
         if payload is None:
@@ -875,6 +910,32 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             return
 
         self._handle_json_post(operation, payload)
+
+    def _handle_slot_fx_clear_post(self, path: str) -> None:
+        match = SLOT_FX_CLEAR_RE.fullmatch(path)
+        if match is None:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot FX clear route must be /api/slots/{1-8}/fx/{1-N}/clear"})
+            return
+
+        try:
+            slot = self._validate_slot_number(match.group(1))
+            effect = self._validate_effect_number(match.group(2))
+            body = self._read_secure_optional_json_body()
+            if body is None:
+                return
+            self._validate_empty_payload(body, "slot FX clear payload must be empty")
+            payload: dict[str, object] = {"slot": slot, "effect": effect}
+        except json.JSONDecodeError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        except PermissionError as exc:
+            _send_json(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("slot.fx.clear", payload)
 
     def _validate_post_security(self) -> None:
         content_type = self.headers.get("Content-Type", "")
@@ -990,6 +1051,11 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
         if effect < 1:
             raise ValueError("effect must be >= 1")
         return effect
+
+    @staticmethod
+    def _validate_empty_payload(payload: dict[str, object], message: str) -> None:
+        if payload:
+            raise ValueError(message)
 
     @staticmethod
     def _validate_gain_payload(payload: dict[str, object]) -> None:

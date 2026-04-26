@@ -114,6 +114,7 @@ class FakeHost:
         self.save_calls: list[str | None] = []
         self.restore_calls: list[str | None] = []
         self.removed_slots: list[int] = []
+        self.removed_effects: list[tuple[int | None, int]] = []
         self.start_link_calls: list[float | None] = []
         self.stop_link_calls: int = 0
         self.sent_notes: list[tuple[int, int, int, float]] = []
@@ -141,6 +142,15 @@ class FakeHost:
             raise ValueError(f"Slot {idx + 1} is already empty")
         self.engine.slots[idx] = None
         return slot
+
+    def remove_effect(self, slot_index: int | None, effect_index: int) -> SimpleNamespace:
+        self.removed_effects.append((slot_index, effect_index))
+        if slot_index is None:
+            return self.engine.master_effects.pop(effect_index)
+        slot = self.engine.slots[slot_index]
+        if slot is None:
+            raise ValueError(f"Slot {slot_index + 1} is empty")
+        return slot.effects.pop(effect_index)
 
     def start_link(self, bpm: float | None = None) -> None:
         self.start_link_calls.append(bpm)
@@ -633,6 +643,60 @@ class TypedDaemonApiContractTests(unittest.TestCase):
                 self.assertEqual(slot.plugin.cutoff, 0.42)
                 self.assertEqual(host.engine.param_changes, [])
 
+    def test_json_slot_fx_clear_removes_loaded_slot_effect_and_returns_updated_state(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("slot.fx.clear", {"slot": 1, "effect": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.removed_effects, [(0, 0)])
+        self.assertEqual(result["removed"], {"kind": "effect", "slot": 1, "effect": 1, "name": "Room"})
+        self.assertEqual(result["slot"]["slot"], 1)
+        self.assertEqual(result["slot"]["effects"], 0)
+        self.assertEqual(result["slots"][0]["effects"], 0)
+        self.assertEqual(result["status"]["slots_loaded"], 1)
+
+    def test_json_slot_fx_clear_rejects_invalid_payloads_before_mutation(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        cases = [
+            ({"effect": 1}, "slot must be an integer"),
+            ({"slot": 0, "effect": 1}, "slot must be 1-8"),
+            ({"slot": 9, "effect": 1}, "slot must be 1-8"),
+            ({"slot": "1", "effect": 1}, "slot must be an integer"),
+            ({"slot": True, "effect": 1}, "slot must be an integer"),
+            ({"slot": 1}, "effect must be an integer"),
+            ({"slot": 1, "effect": "1"}, "effect must be an integer"),
+            ({"slot": 1, "effect": True}, "effect must be an integer"),
+            ({"slot": 1, "effect": 0}, "effect index is out of range"),
+            ({"slot": 1, "effect": 2}, "effect index is out of range"),
+            ({"slot": 2, "effect": 1}, "slot 2 is empty"),
+        ]
+
+        for payload, message in cases:
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "slot.fx.clear", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertIn(message, response["error"])
+                self.assertEqual(host.removed_effects, [])
+                slot = host.engine.slots[0]
+                if slot is None:
+                    self.fail("FakeHost slot 1 should remain loaded")
+                self.assertEqual(len(slot.effects), 1)
+
     def test_json_master_fx_params_returns_master_effect_parameter_metadata(self) -> None:
         if server is None:
             self.skipTest("core.server import needs optional native dependencies in this checkout")
@@ -737,6 +801,49 @@ class TypedDaemonApiContractTests(unittest.TestCase):
                 self.assertIn(message, response["error"])
                 self.assertEqual(effect.mix, 0.25)
                 self.assertEqual(host.engine.param_changes, [])
+
+    def test_json_master_fx_clear_removes_loaded_master_effect_and_returns_updated_status(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("master.fx.clear", {"effect": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.removed_effects, [(None, 0)])
+        self.assertEqual(result["removed"], {"kind": "master_effect", "effect": 1, "name": "MasterVerb"})
+        self.assertEqual(result["status"]["audio"]["master_effects"], 0)
+        self.assertEqual(len(host.engine.master_effects), 0)
+
+    def test_json_master_fx_clear_rejects_invalid_payloads_before_mutation(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        cases = [
+            ({}, "effect must be an integer"),
+            ({"effect": "1"}, "effect must be an integer"),
+            ({"effect": True}, "effect must be an integer"),
+            ({"effect": 0}, "effect index is out of range"),
+            ({"effect": 2}, "effect index is out of range"),
+        ]
+
+        for payload, message in cases:
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "master.fx.clear", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertIn(message, response["error"])
+                self.assertEqual(host.removed_effects, [])
+                self.assertEqual(len(host.engine.master_effects), 1)
 
     def test_json_slot_mutations_validate_gain_and_toggle(self) -> None:
         if server is None:
@@ -1234,6 +1341,7 @@ class WebSafetyTests(unittest.TestCase):
         unload_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/8/unload")
         note_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/4/note")
         params_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/3/params")
+        fx_clear_match = web.SLOT_FX_CLEAR_RE.fullmatch("/api/slots/1/fx/2/clear")
         bad_slot_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/9/clear")
 
         self.assertIsNotNone(clear_match)
@@ -1248,6 +1356,9 @@ class WebSafetyTests(unittest.TestCase):
         self.assertIsNotNone(params_match)
         self.assertEqual(params_match.group(1), "3")
         self.assertEqual(params_match.group(2), "params")
+        self.assertIsNotNone(fx_clear_match)
+        self.assertEqual(fx_clear_match.group(1), "1")
+        self.assertEqual(fx_clear_match.group(2), "2")
         with self.assertRaises(ValueError):
             web.VcpiWebHandler._validate_slot_number(bad_slot_match.group(1))
 
@@ -1817,6 +1928,87 @@ class WebSafetyTests(unittest.TestCase):
             {"ok": False, "error": "missing or invalid CSRF token"},
         )
 
+    def test_typed_web_slot_fx_clear_route_maps_to_clear_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/fx/1/clear"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "slot": {"slot": 1, "effects": 0}}
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "slot.fx.clear",
+            {"slot": 1, "effect": 1},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_slot_fx_clear_rejects_invalid_route_and_body_before_daemon(self) -> None:
+        cases = [
+            ("/api/slots/0/fx/1/clear", {}),
+            ("/api/slots/9/fx/1/clear", {}),
+            ("/api/slots/nope/fx/1/clear", {}),
+            ("/api/slots/1/fx/0/clear", {}),
+            ("/api/slots/1/fx/nope/clear", {}),
+            ("/api/slots/1/fx/1/clear", {"unexpected": True}),
+        ]
+
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_slot_fx_clear_requires_csrf(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/fx/1/clear"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            side_effect=PermissionError("missing or invalid CSRF token"),
+        ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+            web,
+            "_send_json",
+        ) as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_not_called()
+        send_json.assert_called_once_with(
+            handler,
+            web.HTTPStatus.FORBIDDEN,
+            {"ok": False, "error": "missing or invalid CSRF token"},
+        )
+
     def test_typed_web_master_fx_params_route_maps_to_read_only_operation(self) -> None:
         handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
         handler.path = "/api/master/fx/1/params"
@@ -1929,6 +2121,84 @@ class WebSafetyTests(unittest.TestCase):
     def test_typed_web_master_fx_param_post_requires_csrf(self) -> None:
         handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
         handler.path = "/api/master/fx/1/params"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            side_effect=PermissionError("missing or invalid CSRF token"),
+        ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+            web,
+            "_send_json",
+        ) as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_not_called()
+        send_json.assert_called_once_with(
+            handler,
+            web.HTTPStatus.FORBIDDEN,
+            {"ok": False, "error": "missing or invalid CSRF token"},
+        )
+
+    def test_typed_web_master_fx_clear_route_maps_to_clear_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/master/fx/1/clear"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "status": {"audio": {"master_effects": 0}}}
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "master.fx.clear",
+            {"effect": 1},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_master_fx_clear_rejects_invalid_route_and_body_before_daemon(self) -> None:
+        cases = [
+            ("/api/master/fx/0/clear", {}),
+            ("/api/master/fx/nope/clear", {}),
+            ("/api/master/fx/1/clear", {"unexpected": True}),
+        ]
+
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_master_fx_clear_requires_csrf(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/master/fx/1/clear"
         handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
 
         with mock.patch.object(
