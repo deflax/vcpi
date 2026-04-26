@@ -136,7 +136,8 @@ is hidden, skips polling during typed control updates, and keeps the Refresh
 button available for an immediate manual read. Loaded slot cards include an
 Unload action that calls the typed slot clear endpoint. The session field can
 suggest saved sessions from the picker, while manual safe-name entry remains
-supported.
+supported. Tempo and Link browser controls call typed POST routes for BPM,
+Link start, and Link stop actions.
 
 ### Typed HTTP API
 
@@ -155,6 +156,9 @@ requirements.
 | `POST` | `/api/session/load` | `{"name": "demo"}` | Load a named session, refresh mixer state, update autosave, and return refreshed slots |
 | `POST` | `/api/audio/start` | optional `{"device": "name or index"}` | Start the audio engine |
 | `POST` | `/api/audio/stop` | `{}` | Stop the audio engine |
+| `POST` | `/api/tempo` | `{"bpm": 128}` | Set tempo, where BPM is 20.0 to 300.0 |
+| `POST` | `/api/link/start` | optional `{"bpm": 128}` | Enable Ableton Link, optionally setting BPM first. BPM is 20.0 to 300.0. |
+| `POST` | `/api/link/stop` | `{}` | Disable Ableton Link |
 | `POST` | `/api/master/gain` | `{"gain": 0.75}` | Set master gain, where gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/gain` | `{"gain": 0.75}` | Set slot gain, where `<slot>` is 1-8 and gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/mute` | `{"muted": true}` or `{"toggle": true}` | Set or toggle slot mute. Omit the body or send `{"toggle": true}` to toggle. |
@@ -169,6 +173,9 @@ resolve names to `sessions/<name>.json`. `GET /api/sessions` lists only safe,
 top-level JSON session files in `sessions/` for the browser picker. Arbitrary
 `path` payloads, absolute paths, nested paths, dotfiles, and spaces are still
 not supported.
+
+Tempo and Link BPM payloads must be JSON numbers from 20.0 to 300.0. Strings,
+booleans, and values outside that range are rejected.
 
 Read-only requests can be called directly:
 
@@ -198,6 +205,21 @@ curl -X POST http://127.0.0.1:8765/api/slots/1/mute \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"toggle": true}'
+
+curl -X POST http://127.0.0.1:8765/api/tempo \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"bpm": 128}'
+
+curl -X POST http://127.0.0.1:8765/api/link/start \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"bpm": 128}'
+
+curl -X POST http://127.0.0.1:8765/api/link/stop \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{}'
 
 curl -X POST http://127.0.0.1:8765/api/session/save \
   -H "Content-Type: application/json" \
