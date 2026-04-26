@@ -137,6 +137,7 @@ h2 {
 .master-gain-card,
 .audio-card,
 .link-tempo-card,
+.midi-routing-card,
 .session-card,
 .flow-card,
 .slots-card,
@@ -215,6 +216,7 @@ h2 {
 .master-gain-card,
 .audio-card,
 .link-tempo-card,
+.midi-routing-card,
 .session-card,
 .slot-card-header {
   display: flex;
@@ -226,6 +228,7 @@ h2 {
 .typed-actions,
 .audio-actions,
 .link-tempo-actions,
+.midi-routing-actions,
 .session-actions,
 .slot-controls {
   display: flex;
@@ -345,6 +348,71 @@ h2 {
   border-radius: var(--radius-md);
   padding: var(--space-4);
   background: var(--color-soft-panel);
+}
+
+.midi-routing-card {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--color-soft-panel);
+}
+
+.midi-routing-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.midi-routing-control {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: min(100%, 11rem);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-muted);
+  background: var(--color-panel-strong);
+  font-weight: 850;
+}
+
+.midi-routing-control select {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  color: var(--color-text);
+  background: transparent;
+  font-family: var(--font-mono);
+}
+
+.midi-routing-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.midi-routing-item {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-panel-strong);
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+}
+
+.midi-routing-item strong {
+  color: var(--color-accent-strong);
+}
+
+.midi-routing-item span {
+  color: var(--color-muted);
 }
 
 .link-tempo-controls {
@@ -790,10 +858,11 @@ pre {
   .typed-header,
   .slots-header,
   .flow-header,
-  .master-gain-card,
-  .audio-card,
-  .link-tempo-card,
-  .session-card,
+    .master-gain-card,
+    .audio-card,
+    .link-tempo-card,
+    .midi-routing-card,
+    .session-card,
   .slot-info-header,
   .slot-card-header {
     align-items: stretch;
@@ -804,9 +873,13 @@ pre {
   .audio-actions,
   .audio-controls,
   .audio-device-control,
-  .link-tempo-actions,
-  .link-tempo-controls,
-  .session-actions,
+    .link-tempo-actions,
+    .link-tempo-controls,
+    .midi-routing-actions,
+    .midi-routing-controls,
+    .midi-routing-control,
+    .midi-routing-list,
+    .session-actions,
   .session-controls,
   .session-name-control,
   .tempo-control,

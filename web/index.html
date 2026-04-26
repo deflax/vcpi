@@ -130,6 +130,30 @@
         </div>
       </div>
 
+      <div class="midi-routing-card" aria-labelledby="midi-routing-title">
+        <div>
+          <h2 id="midi-routing-title">MIDI routing</h2>
+          <p id="midi-routing-status" class="typed-refresh-status" aria-live="polite">Waiting for MIDI routing…</p>
+        </div>
+        <div class="midi-routing-controls">
+          <label class="midi-routing-control" for="midi-channel-select">
+            <span>Channel</span>
+            <select id="midi-channel-select" data-typed-action="true" aria-label="Select MIDI channel"></select>
+          </label>
+          <label class="midi-routing-control" for="midi-slot-select">
+            <span>Slot</span>
+            <select id="midi-slot-select" data-typed-action="true" aria-label="Select routed slot"></select>
+          </label>
+          <div class="midi-routing-actions" aria-label="MIDI routing actions">
+            <button id="midi-link-button" type="button" class="typed-button" data-typed-action="true">Link</button>
+            <button id="midi-cut-button" type="button" class="typed-button typed-button--ghost" data-typed-action="true">Cut</button>
+          </div>
+        </div>
+        <div id="midi-routing-list" class="midi-routing-list" aria-live="polite">
+          <p class="empty-state">MIDI routing has not loaded yet.</p>
+        </div>
+      </div>
+
       <div class="session-card" aria-labelledby="session-control-title">
         <div>
           <h2 id="session-control-title">Session</h2>

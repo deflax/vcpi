@@ -25,6 +25,12 @@
   const linkStartButton = document.getElementById('link-start-button');
   const linkStopButton = document.getElementById('link-stop-button');
   const linkTempoStatus = document.getElementById('link-tempo-status');
+  const midiChannelSelect = document.getElementById('midi-channel-select');
+  const midiSlotSelect = document.getElementById('midi-slot-select');
+  const midiLinkButton = document.getElementById('midi-link-button');
+  const midiCutButton = document.getElementById('midi-cut-button');
+  const midiRoutingStatus = document.getElementById('midi-routing-status');
+  const midiRoutingList = document.getElementById('midi-routing-list');
   const sessionNameInput = document.getElementById('session-name-input');
   const sessionSaveButton = document.getElementById('session-save-button');
   const sessionLoadButton = document.getElementById('session-load-button');
@@ -61,6 +67,8 @@
   let sessionNameDirty = false;
   let slotInfoInFlight = false;
   let currentInfoSlot = '';
+  let latestTypedStatusData = {};
+  let latestTypedSlotsData = {};
 
   const typedRefreshVisibleIntervalMs = 10000;
   const typedRefreshHiddenIntervalMs = 60000;
@@ -138,6 +146,10 @@
 
   function setFlowStatus(message) {
     flowStatus.textContent = message;
+  }
+
+  function setMidiRoutingStatus(message) {
+    midiRoutingStatus.textContent = message;
   }
 
   function typedRefreshIntervalLabel() {
@@ -493,6 +505,29 @@
     return Math.min(300, Math.max(20, number));
   }
 
+  function normalizeMidiNumber(value, min, max) {
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < min || number > max) {
+      return null;
+    }
+    return number;
+  }
+
+  function appendSelectOption(select, value, label) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.append(option);
+  }
+
+  function selectedMidiChannel() {
+    return normalizeMidiNumber(midiChannelSelect.value, 1, 16);
+  }
+
+  function selectedMidiSlot() {
+    return normalizeMidiNumber(midiSlotSelect.value, 1, 8);
+  }
+
   function renderLinkTempo(link, status) {
     const enabled = firstPresent(link, ['enabled', 'active', 'running'], firstPresent(status, ['link_enabled'], undefined));
     const bpm = firstPresent(link, ['bpm', 'tempo'], firstPresent(status, ['bpm', 'tempo'], undefined));
@@ -592,6 +627,163 @@
     setFlowStatus('Signal-flow endpoint unavailable.');
   }
 
+  function midiSlotLabel(slotNumber, slots) {
+    const match = slots.find((slot) => normalizeMidiNumber(firstPresent(slot, ['slot', 'index', 'number', 'id'], null), 1, 8) === slotNumber);
+    if (!match) {
+      return `Slot ${slotNumber}`;
+    }
+    const loaded = match.loaded !== false;
+    const name = formatValue(firstPresent(match, ['name', 'plugin', 'instrument', 'type'], ''), '');
+    if (loaded && name) {
+      return `Slot ${slotNumber} — ${name}`;
+    }
+    return loaded ? `Slot ${slotNumber} — loaded` : `Slot ${slotNumber} — empty`;
+  }
+
+  function syncMidiRoutingSelectors(slotsData) {
+    const slots = normalizeSlots(slotsData);
+    const selectedChannelValue = midiChannelSelect.value || '1';
+    const selectedSlotValue = midiSlotSelect.value || '1';
+
+    midiChannelSelect.textContent = '';
+    for (let channel = 1; channel <= 16; channel += 1) {
+      appendSelectOption(midiChannelSelect, String(channel), `Ch ${channel}`);
+    }
+
+    midiSlotSelect.textContent = '';
+    for (let slotNumber = 1; slotNumber <= 8; slotNumber += 1) {
+      appendSelectOption(midiSlotSelect, String(slotNumber), midiSlotLabel(slotNumber, slots));
+    }
+
+    midiChannelSelect.value = normalizeMidiNumber(selectedChannelValue, 1, 16) == null ? '1' : selectedChannelValue;
+    midiSlotSelect.value = normalizeMidiNumber(selectedSlotValue, 1, 8) == null ? '1' : selectedSlotValue;
+  }
+
+  function addMidiRoute(routes, channel, slot) {
+    const normalizedChannel = normalizeMidiNumber(channel, 1, 16);
+    const normalizedSlot = normalizeMidiNumber(slot, 1, 8);
+    if (normalizedChannel == null || normalizedSlot == null) {
+      return;
+    }
+    const existing = routes.find((route) => route.channel === normalizedChannel);
+    if (existing) {
+      existing.slot = normalizedSlot;
+    } else {
+      routes.push({channel: normalizedChannel, slot: normalizedSlot});
+    }
+  }
+
+  function addMidiRoutesForSlot(routes, slotNumber, channels) {
+    if (Array.isArray(channels)) {
+      channels.forEach((channel) => addMidiRoute(routes, channel, slotNumber));
+      return;
+    }
+    if (typeof channels === 'string') {
+      channels.split(',').forEach((channel) => addMidiRoute(routes, channel.trim(), slotNumber));
+      return;
+    }
+    addMidiRoute(routes, channels, slotNumber);
+  }
+
+  function routingFromStatus(statusData) {
+    const status = asObject(statusData.status || statusData);
+    const midi = asObject(status.midi);
+    const routing = firstPresent(midi, ['routing', 'routes', 'channel_routes', 'channels'], firstPresent(status, ['midi_routing'], undefined));
+    const routes = [];
+
+    if (Array.isArray(routing)) {
+      routing.forEach((entry) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+          return;
+        }
+        addMidiRoute(routes, firstPresent(entry, ['channel', 'ch', 'midi_channel'], null), firstPresent(entry, ['slot', 'slot_id', 'target'], null));
+      });
+    } else if (routing && typeof routing === 'object') {
+      Object.keys(routing).forEach((channel) => {
+        addMidiRoute(routes, channel, routing[channel]);
+      });
+    }
+
+    return routes;
+  }
+
+  function routingFromSlots(slotsData) {
+    const routes = [];
+    normalizeSlots(slotsData).forEach((rawSlot, index) => {
+      const slot = asObject(rawSlot);
+      const slotNumber = normalizeMidiNumber(firstPresent(slot, ['slot', 'index', 'number', 'id'], index + 1), 1, 8);
+      if (slotNumber == null) {
+        return;
+      }
+      const channels = firstPresent(slot, ['midi_channels', 'midi', 'channel', 'midi_channel'], undefined);
+      if (channels == null || channels === '—') {
+        return;
+      }
+      addMidiRoutesForSlot(routes, slotNumber, channels);
+    });
+    return routes;
+  }
+
+  function currentMidiRoutes(statusData, slotsData) {
+    const statusRoutes = routingFromStatus(statusData);
+    const routes = statusRoutes.length > 0 ? statusRoutes : routingFromSlots(slotsData);
+    return routes.sort((left, right) => left.channel - right.channel);
+  }
+
+  function renderMidiRouting(statusData, slotsData) {
+    syncMidiRoutingSelectors(slotsData);
+    const slots = normalizeSlots(slotsData);
+    const routes = currentMidiRoutes(statusData, slotsData);
+    midiRoutingList.textContent = '';
+
+    if (routes.length === 0) {
+      midiRoutingList.append(makeEmptyState('No MIDI channel routing is currently reported.'));
+      setMidiRoutingStatus('No channel routes reported. Link a channel to a slot to add one.');
+      return;
+    }
+
+    routes.forEach((route) => {
+      const item = document.createElement('div');
+      item.className = 'midi-routing-item';
+
+      const channel = document.createElement('strong');
+      channel.textContent = `Ch ${route.channel}`;
+
+      const target = document.createElement('span');
+      target.textContent = midiSlotLabel(route.slot, slots);
+
+      item.append(channel, target);
+      midiRoutingList.append(item);
+    });
+
+    setMidiRoutingStatus(`${routes.length} ${routes.length === 1 ? 'route' : 'routes'} active.`);
+  }
+
+  async function linkMidiRoute() {
+    const channel = selectedMidiChannel();
+    const slot = selectedMidiSlot();
+    if (channel == null || slot == null) {
+      setMidiRoutingStatus('Choose a MIDI channel and slot before linking.');
+      showTypedError('Choose a MIDI channel and slot before linking.');
+      return;
+    }
+    setMidiRoutingStatus(`Linking channel ${channel} to slot ${slot}…`);
+    const ok = await mutateTyped('/api/midi/link', {channel, slot});
+    setMidiRoutingStatus(ok ? `Channel ${channel} linked to slot ${slot}. Status refreshed.` : 'MIDI link failed. See typed API status above.');
+  }
+
+  async function cutMidiRoute() {
+    const channel = selectedMidiChannel();
+    if (channel == null) {
+      setMidiRoutingStatus('Choose a MIDI channel before cutting.');
+      showTypedError('Choose a MIDI channel before cutting.');
+      return;
+    }
+    setMidiRoutingStatus(`Cutting MIDI channel ${channel}…`);
+    const ok = await mutateTyped('/api/midi/cut', {channel});
+    setMidiRoutingStatus(ok ? `Channel ${channel} cut. Status refreshed.` : 'MIDI cut failed. See typed API status above.');
+  }
+
   function slotInfoText(data) {
     if (typeof data === 'string') {
       return data;
@@ -685,6 +877,7 @@
   }
 
   function renderStatus(data) {
+    latestTypedStatusData = data;
     const status = asObject(data.status || data);
     const daemon = asObject(status.daemon);
     const audio = asObject(status.audio);
@@ -715,6 +908,7 @@
     );
     renderMasterGain(audio);
     renderLinkTempo(link, status);
+    renderMidiRouting(latestTypedStatusData, latestTypedSlotsData);
   }
 
   function normalizeSlots(data) {
@@ -771,6 +965,7 @@
   }
 
   function renderSlots(data) {
+    latestTypedSlotsData = data;
     const slots = normalizeSlots(data);
     slotsList.textContent = '';
     slotsCount.textContent = `${slots.length} ${slots.length === 1 ? 'slot' : 'slots'}`;
@@ -862,6 +1057,7 @@
       renderSlotInfoUnavailable(currentInfoSlot, `Slot ${currentInfoSlot} is empty or no longer loaded.`);
     }
     updateSlotInfoControlsDisabled();
+    renderMidiRouting(latestTypedStatusData, latestTypedSlotsData);
   }
 
   async function refreshTypedApi(options) {
@@ -898,6 +1094,7 @@
         Object.values(statusFields).forEach((field) => {
           field.textContent = 'Typed endpoint unavailable';
         });
+        latestTypedStatusData = {};
         masterGainValue.textContent = 'Typed endpoint unavailable';
         messages.push(results[0].reason.message || String(results[0].reason));
       }
@@ -905,11 +1102,13 @@
       if (results[1].status === 'fulfilled') {
         renderSlots(results[1].value);
       } else {
+        latestTypedSlotsData = {};
         slotsList.textContent = '';
         slotsList.append(makeEmptyState('Typed slot endpoint is unavailable. The command console still works below.'));
         slotsCount.textContent = 'No typed slots';
         messages.push(results[1].reason.message || String(results[1].reason));
       }
+      renderMidiRouting(latestTypedStatusData, latestTypedSlotsData);
 
       if (results[2].status === 'fulfilled') {
         renderSessions(results[2].value);
@@ -1214,6 +1413,8 @@
   tempoSetButton.addEventListener('click', setTempo);
   linkStartButton.addEventListener('click', startLink);
   linkStopButton.addEventListener('click', stopLink);
+  midiLinkButton.addEventListener('click', linkMidiRoute);
+  midiCutButton.addEventListener('click', cutMidiRoute);
   sessionNameInput.addEventListener('input', () => {
     sessionNameDirty = sessionNameInput.value.trim() !== '';
   });
