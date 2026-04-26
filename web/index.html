@@ -179,6 +179,18 @@
         <div id="slots-list" class="slots-list" aria-live="polite">
           <p class="empty-state">Typed slot data has not loaded yet.</p>
         </div>
+        <section id="slot-info-panel" class="slot-info-panel" aria-labelledby="slot-info-title" hidden>
+          <div class="slot-info-header">
+            <div>
+              <p class="eyebrow">Read-only details</p>
+              <h3 id="slot-info-title">Slot info</h3>
+              <p id="slot-info-status" class="typed-refresh-status" aria-live="polite">Choose Info on a loaded slot.</p>
+            </div>
+            <button id="slot-info-close" type="button" class="typed-button typed-button--ghost">Close</button>
+          </div>
+          <div id="slot-info-meta" class="slot-info-meta" hidden></div>
+          <pre id="slot-info-output" class="slot-info-output" aria-live="polite">No slot info loaded yet.</pre>
+        </section>
       </div>
     </section>
 

@@ -42,6 +42,12 @@
   };
   const slotsList = document.getElementById('slots-list');
   const slotsCount = document.getElementById('slots-count');
+  const slotInfoPanel = document.getElementById('slot-info-panel');
+  const slotInfoTitle = document.getElementById('slot-info-title');
+  const slotInfoStatus = document.getElementById('slot-info-status');
+  const slotInfoMeta = document.getElementById('slot-info-meta');
+  const slotInfoOutput = document.getElementById('slot-info-output');
+  const slotInfoClose = document.getElementById('slot-info-close');
   const csrfToken = document.querySelector('meta[name="vcpi-csrf-token"]')?.content || '';
 
   let entryCount = 0;
@@ -53,6 +59,8 @@
   let audioDeviceDirty = false;
   let tempoBpmDirty = false;
   let sessionNameDirty = false;
+  let slotInfoInFlight = false;
+  let currentInfoSlot = '';
 
   const typedRefreshVisibleIntervalMs = 10000;
   const typedRefreshHiddenIntervalMs = 60000;
@@ -65,6 +73,13 @@
     document.querySelectorAll('[data-typed-action]').forEach((control) => {
       control.disabled = disabled;
     });
+  }
+
+  function updateSlotInfoControlsDisabled() {
+    document.querySelectorAll('[data-slot-info-action]').forEach((control) => {
+      control.disabled = slotInfoInFlight;
+    });
+    slotInfoClose.disabled = slotInfoInFlight;
   }
 
   function setCommandControlsDisabled(disabled) {
@@ -577,6 +592,98 @@
     setFlowStatus('Signal-flow endpoint unavailable.');
   }
 
+  function slotInfoText(data) {
+    if (typeof data === 'string') {
+      return data;
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return '';
+    }
+    return normalizeOutput(firstPresent(data, ['rendered', 'info', 'text', 'output', 'details', 'description', 'message'], ''));
+  }
+
+  function slotInfoMetadata(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return {};
+    }
+    const metadata = asObject(firstPresent(data, ['metadata', 'meta', 'instrument', 'plugin', 'slot'], {}));
+    if (Object.keys(metadata).length > 0) {
+      return metadata;
+    }
+    const excluded = new Set(['ok', 'rendered', 'info', 'text', 'output', 'details', 'description', 'message', 'error']);
+    const shallow = {};
+    Object.keys(data).forEach((key) => {
+      const value = data[key];
+      if (!excluded.has(key) && value != null && typeof value !== 'object') {
+        shallow[key] = value;
+      }
+    });
+    return shallow;
+  }
+
+  function renderSlotInfoMetadata(metadata) {
+    slotInfoMeta.textContent = '';
+    const keys = Object.keys(metadata);
+    if (keys.length === 0) {
+      slotInfoMeta.hidden = true;
+      return;
+    }
+    keys.forEach((key) => {
+      appendSlotMeta(slotInfoMeta, key.replace(/_/g, ' '), metadata[key]);
+    });
+    slotInfoMeta.hidden = false;
+  }
+
+  function setSlotInfoPanelVisible(visible) {
+    slotInfoPanel.hidden = !visible;
+  }
+
+  function renderSlotInfo(slotNumber, slotName, data) {
+    const text = slotInfoText(data).trimEnd();
+    const metadata = slotInfoMetadata(data);
+    currentInfoSlot = String(slotNumber);
+    slotInfoTitle.textContent = `Slot ${slotNumber} info`;
+    slotInfoStatus.textContent = slotName ? `Loaded details for ${slotName}.` : 'Loaded slot details.';
+    renderSlotInfoMetadata(metadata);
+    slotInfoOutput.textContent = text || 'The slot info endpoint returned no details for this loaded slot.';
+    setSlotInfoPanelVisible(true);
+  }
+
+  function renderSlotInfoUnavailable(slotNumber, message) {
+    currentInfoSlot = String(slotNumber);
+    slotInfoTitle.textContent = `Slot ${slotNumber} info`;
+    slotInfoStatus.textContent = message || 'Slot info unavailable.';
+    renderSlotInfoMetadata({});
+    slotInfoOutput.textContent = message || 'Slot info unavailable.';
+    setSlotInfoPanelVisible(true);
+  }
+
+  async function loadSlotInfo(slotNumber, slotName) {
+    if (!slotNumber || slotInfoInFlight) {
+      return;
+    }
+    slotInfoInFlight = true;
+    updateSlotInfoControlsDisabled();
+    showTypedError('');
+    setSlotInfoPanelVisible(true);
+    currentInfoSlot = String(slotNumber);
+    slotInfoTitle.textContent = `Slot ${slotNumber} info`;
+    slotInfoStatus.textContent = `Loading read-only info for slot ${slotNumber}…`;
+    renderSlotInfoMetadata({});
+    slotInfoOutput.textContent = 'Inspecting plugin details…';
+    try {
+      const data = await fetchJson(`/api/slots/${encodeURIComponent(slotNumber)}/info`, {headers: {'Accept': 'application/json'}});
+      renderSlotInfo(slotNumber, slotName, data);
+    } catch (error) {
+      const message = `Slot info unavailable: ${error.message || String(error)}`;
+      renderSlotInfoUnavailable(slotNumber, message);
+      showTypedError(message);
+    } finally {
+      slotInfoInFlight = false;
+      updateSlotInfoControlsDisabled();
+    }
+  }
+
   function renderStatus(data) {
     const status = asObject(data.status || data);
     const daemon = asObject(status.daemon);
@@ -649,6 +756,20 @@
     return button;
   }
 
+  function slotInfoButton(slotNumber, slotName) {
+    const selected = currentInfoSlot === String(slotNumber);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = selected ? 'typed-button typed-button--info typed-button--active' : 'typed-button typed-button--ghost typed-button--info';
+    button.textContent = 'Info';
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    button.dataset.slotInfoAction = 'true';
+    button.addEventListener('click', () => {
+      loadSlotInfo(slotNumber, slotName);
+    });
+    return button;
+  }
+
   function renderSlots(data) {
     const slots = normalizeSlots(data);
     slotsList.textContent = '';
@@ -659,6 +780,8 @@
       return;
     }
 
+    const loadedSlotNumbers = new Set();
+
     slots.forEach((rawSlot, index) => {
       const slot = asObject(rawSlot);
       const slotNumber = firstPresent(slot, ['slot', 'index', 'number', 'id'], index + 1);
@@ -667,6 +790,9 @@
       const soloed = Boolean(firstPresent(slot, ['soloed', 'solo'], false));
       const loaded = slot.loaded !== false;
       const slotName = formatValue(firstPresent(slot, ['name', 'plugin', 'instrument', 'type'], 'Loaded'), 'Loaded');
+      if (loaded) {
+        loadedSlotNumbers.add(String(slotNumber));
+      }
 
       const card = document.createElement('article');
       card.className = 'slot-card';
@@ -719,6 +845,7 @@
 
       if (loaded) {
         controls.append(
+          slotInfoButton(slotNumber, slotName),
           typedActionButton('Unload', false, () => {
             if (!window.confirm(`Unload slot ${slotNumber} (${slotName})?`)) {
               return;
@@ -731,6 +858,10 @@
       card.append(header, meta, controls);
       slotsList.append(card);
     });
+    if (currentInfoSlot && !loadedSlotNumbers.has(currentInfoSlot) && !slotInfoInFlight) {
+      renderSlotInfoUnavailable(currentInfoSlot, `Slot ${currentInfoSlot} is empty or no longer loaded.`);
+    }
+    updateSlotInfoControlsDisabled();
   }
 
   async function refreshTypedApi(options) {
@@ -1088,6 +1219,11 @@
   });
   sessionSaveButton.addEventListener('click', saveSession);
   sessionLoadButton.addEventListener('click', loadSession);
+  slotInfoClose.addEventListener('click', () => {
+    currentInfoSlot = '';
+    setSlotInfoPanelVisible(false);
+    updateSlotInfoControlsDisabled();
+  });
 
   document.addEventListener('visibilitychange', () => {
     setTypedRefreshStatus(document.hidden ? 'Auto-refresh slowed while this tab is hidden.' : 'Auto-refresh resumed.');

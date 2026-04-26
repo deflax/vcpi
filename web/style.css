@@ -278,6 +278,14 @@ h2 {
   background: var(--color-danger-panel);
 }
 
+.typed-button--info {
+  border-color: color-mix(in srgb, var(--color-info) 45%, var(--color-line));
+}
+
+.typed-button--info:hover {
+  border-color: var(--color-info);
+}
+
 .typed-error {
   padding: var(--space-3) var(--space-4);
   border: 1px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
@@ -488,6 +496,40 @@ h2 {
 .slot-card h3 {
   margin: 0;
   font-size: 1rem;
+}
+
+.slot-info-panel {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-top: 1px solid var(--color-line);
+  background: var(--color-soft-panel);
+}
+
+.slot-info-panel[hidden] {
+  display: none;
+}
+
+.slot-info-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.slot-info-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.slot-info-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.slot-info-output {
+  max-height: calc(var(--space-7) * 7);
 }
 
 .slot-badge {
@@ -752,6 +794,7 @@ pre {
   .audio-card,
   .link-tempo-card,
   .session-card,
+  .slot-info-header,
   .slot-card-header {
     align-items: stretch;
     flex-direction: column;
@@ -769,11 +812,13 @@ pre {
   .tempo-control,
   .typed-button,
   .status-grid,
+  .slot-info-meta,
   .slot-meta {
     width: 100%;
   }
 
   .status-grid,
+  .slot-info-meta,
   .slot-meta {
     grid-template-columns: 1fr;
   }
