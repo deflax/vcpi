@@ -75,6 +75,7 @@
   let currentInfoMode = '';
   let latestTypedStatusData = {};
   let latestTypedSlotsData = {};
+  let latestSampleCatalogData = {available: false, packs: [], message: 'Sample catalog has not loaded yet.'};
   let masterFxAvailableCount = 0;
 
   const typedRefreshVisibleIntervalMs = 10000;
@@ -87,6 +88,17 @@
     audioStopButton.disabled = disabled;
     document.querySelectorAll('[data-typed-action]').forEach((control) => {
       control.disabled = disabled;
+    });
+    document.querySelectorAll('.slot-sample-load-form').forEach((sampleForm) => {
+      const sampleSelect = sampleForm.querySelector('.slot-sample-select');
+      const loadButton = sampleForm.querySelector('.slot-sample-load-button');
+      const noSampleSelected = !sampleSelect || !sampleSelect.value;
+      if (sampleSelect) {
+        sampleSelect.disabled = disabled || noSampleSelected;
+      }
+      if (loadButton) {
+        loadButton.disabled = disabled || noSampleSelected;
+      }
     });
     const masterFxUnavailable = disabled || masterFxAvailableCount === 0 || selectedMasterFx() == null;
     masterFxLoadButton.disabled = masterFxUnavailable;
@@ -563,6 +575,75 @@
     option.value = value;
     option.textContent = label;
     select.append(option);
+  }
+
+  function sampleNameFromEntry(entry) {
+    if (typeof entry === 'string') {
+      return entry.trim().replace(/\.wav$/i, '');
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return '';
+    }
+    const name = firstPresent(entry, ['name', 'sample', 'stem', 'id'], '');
+    if (typeof name === 'string' && name.trim()) {
+      return name.trim().replace(/\.wav$/i, '');
+    }
+    const filename = firstPresent(entry, ['filename', 'file'], '');
+    return typeof filename === 'string' ? filename.trim().replace(/\.wav$/i, '') : '';
+  }
+
+  function normalizeSampleCatalog(data) {
+    const packs = [];
+    const seenPacks = new Set();
+    const addPack = (packName, sampleEntries) => {
+      const name = typeof packName === 'string' ? packName.trim() : String(packName || '').trim();
+      if (!name || seenPacks.has(name)) {
+        return;
+      }
+      seenPacks.add(name);
+      const seenSamples = new Set();
+      const samples = (Array.isArray(sampleEntries) ? sampleEntries : [])
+        .map(sampleNameFromEntry)
+        .filter((sample) => {
+          if (!sample || seenSamples.has(sample)) {
+            return false;
+          }
+          seenSamples.add(sample);
+          return true;
+        });
+      packs.push({name, samples});
+    };
+
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const sourcePacks = Array.isArray(data.packs) ? data.packs : [];
+      sourcePacks.forEach((pack) => {
+        if (typeof pack === 'string') {
+          addPack(pack, firstPresent(asObject(data.samples), [pack], []));
+          return;
+        }
+        const packObject = asObject(pack);
+        addPack(firstPresent(packObject, ['name', 'pack', 'id'], ''), firstPresent(packObject, ['samples', 'items'], []));
+      });
+
+      const samplesByPack = asObject(data.samples);
+      Object.keys(samplesByPack).forEach((packName) => {
+        addPack(packName, samplesByPack[packName]);
+      });
+    }
+
+    return {available: true, packs, message: packs.length === 0 ? 'No built-in WAV samples returned by the typed API.' : ''};
+  }
+
+  function renderSampleCatalog(data) {
+    latestSampleCatalogData = normalizeSampleCatalog(data);
+  }
+
+  function renderSampleCatalogUnavailable(message) {
+    latestSampleCatalogData = {
+      available: false,
+      packs: [],
+      message: message || 'Built-in WAV sample catalog is unavailable.',
+    };
   }
 
   function selectedMidiChannel() {
@@ -1580,6 +1661,114 @@
     setTypedRefreshStatus(ok ? `Auditioned slot ${slotNumber}. Status refreshed.` : 'Audition failed. See typed API status above.');
   }
 
+  function populateSampleSelect(sampleSelect, samples, selectedSample) {
+    sampleSelect.textContent = '';
+    if (samples.length === 0) {
+      appendSelectOption(sampleSelect, '', 'No samples');
+      sampleSelect.disabled = true;
+      return;
+    }
+    sampleSelect.disabled = false;
+    samples.forEach((sample) => {
+      appendSelectOption(sampleSelect, sample, sample);
+    });
+    sampleSelect.value = samples.includes(selectedSample) ? selectedSample : samples[0];
+  }
+
+  function renderEmptySlotSampleControls(slotNumber) {
+    const catalog = latestSampleCatalogData;
+    const panel = document.createElement('div');
+    panel.className = 'slot-sample-load';
+
+    const title = document.createElement('strong');
+    title.textContent = 'Load built-in WAV';
+    panel.append(title);
+
+    if (!catalog.available || catalog.packs.length === 0) {
+      panel.append(makeEmptyState(catalog.message || 'No built-in WAV samples are available.'));
+      return panel;
+    }
+
+    const form = document.createElement('form');
+    form.className = 'slot-sample-load-form';
+
+    const packLabel = document.createElement('label');
+    packLabel.className = 'slot-sample-field';
+    const packText = document.createElement('span');
+    packText.textContent = 'Pack';
+    const packSelect = document.createElement('select');
+    packSelect.dataset.typedAction = 'true';
+    packSelect.setAttribute('aria-label', `Choose WAV sample pack for slot ${slotNumber}`);
+    catalog.packs.forEach((pack) => {
+      appendSelectOption(packSelect, pack.name, pack.name);
+    });
+    packLabel.append(packText, packSelect);
+
+    const sampleLabel = document.createElement('label');
+    sampleLabel.className = 'slot-sample-field';
+    const sampleText = document.createElement('span');
+    sampleText.textContent = 'Sample';
+    const sampleSelect = document.createElement('select');
+    sampleSelect.className = 'slot-sample-select';
+    sampleSelect.dataset.typedAction = 'true';
+    sampleSelect.setAttribute('aria-label', `Choose WAV sample for slot ${slotNumber}`);
+    sampleLabel.append(sampleText, sampleSelect);
+
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'slot-sample-field slot-sample-field--name';
+    const nameText = document.createElement('span');
+    nameText.textContent = 'Name';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.maxLength = 128;
+    nameInput.placeholder = 'optional';
+    nameInput.autocomplete = 'off';
+    nameInput.spellcheck = false;
+    nameInput.dataset.typedAction = 'true';
+    nameInput.setAttribute('aria-label', `Optional display name for slot ${slotNumber}`);
+    nameLabel.append(nameText, nameInput);
+
+    const loadButton = document.createElement('button');
+    loadButton.type = 'submit';
+    loadButton.className = 'typed-button slot-sample-load-button';
+    loadButton.textContent = 'Load';
+    loadButton.dataset.typedAction = 'true';
+
+    const selectedPack = () => catalog.packs.find((pack) => pack.name === packSelect.value) || catalog.packs[0];
+    const syncSamples = () => {
+      const pack = selectedPack();
+      populateSampleSelect(sampleSelect, pack ? pack.samples : [], sampleSelect.value);
+      loadButton.disabled = typedMutationInFlight || typedRefreshInFlight || !pack || pack.samples.length === 0;
+    };
+
+    packSelect.addEventListener('change', syncSamples);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const pack = selectedPack();
+      const sample = sampleSelect.value.trim();
+      if (!pack || !sample) {
+        const message = `Choose a built-in WAV sample before loading slot ${slotNumber}.`;
+        setTypedRefreshStatus(message);
+        showTypedError(message);
+        return;
+      }
+
+      const payload = {pack: pack.name, sample};
+      const name = nameInput.value.trim();
+      if (name) {
+        payload.name = name;
+      }
+      setTypedRefreshStatus(`Loading ${pack.name}/${sample} into slot ${slotNumber}…`);
+      const ok = await mutateTyped(`/api/slots/${encodeURIComponent(slotNumber)}/wav`, payload);
+      setTypedRefreshStatus(ok ? `Loaded ${pack.name}/${sample} into slot ${slotNumber}. Status refreshed.` : 'WAV sample load failed. See typed API status above.');
+    });
+
+    syncSamples();
+    form.append(packLabel, sampleLabel, nameLabel, loadButton);
+    panel.append(form);
+    return panel;
+  }
+
   function renderSlots(data) {
     latestTypedSlotsData = data;
     const slots = normalizeSlots(data);
@@ -1671,6 +1860,9 @@
       }
 
       card.append(header, meta, controls);
+      if (!loaded) {
+        card.append(renderEmptySlotSampleControls(slotNumber));
+      }
       slotsList.append(card);
     });
     if (currentInfoSlot && currentInfoMode !== 'master-fx-params' && !loadedSlotNumbers.has(currentInfoSlot) && !slotInfoInFlight) {
@@ -1693,7 +1885,7 @@
     typedRefreshInFlight = true;
     updateTypedControlsDisabled();
     showTypedError('');
-    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, sessions, audio devices, and signal flow…' : 'Refreshing status, slots, sessions, audio devices, and signal flow…');
+    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, samples, sessions, audio devices, and signal flow…' : 'Refreshing status, slots, samples, sessions, audio devices, and signal flow…');
     if (source !== 'auto') {
       typedRefreshButton.textContent = 'Refreshing…';
     }
@@ -1702,6 +1894,7 @@
       const results = await Promise.allSettled([
         fetchJson('/api/status', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/slots', {headers: {'Accept': 'application/json'}}),
+        fetchJson('/api/samples', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/sessions', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/audio/devices', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/flow', {headers: {'Accept': 'application/json'}}),
@@ -1719,6 +1912,12 @@
         messages.push(results[0].reason.message || String(results[0].reason));
       }
 
+      if (results[2].status === 'fulfilled') {
+        renderSampleCatalog(results[2].value);
+      } else {
+        renderSampleCatalogUnavailable('Built-in WAV sample catalog is unavailable; empty slots cannot load samples from the dashboard right now.');
+      }
+
       if (results[1].status === 'fulfilled') {
         renderSlots(results[1].value);
       } else {
@@ -1730,22 +1929,22 @@
       }
       renderMidiRouting(latestTypedStatusData, latestTypedSlotsData);
 
-      if (results[2].status === 'fulfilled') {
-        renderSessions(results[2].value);
+      if (results[3].status === 'fulfilled') {
+        renderSessions(results[3].value);
       } else {
         renderSessionsUnavailable();
       }
 
-      if (results[3].status === 'fulfilled') {
+      if (results[4].status === 'fulfilled') {
         const statusData = results[0].status === 'fulfilled' ? results[0].value : {};
-        renderAudioDevices(results[3].value, statusData);
+        renderAudioDevices(results[4].value, statusData);
       } else {
         const statusData = results[0].status === 'fulfilled' ? results[0].value : {};
         renderAudioDevicesUnavailable(statusData);
       }
 
-      if (results[4].status === 'fulfilled') {
-        renderSignalFlow(results[4].value);
+      if (results[5].status === 'fulfilled') {
+        renderSignalFlow(results[5].value);
       } else {
         renderSignalFlowUnavailable();
       }

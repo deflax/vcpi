@@ -693,6 +693,65 @@ h2 {
   font-size: 0.78rem;
 }
 
+.slot-sample-load {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: var(--color-soft-panel);
+}
+
+.slot-sample-load > strong {
+  color: var(--color-accent-strong);
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.slot-sample-load-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.slot-sample-field {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: min(100%, 12rem);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-muted);
+  background: var(--color-panel-strong);
+  font-weight: 850;
+}
+
+.slot-sample-field--name {
+  min-width: min(100%, 14rem);
+}
+
+.slot-sample-field select,
+.slot-sample-field input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  color: var(--color-text);
+  background: transparent;
+  font-family: var(--font-mono);
+}
+
+.slot-sample-field input::placeholder {
+  color: color-mix(in srgb, var(--color-muted) 72%, transparent);
+}
+
+.slot-sample-load-button {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+
 .slot-badge {
   border: 1px solid var(--color-line);
   border-radius: 999px;
@@ -977,6 +1036,8 @@ pre {
     .session-actions,
   .session-controls,
   .session-name-control,
+    .slot-sample-load-form,
+    .slot-sample-field,
   .tempo-control,
   .typed-button,
   .status-grid,
