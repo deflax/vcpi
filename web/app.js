@@ -830,8 +830,9 @@
     return normalizeOutput(firstPresent(data, ['rendered', 'ascii', 'knobs', 'output', 'text'], ''));
   }
 
-  function parameterRowsFromSource(source, groupLabel) {
+  function parameterRowsFromSource(source, groupLabel, target) {
     const rows = [];
+    const targetInfo = asObject(target);
     const addRow = (name, value, group) => {
       const valueObject = asObject(value);
       const displayName = firstPresent(valueObject, ['name', 'label', 'id', 'key'], name);
@@ -856,6 +857,8 @@
         minimum,
         maximum,
         step,
+        targetKind: firstPresent(targetInfo, ['targetKind'], 'instrument'),
+        effectIndex: firstPresent(targetInfo, ['effectIndex'], undefined),
       });
     };
 
@@ -907,19 +910,24 @@
     const rows = [];
     const topLevelParams = firstPresent(data, ['params', 'parameters', 'items', 'rows'], undefined);
     if (topLevelParams != null) {
-      rows.push(...parameterRowsFromSource(topLevelParams, 'Instrument'));
+      rows.push(...parameterRowsFromSource(topLevelParams, 'Instrument', {targetKind: 'instrument'}));
     }
     const instrument = asObject(data.instrument || data.plugin);
     const instrumentParams = firstPresent(instrument, ['params', 'parameters', 'items', 'rows'], undefined);
     if (instrumentParams != null) {
-      rows.push(...parameterRowsFromSource(instrumentParams, formatValue(firstPresent(instrument, ['name', 'label', 'type'], 'Instrument'), 'Instrument')));
+      rows.push(...parameterRowsFromSource(instrumentParams, formatValue(firstPresent(instrument, ['name', 'label', 'type'], 'Instrument'), 'Instrument'), {targetKind: 'instrument'}));
     }
     const effects = Array.isArray(data.effects) ? data.effects : [];
     effects.forEach((effect, index) => {
       const effectObject = asObject(effect);
       const effectParams = firstPresent(effectObject, ['params', 'parameters', 'items', 'rows'], undefined);
       if (effectParams != null) {
-        rows.push(...parameterRowsFromSource(effectParams, formatValue(firstPresent(effectObject, ['name', 'label', 'type'], `Effect ${index + 1}`), `Effect ${index + 1}`)));
+        const effectIndex = firstPresent(effectObject, ['index', 'effect', 'effectIndex'], index + 1);
+        rows.push(...parameterRowsFromSource(
+          effectParams,
+          formatValue(firstPresent(effectObject, ['name', 'label', 'type'], `Effect ${index + 1}`), `Effect ${index + 1}`),
+          {targetKind: 'effect', effectIndex},
+        ));
       }
     });
     return rows;
@@ -966,11 +974,23 @@
       return;
     }
 
-    slotInfoStatus.textContent = `Applying ${param.paramName} on slot ${slotNumber}…`;
-    const ok = await mutateTyped(`/api/slots/${encodeURIComponent(slotNumber)}/params`, {
+    const payload = {
       name: param.paramName,
       value,
-    });
+    };
+    const targetLabel = param.targetKind === 'effect' ? `FX ${param.effectIndex}` : 'instrument';
+    if (param.targetKind === 'effect') {
+      const effectIndex = Number(param.effectIndex);
+      if (!Number.isInteger(effectIndex) || effectIndex < 1) {
+        showTypedError(`Cannot apply ${param.paramName}: effect index is unavailable.`);
+        return;
+      }
+      payload.target = 'effect';
+      payload.effect = effectIndex;
+    }
+
+    slotInfoStatus.textContent = `Applying ${param.paramName} on slot ${slotNumber} ${targetLabel}…`;
+    const ok = await mutateTyped(`/api/slots/${encodeURIComponent(slotNumber)}/params`, payload);
     if (ok) {
       await loadSlotParams(slotNumber, slotName);
     } else {
@@ -989,7 +1009,8 @@
 
     const form = document.createElement('form');
     form.className = 'slot-param-edit';
-    const labelText = `Set ${param.paramName} for slot ${slotNumber}`;
+    const targetLabel = param.targetKind === 'effect' ? `slot ${slotNumber} FX ${param.effectIndex}` : `slot ${slotNumber}`;
+    const labelText = `Set ${param.paramName} for ${targetLabel}`;
     const input = document.createElement('input');
     input.type = 'number';
     input.inputMode = 'decimal';
@@ -1014,7 +1035,7 @@
     button.className = 'typed-button typed-button--ghost slot-param-apply';
     button.textContent = 'Apply';
     button.dataset.typedAction = 'true';
-    button.setAttribute('aria-label', `Apply ${param.paramName} to slot ${slotNumber}`);
+    button.setAttribute('aria-label', `Apply ${param.paramName} to ${targetLabel}`);
     button.title = `Apply ${param.paramName}`;
 
     form.addEventListener('submit', (event) => {
