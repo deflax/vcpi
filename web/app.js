@@ -22,6 +22,8 @@
   const sessionSaveButton = document.getElementById('session-save-button');
   const sessionLoadButton = document.getElementById('session-load-button');
   const sessionControlStatus = document.getElementById('session-control-status');
+  const sessionNameOptions = document.getElementById('session-name-options');
+  const sessionOptionsStatus = document.getElementById('session-options-status');
   const statusFields = {
     daemon: document.getElementById('status-daemon'),
     audio: document.getElementById('status-audio'),
@@ -324,6 +326,45 @@
     sessionNameInput.value = name;
   }
 
+  function normalizeSessionName(value) {
+    if (typeof value === 'string') {
+      return value.trim();
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return '';
+    }
+    const name = firstPresent(value, ['name', 'session', 'filename', 'file', 'id'], '');
+    return typeof name === 'string' ? name.trim() : '';
+  }
+
+  function normalizeSessions(data) {
+    const source = data.sessions || data.items || data.names || data;
+    let sessions = [];
+    if (Array.isArray(source)) {
+      sessions = source.map(normalizeSessionName);
+    } else if (source && typeof source === 'object') {
+      sessions = Object.keys(source).map((key) => normalizeSessionName(source[key]) || key);
+    }
+
+    return Array.from(new Set(sessions.filter((name) => name && isSafeSessionName(name)))).sort((left, right) => left.localeCompare(right));
+  }
+
+  function renderSessions(data) {
+    const sessions = normalizeSessions(data);
+    sessionNameOptions.textContent = '';
+    sessions.forEach((name) => {
+      const option = document.createElement('option');
+      option.value = name;
+      sessionNameOptions.append(option);
+    });
+    sessionOptionsStatus.textContent = `${sessions.length} saved ${sessions.length === 1 ? 'session' : 'sessions'} available.`;
+  }
+
+  function renderSessionsUnavailable() {
+    sessionNameOptions.textContent = '';
+    sessionOptionsStatus.textContent = 'Saved session suggestions unavailable; manual entry still works.';
+  }
+
   function renderStatus(data) {
     const status = asObject(data.status || data);
     const daemon = asObject(status.daemon);
@@ -492,7 +533,7 @@
     typedRefreshInFlight = true;
     updateTypedControlsDisabled();
     showTypedError('');
-    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status and slots…' : 'Refreshing status and slots…');
+    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, and sessions…' : 'Refreshing status, slots, and sessions…');
     if (source !== 'auto') {
       typedRefreshButton.textContent = 'Refreshing…';
     }
@@ -501,6 +542,7 @@
       const results = await Promise.allSettled([
         fetchJson('/api/status', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/slots', {headers: {'Accept': 'application/json'}}),
+        fetchJson('/api/sessions', {headers: {'Accept': 'application/json'}}),
       ]);
 
       const messages = [];
@@ -521,6 +563,12 @@
         slotsList.append(makeEmptyState('Typed slot endpoint is unavailable. The command console still works below.'));
         slotsCount.textContent = 'No typed slots';
         messages.push(results[1].reason.message || String(results[1].reason));
+      }
+
+      if (results[2].status === 'fulfilled') {
+        renderSessions(results[2].value);
+      } else {
+        renderSessionsUnavailable();
       }
 
       if (messages.length > 0) {

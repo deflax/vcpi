@@ -96,6 +96,7 @@
             <input
               id="session-name-input"
               type="text"
+              list="session-name-options"
               inputmode="text"
               spellcheck="false"
               autocomplete="off"
@@ -104,12 +105,14 @@
               aria-describedby="session-name-help"
               data-typed-action="true"
             >
+            <datalist id="session-name-options"></datalist>
           </label>
           <div class="session-actions" aria-label="Session actions">
             <button id="session-save-button" type="button" class="typed-button" data-typed-action="true">Save</button>
             <button id="session-load-button" type="button" class="typed-button typed-button--ghost" data-typed-action="true">Load</button>
           </div>
         </div>
+        <p id="session-options-status" class="typed-refresh-status session-help" aria-live="polite">Saved session suggestions have not loaded yet.</p>
         <p id="session-name-help" class="form-hint session-help">Start with a letter or number; use letters, numbers, dots, dashes, or underscores. Save can use the current session when blank; load needs a name.</p>
       </div>
 
