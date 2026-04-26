@@ -964,6 +964,16 @@
     return button;
   }
 
+  async function auditionSlot(slotNumber) {
+    setTypedRefreshStatus(`Auditioning slot ${slotNumber}…`);
+    const ok = await mutateTyped(`/api/slots/${encodeURIComponent(slotNumber)}/note`, {
+      note: 60,
+      velocity: 100,
+      duration_ms: 300,
+    });
+    setTypedRefreshStatus(ok ? `Auditioned slot ${slotNumber}. Status refreshed.` : 'Audition failed. See typed API status above.');
+  }
+
   function renderSlots(data) {
     latestTypedSlotsData = data;
     const slots = normalizeSlots(data);
@@ -1041,6 +1051,9 @@
       if (loaded) {
         controls.append(
           slotInfoButton(slotNumber, slotName),
+          typedActionButton('Audition', false, () => {
+            auditionSlot(slotNumber);
+          }),
           typedActionButton('Unload', false, () => {
             if (!window.confirm(`Unload slot ${slotNumber} (${slotName})?`)) {
               return;
