@@ -1,4 +1,4 @@
-"""Allow running as `python -m core {serve,cli}`."""
+"""Allow running as `python -m core {serve,cli,web}`."""
 
 from core.main import main
 

@@ -4,6 +4,7 @@ Subcommands
 -----------
 serve   Run the host as a headless daemon with a Unix socket interface.
 cli     Connect to a running server and open an interactive session.
+web     Start the local-only Phase 1 browser command console.
 """
 
 from __future__ import annotations
@@ -11,10 +12,13 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from typing import TYPE_CHECKING
 
-from core.host import VcpiCore
 from core.logging_setup import configure_logging
 from core.paths import DEFAULT_SOCK_PATH, check_pidfile, write_pidfile, remove_pidfile
+
+if TYPE_CHECKING:
+    from core.host import VcpiCore
 
 
 logger = logging.getLogger(__name__)
@@ -43,8 +47,10 @@ def _add_host_args(parser: argparse.ArgumentParser):
                         help="Skip restoring the previous session on startup")
 
 
-def _boot_host(args) -> VcpiCore:
+def _boot_host(args) -> "VcpiCore":
     """Create a VcpiCore from parsed arguments and optionally restore state."""
+    from core.host import VcpiCore
+
     host = VcpiCore(sample_rate=args.sr, buffer_size=args.buf,
                     session_path=args.session)
     host.link._bpm = args.bpm
@@ -117,6 +123,32 @@ def _cmd_cli(args):
 
     connect(args.sock)
 
+
+def _cmd_web(args):
+    """Start the local-only Phase 1 browser command console."""
+    try:
+        from core import web as web_mod
+    except ImportError as exc:
+        raise SystemExit(
+            "Error: web backend is not available yet. Add core/web.py with "
+            "serve_web(host, port, sock_path, allow_shutdown)."
+        ) from exc
+
+    serve_web = getattr(web_mod, "serve_web", None) or getattr(web_mod, "run_web", None)
+    if serve_web is None:
+        raise SystemExit(
+            "Error: core.web must export serve_web(host, port, sock_path, allow_shutdown)."
+        )
+
+    serve_web(
+        args.host,
+        args.port,
+        args.sock,
+        allow_shutdown=args.allow_shutdown,
+        daemon_timeout=args.daemon_timeout,
+        allow_remote=args.allow_remote,
+    )
+
 # -- main --------------------------------------------------------------------
 
 def main():
@@ -143,9 +175,33 @@ def main():
         help=f"Unix socket path (default: {DEFAULT_SOCK_PATH})")
     sp_cli.set_defaults(func=_cmd_cli)
 
+    # -- web -----------------------------------------------------------------
+    sp_web = sub.add_parser(
+        "web",
+        help="Start the local-only Phase 1 browser command console")
+    sp_web.add_argument(
+        "--host", default="127.0.0.1",
+        help="HTTP bind host (default: 127.0.0.1)")
+    sp_web.add_argument(
+        "--port", type=int, default=8765,
+        help="HTTP bind port (default: 8765)")
+    sp_web.add_argument(
+        "--sock", default=None,
+        help=f"Unix socket path (default: {DEFAULT_SOCK_PATH})")
+    sp_web.add_argument(
+        "--allow-shutdown", action="store_true",
+        help="Allow the browser UI to request daemon shutdown")
+    sp_web.add_argument(
+        "--daemon-timeout", type=float, default=60.0,
+        help="Seconds to wait for daemon command responses (default: 60)")
+    sp_web.add_argument(
+        "--allow-remote", action="store_true",
+        help="Allow binding the command console to non-loopback hosts")
+    sp_web.set_defaults(func=_cmd_web)
+
     args = ap.parse_args()
     if args.command is None:
-        ap.error("a command is required: serve or cli")
+        ap.error("a command is required: serve, cli, or web")
     args.func(args)
 
 
