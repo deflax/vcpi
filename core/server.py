@@ -325,6 +325,8 @@ class VcpiServer:
                 return {"ok": True, "status": self._status_payload()}
             case "slots":
                 return {"ok": True, "slots": self._slots_payload()}
+            case "sessions":
+                return self._sessions_payload()
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -483,6 +485,37 @@ class VcpiServer:
             "loaded_name": self.host.loaded_session_name,
             "loaded_path": str(self.host.loaded_session_path) if self.host.loaded_session_path else None,
         }
+
+    def _sessions_payload(self) -> dict[str, object]:
+        root = self._sessions_root()
+        try:
+            loaded_name = self._normalize_session_name(self.host.loaded_session_name, required=False)
+        except _JsonOperationError:
+            loaded_name = None
+        loaded_path = self.host.loaded_session_path
+        loaded_stem: str | None = None
+        if loaded_path is not None:
+            try:
+                loaded_stem = self._require_path_within_root(Path(loaded_path), root).stem
+            except _JsonOperationError:
+                loaded_stem = None
+
+        sessions: list[dict[str, object]] = []
+        for path in root.glob("*.json"):
+            filename = path.name
+            if filename.startswith(".") or not path.is_file():
+                continue
+            try:
+                name = self._normalize_session_name(filename, required=True)
+            except _JsonOperationError:
+                continue
+            if name is None or f"{name}.json" != filename:
+                continue
+            loaded = name == loaded_name or name == loaded_stem
+            sessions.append({"name": name, "filename": filename, "loaded": loaded})
+
+        sessions.sort(key=lambda item: str(item["name"]))
+        return {"ok": True, "sessions": sessions, "session": self._session_payload()}
 
     def _save_session_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         if "path" in payload:

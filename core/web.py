@@ -472,6 +472,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_json_get("status")
         elif path == "/api/slots":
             self._handle_json_get("slots")
+        elif path == "/api/sessions":
+            self._handle_json_get("sessions")
         else:
             _send_json(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 

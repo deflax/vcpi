@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -333,6 +334,40 @@ class TypedDaemonApiContractTests(unittest.TestCase):
             self.assertEqual(response["status"], 404)
             self.assertEqual(host.restore_calls, [])
 
+    def test_json_sessions_lists_only_safe_top_level_json_and_marks_loaded(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_root = Path(tmp) / "sessions"
+            sessions_root.mkdir()
+            _ = (sessions_root / "beta.json").write_text("{}")
+            _ = (sessions_root / "alpha.json").write_text("{}")
+            _ = (sessions_root / ".hidden.json").write_text("{}")
+            _ = (sessions_root / "bad name.json").write_text("{}")
+            _ = (sessions_root / "notes.txt").write_text("not json")
+            nested = sessions_root / "nested"
+            nested.mkdir()
+            _ = (nested / "inner.json").write_text("{}")
+            host.loaded_session_name = "beta"
+            host.loaded_session_path = sessions_root / "beta.json"
+            daemon._sessions_root = lambda: sessions_root
+
+            result = daemon._handle_json_operation("sessions", {})
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(
+                result["sessions"],
+                [
+                    {"name": "alpha", "filename": "alpha.json", "loaded": False},
+                    {"name": "beta", "filename": "beta.json", "loaded": True},
+                ],
+            )
+            self.assertEqual(result["session"]["loaded_name"], "beta")
+            self.assertEqual(result["session"]["loaded_path"], str(sessions_root / "beta.json"))
+
 
 class WebSafetyTests(unittest.TestCase):
     def test_command_validation_blocks_shutdown_without_opt_in(self) -> None:
@@ -378,6 +413,27 @@ class WebSafetyTests(unittest.TestCase):
         self.assertEqual(unload_match.group(2), "unload")
         with self.assertRaises(ValueError):
             web.VcpiWebHandler._validate_slot_number(bad_slot_match.group(1))
+
+    def test_typed_web_sessions_route_maps_to_sessions_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/sessions"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "sessions": []}
+
+        with mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_GET()
+
+        execute_json_operation.assert_called_once_with(
+            "sessions",
+            {},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
 
     def test_session_name_validation_accepts_safe_names(self) -> None:
         self.assertEqual(web.VcpiWebHandler._validate_session_name("demo"), "demo")
