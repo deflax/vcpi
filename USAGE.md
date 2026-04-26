@@ -133,7 +133,8 @@ control the running daemon.
 The browser dashboard automatically refreshes `/api/status` and `/api/slots` on
 a conservative client-side interval. It slows while the tab is hidden, skips
 polling during typed control updates, and keeps the Refresh button available for
-an immediate manual read.
+an immediate manual read. Loaded slot cards include an Unload action that calls
+the typed slot clear endpoint.
 
 ### Typed HTTP API
 
@@ -155,6 +156,8 @@ requirements.
 | `POST` | `/api/slots/<slot>/gain` | `{"gain": 0.75}` | Set slot gain, where `<slot>` is 1-8 and gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/mute` | `{"muted": true}` or `{"toggle": true}` | Set or toggle slot mute. Omit the body or send `{"toggle": true}` to toggle. |
 | `POST` | `/api/slots/<slot>/solo` | `{"solo": true}` or `{"toggle": true}` | Set or toggle slot solo. Omit the body or send `{"toggle": true}` to toggle. |
+| `POST` | `/api/slots/<slot>/clear` | `{}` | Unload an already-loaded slot and return updated slot/status data. Existing MIDI routing behavior follows the same core clear semantics as `slot <n> clear`. |
+| `POST` | `/api/slots/<slot>/unload` | `{}` | Alias for `/api/slots/<slot>/clear` |
 
 Session names may be plain names such as `demo` or include the `.json` suffix.
 They must start with a letter or number and use only letters, numbers, dots,

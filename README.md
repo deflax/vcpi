@@ -359,7 +359,8 @@ CSRF token for state-changing requests.
 The browser dashboard polls `/api/status` and `/api/slots` on a conservative
 client-side interval so CLI or hardware changes appear without pressing
 Refresh. Polling slows while the tab is hidden and waits for typed control
-updates to finish; the Refresh button still performs an immediate read.
+updates to finish; the Refresh button still performs an immediate read. Loaded
+slot cards include an Unload action that calls the typed slot clear endpoint.
 
 Expected typed endpoints:
 
@@ -375,6 +376,8 @@ Expected typed endpoints:
 | `POST` | `/api/slots/<slot>/gain` | Set slot gain with JSON `{"gain": 0.75}` where `<slot>` is 1-8 |
 | `POST` | `/api/slots/<slot>/mute` | Set or toggle slot mute with JSON `{"muted": true}` or `{"toggle": true}` |
 | `POST` | `/api/slots/<slot>/solo` | Set or toggle slot solo with JSON `{"solo": true}` or `{"toggle": true}` |
+| `POST` | `/api/slots/<slot>/clear` | Unload an already-loaded slot and return updated slot/status data. Existing MIDI routing behavior follows the same core clear semantics as `slot <n> clear`. |
+| `POST` | `/api/slots/<slot>/unload` | Alias for `/api/slots/<slot>/clear` |
 
 Session save and load only accept a safe session `name`, for example `demo` or
 `demo.json`. The name is normalized to `sessions/<name>.json`; arbitrary paths,
