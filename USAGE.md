@@ -134,14 +134,17 @@ The browser dashboard automatically refreshes `/api/status`, `/api/slots`,
 `/api/sessions`, `/api/audio/devices`, and `/api/flow` on a conservative
 client-side interval. It slows while the tab is hidden, skips polling during
 typed control updates, and keeps the Refresh button available for an immediate
-manual read. Loaded slot cards include an Unload action that calls the typed
-slot clear endpoint, an Info action that opens a read-only details panel from
-`/api/slots/<slot>/info`, a Params action that opens a parameter inspector from
-`/api/slots/<slot>/params`, and an Audition control that sends one short test
-note to that loaded slot. The Params panel can also select Master FX params from
-loaded master effects. It shows inline Apply controls only for supported numeric
-instrument, slot FX, and master FX parameters, plus Remove controls for visible
-slot FX groups and the selected master FX. The signal-flow panel
+manual read. Empty slot cards expose built-in WAV sampler loading only: Pack and
+Sample selectors come from `/api/samples`, Name is optional display text, and
+Load calls `/api/slots/<slot>/wav`. Loaded slot cards include an Unload action
+that calls the typed slot clear endpoint, an Info action that opens a read-only
+details panel from `/api/slots/<slot>/info`, a Params action that opens a
+parameter inspector from `/api/slots/<slot>/params`, and an Audition control
+that sends one short test note to that loaded slot. The Params panel can also
+select Master FX params from loaded master effects. It shows inline Apply
+controls only for supported numeric instrument, slot FX, and master FX
+parameters, plus Remove controls for visible slot FX groups and the selected
+master FX. The signal-flow panel
 displays the current ASCII mixer diagram returned by the read-only flow endpoint. The session
 field can suggest saved sessions from the picker, while manual safe-name entry
 remains supported. The audio-device picker uses the read-only device list and
@@ -166,6 +169,8 @@ requirements.
 |---|---|---|---|
 | `GET` | `/api/status` | none | Structured status: audio running state, sample rate, buffer size, tempo, Link state, selected output name when known |
 | `GET` | `/api/slots` | none | All 8 slots with slot number, loaded name, source type, routed MIDI channels, gain, mute, solo, and effect count |
+| `GET` | `/api/samples` | none | Built-in WAV sample catalog grouped by safe pack and sample names for the dashboard Pack and Sample selectors |
+| `POST` | `/api/slots/<slot>/wav` | `{"pack": "909", "sample": "bassdrum", "name": "Kick"}` | Load one built-in WAV sample into slot 1-8. `name` is optional display text. Requires CSRF. |
 | `GET` | `/api/slots/<slot>/info` | none | Read-only slot diagnostics and plugin metadata for `<slot>` 1-8, returned as `{"ok": true, "slot": {...}, "instrument": {...}, "effects": [...], "rendered": "..."}`. Empty slots return `instrument: null`, an empty effects list, and a `message`. |
 | `GET` | `/api/slots/<slot>/params` | none | Read-only instrument and slot insert FX parameter groups for a loaded slot, returned as `{"ok": true, "slot": {...}, "parameters": [...], "effects": [...], "count": 3}`. Empty slots and invalid slot numbers are rejected. |
 | `POST` | `/api/slots/<slot>/params` | `{"name": "cutoff", "value": 0.42}` or `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}` | Set one supported numeric instrument or slot insert FX parameter on a loaded slot. Requires CSRF. |
@@ -201,6 +206,13 @@ top-level JSON session files in `sessions/` for the browser picker. Arbitrary
 `path` payloads, absolute paths, nested paths, dotfiles, and spaces are still
 not supported.
 
+Built-in WAV sampler loading is intentionally narrow. `GET /api/samples` only
+lists WAV files from bundled sample packs. `POST /api/slots/<slot>/wav` accepts
+safe `pack` and `sample` names from that catalog plus an optional display
+`name`; it does not accept arbitrary paths, absolute paths, nested paths, or
+dotfiles. VST and VCV instrument loading, slot FX loading, master FX loading,
+and FX reorder remain CLI-only and out of scope for these typed sampler routes.
+
 Tempo and Link BPM payloads must be JSON numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected.
 
@@ -217,9 +229,9 @@ routing. The route accepts `<slot>` from 1 to 8 and requires integer `note` from
 `duration_ms` defaults to 300 and must be an integer from 1 to 5000. Empty slots
 and invalid payloads are rejected before a note is sent.
 
-`GET /api/audio/devices`, `GET /api/flow`, `GET /api/slots/<slot>/info`, `GET
-/api/slots/<slot>/params`, and `GET /api/master/fx/<fx>/params` are read-only
-and do not need a CSRF token. The
+`GET /api/samples`, `GET /api/audio/devices`, `GET /api/flow`, `GET
+/api/slots/<slot>/info`, `GET /api/slots/<slot>/params`, and `GET
+/api/master/fx/<fx>/params` are read-only and do not need a CSRF token. The
 audio-device endpoint lists only devices with output channels. If `sounddevice`
 is unavailable or device querying fails in the daemon, the endpoint returns
 `{"ok": true, "available": false, "devices": []}` so the browser can keep the
@@ -246,6 +258,11 @@ and `<fx>` is a 1-based effect index. Send an empty JSON body `{}`. Slot FX load
 and reorder actions remain CLI-only and out of scope for the typed browser API;
 remove is available only for already-loaded slot FX.
 
+`POST /api/slots/<slot>/wav` is state-changing and requires the CSRF token. It
+loads only a built-in WAV sample into the selected slot. Send JSON with safe
+`pack` and `sample` names, and optionally `name` for the display label. The route
+does not load VST plugins, VCV patches, slot FX, or master FX.
+
 `POST /api/master/fx/<fx>/params` is state-changing and requires the CSRF token.
 It edits one parameter on an already-loaded master FX, where `<fx>` is a 1-based
 effect index, with JSON such as `{"name": "mix", "value": 0.5}`. Payload names
@@ -263,6 +280,7 @@ Read-only requests can be called directly:
 ```bash
 curl http://127.0.0.1:8765/api/status
 curl http://127.0.0.1:8765/api/slots
+curl http://127.0.0.1:8765/api/samples
 curl http://127.0.0.1:8765/api/sessions
 curl http://127.0.0.1:8765/api/audio/devices
 curl http://127.0.0.1:8765/api/flow
@@ -291,6 +309,11 @@ curl -X POST http://127.0.0.1:8765/api/slots/1/mute \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"toggle": true}'
+
+curl -X POST http://127.0.0.1:8765/api/slots/2/wav \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"pack": "909", "sample": "bassdrum", "name": "Kick"}'
 
 curl -X POST http://127.0.0.1:8765/api/slots/1/params \
   -H "Content-Type: application/json" \
