@@ -147,12 +147,21 @@ requirements.
 |---|---|---|---|
 | `GET` | `/api/status` | none | Structured status: audio running state, sample rate, buffer size, tempo, Link state, selected output name when known |
 | `GET` | `/api/slots` | none | All 8 slots with slot number, loaded name, source type, routed MIDI channels, gain, mute, solo, and effect count |
+| `POST` | `/api/session/save` | optional `{"name": "demo"}` | Save the current daemon state. Without a name, saves to the loaded session path. |
+| `POST` | `/api/session/load` | `{"name": "demo"}` | Load a named session, refresh mixer state, update autosave, and return refreshed slots |
 | `POST` | `/api/audio/start` | optional `{"device": "name or index"}` | Start the audio engine |
 | `POST` | `/api/audio/stop` | `{}` | Stop the audio engine |
 | `POST` | `/api/master/gain` | `{"gain": 0.75}` | Set master gain, where gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/gain` | `{"gain": 0.75}` | Set slot gain, where `<slot>` is 1-8 and gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/mute` | `{"muted": true}` or `{"toggle": true}` | Set or toggle slot mute. Omit the body or send `{"toggle": true}` to toggle. |
 | `POST` | `/api/slots/<slot>/solo` | `{"solo": true}` or `{"toggle": true}` | Set or toggle slot solo. Omit the body or send `{"toggle": true}` to toggle. |
+
+Session names may be plain names such as `demo` or include the `.json` suffix.
+They must start with a letter or number and use only letters, numbers, dots,
+underscore, or hyphen. The web and daemon
+resolve names to `sessions/<name>.json`; arbitrary `path` payloads, absolute
+paths, nested paths, dotfiles, spaces, and session listing are not supported in
+this phase.
 
 Read-only requests can be called directly:
 
@@ -181,6 +190,16 @@ curl -X POST http://127.0.0.1:8765/api/slots/1/mute \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"toggle": true}'
+
+curl -X POST http://127.0.0.1:8765/api/session/save \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"name": "demo"}'
+
+curl -X POST http://127.0.0.1:8765/api/session/load \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"name": "demo"}'
 ```
 
 The free-form command console remains available at `/api/command` for commands

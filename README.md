@@ -367,12 +367,19 @@ Expected typed endpoints:
 |---|---|---|
 | `GET` | `/api/status` | Return structured daemon status, including audio running state, sample rate, buffer size, tempo, Link state, and selected output name when known |
 | `GET` | `/api/slots` | Return all 8 slots with name, source type, route channels, gain, mute, solo, and loaded effect count |
+| `POST` | `/api/session/save` | Save the current daemon state, with optional JSON `{"name": "demo"}` |
+| `POST` | `/api/session/load` | Load a named session with JSON `{"name": "demo"}` and return refreshed slots |
 | `POST` | `/api/audio/start` | Start audio, optionally with JSON `{"device": "name or index"}` |
 | `POST` | `/api/audio/stop` | Stop audio |
 | `POST` | `/api/master/gain` | Set master gain with JSON `{"gain": 0.75}` where gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/gain` | Set slot gain with JSON `{"gain": 0.75}` where `<slot>` is 1-8 |
 | `POST` | `/api/slots/<slot>/mute` | Set or toggle slot mute with JSON `{"muted": true}` or `{"toggle": true}` |
 | `POST` | `/api/slots/<slot>/solo` | Set or toggle slot solo with JSON `{"solo": true}` or `{"toggle": true}` |
+
+Session save and load only accept a safe session `name`, for example `demo` or
+`demo.json`. The name is normalized to `sessions/<name>.json`; arbitrary paths,
+absolute paths, nested paths, dotfiles, spaces, and session listing are not part
+of this phase.
 
 Example:
 
@@ -390,6 +397,16 @@ curl -X POST http://127.0.0.1:8765/api/slots/1/gain \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"gain": 0.65}'
+
+curl -X POST http://127.0.0.1:8765/api/session/save \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"name": "demo"}'
+
+curl -X POST http://127.0.0.1:8765/api/session/load \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"name": "demo"}'
 ```
 
 ## Raspberry Pi Builds
