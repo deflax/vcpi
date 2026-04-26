@@ -136,9 +136,10 @@ client-side interval. It slows while the tab is hidden, skips polling during
 typed control updates, and keeps the Refresh button available for an immediate
 manual read. Loaded slot cards include an Unload action that calls the typed
 slot clear endpoint, an Info action that opens a read-only details panel from
-`/api/slots/<slot>/info`, and an Audition control that sends one short test note
-to that loaded slot. The signal-flow panel displays the current ASCII mixer
-diagram returned by the read-only flow endpoint. The session field can suggest
+`/api/slots/<slot>/info`, a Params action that opens a read-only parameter
+inspector from `/api/slots/<slot>/params`, and an Audition control that sends one
+short test note to that loaded slot. The signal-flow panel displays the current
+ASCII mixer diagram returned by the read-only flow endpoint. The session field can suggest
 saved sessions from the picker, while manual safe-name entry remains supported.
 The audio-device picker uses the read-only device list and sends the selected
 value to `/api/audio/start` as `{"device": "name or index"}`. Tempo and Link
@@ -162,6 +163,7 @@ requirements.
 | `GET` | `/api/status` | none | Structured status: audio running state, sample rate, buffer size, tempo, Link state, selected output name when known |
 | `GET` | `/api/slots` | none | All 8 slots with slot number, loaded name, source type, routed MIDI channels, gain, mute, solo, and effect count |
 | `GET` | `/api/slots/<slot>/info` | none | Read-only slot diagnostics and plugin metadata for `<slot>` 1-8, returned as `{"ok": true, "slot": {...}, "instrument": {...}, "effects": [...], "rendered": "..."}`. Empty slots return `instrument: null`, an empty effects list, and a `message`. |
+| `GET` | `/api/slots/<slot>/params` | none | Read-only parameter metadata for a loaded slot, returned as `{"ok": true, "slot": {...}, "parameters": [...], "count": 3}`. Empty slots and invalid slot numbers are rejected. |
 | `GET` | `/api/sessions` | none | Saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `GET` | `/api/audio/devices` | none | Output-capable audio devices for the browser picker, returned as `{"ok": true, "available": true, "current": "Built-in Output", "default_device": 1, "devices": [{"id": 1, "name": "Built-in Output", "output_channels": 2, "default": true, "selected": true}]}` |
 | `GET` | `/api/flow` | none | Current ASCII signal-flow diagram for the browser diagnostics panel, returned as `{"ok": true, "flow": "..."}` |
@@ -206,16 +208,18 @@ routing. The route accepts `<slot>` from 1 to 8 and requires integer `note` from
 `duration_ms` defaults to 300 and must be an integer from 1 to 5000. Empty slots
 and invalid payloads are rejected before a note is sent.
 
-`GET /api/audio/devices`, `GET /api/flow`, and `GET /api/slots/<slot>/info` are
-read-only and do not need a CSRF token. The audio-device endpoint lists only
-devices with output channels. If `sounddevice` is unavailable or device querying
-fails in the daemon, the endpoint returns `{"ok": true, "available": false,
-"devices": []}` so the browser can keep the system-default option available.
-`GET /api/flow` returns the same current ASCII signal-flow diagram shown by the
-CLI `flow` command. `GET /api/slots/<slot>/info` is diagnostics only for the
-browser Info panel and does not edit parameters, load plugins, or change slot
-state. Starting audio still uses a state-changing POST and must include the CSRF
-token, even when the device value came from the picker.
+`GET /api/audio/devices`, `GET /api/flow`, `GET /api/slots/<slot>/info`, and
+`GET /api/slots/<slot>/params` are read-only and do not need a CSRF token. The
+audio-device endpoint lists only devices with output channels. If `sounddevice`
+is unavailable or device querying fails in the daemon, the endpoint returns
+`{"ok": true, "available": false, "devices": []}` so the browser can keep the
+system-default option available. `GET /api/flow` returns the same current ASCII
+signal-flow diagram shown by the CLI `flow` command. `GET /api/slots/<slot>/info`
+is diagnostics only for the browser Info panel. `GET /api/slots/<slot>/params`
+powers the Params UI with names, values, units, and safe range metadata for an
+already-loaded plugin. It does not edit parameters, set MIDI Mix mappings, load
+plugins, or change slot state. Starting audio still uses a state-changing POST
+and must include the CSRF token, even when the device value came from the picker.
 
 Read-only requests can be called directly:
 
@@ -226,6 +230,7 @@ curl http://127.0.0.1:8765/api/sessions
 curl http://127.0.0.1:8765/api/audio/devices
 curl http://127.0.0.1:8765/api/flow
 curl http://127.0.0.1:8765/api/slots/1/info
+curl http://127.0.0.1:8765/api/slots/1/params
 ```
 
 For `POST` requests, read the CSRF token from `/` and send it as
