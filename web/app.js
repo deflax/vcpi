@@ -22,6 +22,7 @@
   const masterGainValue = document.getElementById('master-gain-value');
   const masterFxSelect = document.getElementById('master-fx-select');
   const masterFxLoadButton = document.getElementById('master-fx-load-button');
+  const masterFxRemoveButton = document.getElementById('master-fx-remove-button');
   const masterFxStatus = document.getElementById('master-fx-status');
   const tempoBpmInput = document.getElementById('tempo-bpm-input');
   const tempoSetButton = document.getElementById('tempo-set-button');
@@ -74,6 +75,7 @@
   let currentInfoMode = '';
   let latestTypedStatusData = {};
   let latestTypedSlotsData = {};
+  let masterFxAvailableCount = 0;
 
   const typedRefreshVisibleIntervalMs = 10000;
   const typedRefreshHiddenIntervalMs = 60000;
@@ -86,6 +88,9 @@
     document.querySelectorAll('[data-typed-action]').forEach((control) => {
       control.disabled = disabled;
     });
+    const masterFxUnavailable = disabled || masterFxAvailableCount === 0 || selectedMasterFx() == null;
+    masterFxLoadButton.disabled = masterFxUnavailable;
+    masterFxRemoveButton.disabled = masterFxUnavailable;
   }
 
   function updateSlotInfoControlsDisabled() {
@@ -376,12 +381,14 @@
 
   function renderMasterFxControls(audio) {
     const count = normalizeMasterFxCount(audio);
+    masterFxAvailableCount = count;
     const previousValue = selectedMasterFx() || 1;
     masterFxSelect.textContent = '';
     if (count === 0) {
       appendSelectOption(masterFxSelect, '1', 'FX 1');
       masterFxSelect.value = '1';
       setMasterFxStatus('No master FX reported by typed status.');
+      updateTypedControlsDisabled();
       return;
     }
     for (let effect = 1; effect <= count; effect += 1) {
@@ -391,6 +398,7 @@
     if (!currentInfoMode.startsWith('master-fx')) {
       setMasterFxStatus(`${count} master ${count === 1 ? 'FX' : 'FX'} available.`);
     }
+    updateTypedControlsDisabled();
   }
 
   function audioDeviceValue(device) {
@@ -1066,6 +1074,57 @@
     }
   }
 
+  async function removeMasterFx(effectNumber) {
+    if (!effectNumber || masterFxAvailableCount === 0) {
+      setMasterFxStatus('Choose a loaded master FX before removing.');
+      showTypedError('Choose a loaded master FX before removing.');
+      return;
+    }
+    if (!window.confirm(`Remove master FX ${effectNumber}?`)) {
+      return;
+    }
+
+    setMasterFxStatus(`Removing master FX ${effectNumber}…`);
+    const ok = await mutateTyped(`/api/master/fx/${encodeURIComponent(effectNumber)}/clear`, {});
+    if (!ok) {
+      setMasterFxStatus('Master FX remove failed. See typed API status above.');
+      return;
+    }
+
+    if (!currentInfoMode.startsWith('master-fx')) {
+      setMasterFxStatus(`Removed master FX ${effectNumber}. Status refreshed.`);
+      return;
+    }
+
+    if (masterFxAvailableCount > 0 && effectNumber <= masterFxAvailableCount) {
+      await loadMasterFxParams(effectNumber);
+      return;
+    }
+
+    renderSlotInfoUnavailable(`master FX ${effectNumber}`, `Master FX ${effectNumber} was removed.`);
+    setMasterFxStatus(`Removed master FX ${effectNumber}.`);
+  }
+
+  async function removeSlotFx(slotNumber, slotName, effectIndex, groupName) {
+    const effectNumber = normalizeMidiNumber(effectIndex, 1, 9999);
+    if (effectNumber == null) {
+      showTypedError('Cannot remove slot FX: effect index is unavailable.');
+      return;
+    }
+    const label = groupName ? `FX ${effectNumber} (${groupName})` : `FX ${effectNumber}`;
+    if (!window.confirm(`Remove slot ${slotNumber} ${label}?`)) {
+      return;
+    }
+
+    slotInfoStatus.textContent = `Removing slot ${slotNumber} ${label}…`;
+    const ok = await mutateTyped(`/api/slots/${encodeURIComponent(slotNumber)}/fx/${encodeURIComponent(effectNumber)}/clear`, {});
+    if (ok) {
+      await loadSlotParams(slotNumber, slotName);
+    } else {
+      slotInfoStatus.textContent = `Could not remove slot ${slotNumber} ${label}. See typed API status above.`;
+    }
+  }
+
   function appendParamEditCell(row, slotNumber, slotName, param) {
     const cell = document.createElement('td');
     if (!editableSlotParam(param)) {
@@ -1159,6 +1218,26 @@
     row.append(cell);
   }
 
+  function appendSlotFxRemoveRow(tbody, slotNumber, slotName, param) {
+    const row = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.colSpan = 4;
+    labelCell.textContent = `Slot FX ${param.effectIndex} · ${param.group}`;
+    const actionCell = document.createElement('td');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'typed-button typed-button--ghost typed-button--danger slot-param-apply';
+    button.textContent = 'Remove FX';
+    button.dataset.typedAction = 'true';
+    button.setAttribute('aria-label', `Remove slot ${slotNumber} FX ${param.effectIndex}`);
+    button.addEventListener('click', () => {
+      removeSlotFx(slotNumber, slotName, param.effectIndex, param.group);
+    });
+    actionCell.append(button);
+    row.append(labelCell, actionCell);
+    tbody.append(row);
+  }
+
   function renderSlotParamsTable(rows, slotNumber, slotName) {
     slotInfoParams.textContent = '';
     if (rows.length === 0) {
@@ -1178,7 +1257,12 @@
     thead.append(headerRow);
 
     const tbody = document.createElement('tbody');
+    const visibleEffectGroups = new Set();
     rows.forEach((param) => {
+      if (param.targetKind === 'effect' && param.effectIndex != null && !visibleEffectGroups.has(String(param.effectIndex))) {
+        visibleEffectGroups.add(String(param.effectIndex));
+        appendSlotFxRemoveRow(tbody, slotNumber, slotName, param);
+      }
       const row = document.createElement('tr');
       appendParamCell(row, param.group);
       appendParamCell(row, param.name);
@@ -1951,6 +2035,15 @@
       return;
     }
     loadMasterFxParams(effect);
+  });
+  masterFxRemoveButton.addEventListener('click', () => {
+    const effect = selectedMasterFx();
+    if (effect == null) {
+      setMasterFxStatus('Choose a valid master FX index.');
+      showTypedError('Choose a valid master FX index.');
+      return;
+    }
+    removeMasterFx(effect);
   });
   tempoBpmInput.addEventListener('input', () => {
     tempoBpmDirty = tempoBpmInput.value.trim() !== '';
