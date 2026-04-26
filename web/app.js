@@ -16,6 +16,8 @@
   const audioStartButton = document.getElementById('audio-start-button');
   const audioStopButton = document.getElementById('audio-stop-button');
   const typedError = document.getElementById('typed-error');
+  const masterGainInput = document.getElementById('master-gain-input');
+  const masterGainValue = document.getElementById('master-gain-value');
   const statusFields = {
     daemon: document.getElementById('status-daemon'),
     audio: document.getElementById('status-audio'),
@@ -273,6 +275,26 @@
     return detail ? `${base} · ${detail}` : base;
   }
 
+  function normalizeGain(value, fallback) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      return fallback;
+    }
+    return Math.min(1, Math.max(0, number));
+  }
+
+  function renderMasterGain(audio) {
+    const gain = firstPresent(audio, ['master_gain'], undefined);
+    if (gain == null) {
+      masterGainValue.textContent = 'Not reported by typed status';
+      masterGainInput.value = '1';
+      return;
+    }
+    const normalizedGain = normalizeGain(gain, 1);
+    masterGainValue.textContent = formatValue(normalizedGain, 'Unknown');
+    masterGainInput.value = normalizedGain.toFixed(2);
+  }
+
   function renderStatus(data) {
     const status = asObject(data.status || data);
     const daemon = asObject(status.daemon);
@@ -301,6 +323,7 @@
       firstPresent(midi, ['active', 'enabled', 'input_count', 'inputs'], firstPresent(status, ['midi'], undefined)),
       formatValue(firstPresent(midi, ['ports', 'output_count', 'outputs'], ''), ''),
     );
+    renderMasterGain(audio);
   }
 
   function normalizeSlots(data) {
@@ -441,6 +464,7 @@
         Object.values(statusFields).forEach((field) => {
           field.textContent = 'Typed endpoint unavailable';
         });
+        masterGainValue.textContent = 'Typed endpoint unavailable';
         messages.push(results[0].reason.message || String(results[0].reason));
       }
 
@@ -580,6 +604,9 @@
   });
   audioStartButton.addEventListener('click', () => mutateTyped('/api/audio/start', {}));
   audioStopButton.addEventListener('click', () => mutateTyped('/api/audio/stop', {}));
+  masterGainInput.addEventListener('change', () => {
+    mutateTyped('/api/master/gain', {gain: Number(masterGainInput.value)});
+  });
 
   document.addEventListener('visibilitychange', () => {
     setTypedRefreshStatus(document.hidden ? 'Auto-refresh slowed while this tab is hidden.' : 'Auto-refresh resumed.');

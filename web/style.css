@@ -133,6 +133,7 @@ h2 {
 .health-card,
 .typed-dashboard,
 .console,
+.master-gain-card,
 .slots-card,
 .transcript-card {
   border: 1px solid var(--color-line);
@@ -205,6 +206,7 @@ h2 {
 
 .typed-header,
 .slots-header,
+.master-gain-card,
 .slot-card-header {
   display: flex;
   justify-content: space-between;
@@ -261,6 +263,12 @@ h2 {
   color: var(--color-warning);
   background: var(--color-soft-panel);
   font-family: var(--font-mono);
+}
+
+.master-gain-card {
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--color-soft-panel);
 }
 
 .status-grid {
@@ -582,6 +590,7 @@ pre {
 
   .typed-header,
   .slots-header,
+  .master-gain-card,
   .slot-card-header {
     align-items: stretch;
     flex-direction: column;

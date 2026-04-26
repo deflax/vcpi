@@ -65,6 +65,26 @@
         </article>
       </div>
 
+      <div class="master-gain-card" aria-labelledby="master-gain-title">
+        <div>
+          <h2 id="master-gain-title">Master gain</h2>
+          <p id="master-gain-value" class="typed-refresh-status" aria-live="polite">Waiting for status…</p>
+        </div>
+        <label class="gain-control master-gain-control" for="master-gain-input">
+          <span>Gain</span>
+          <input
+            id="master-gain-input"
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value="1"
+            data-typed-action="true"
+            aria-label="Set master gain"
+          >
+        </label>
+      </div>
+
       <div class="slots-card" aria-labelledby="slots-title">
         <div class="slots-header">
           <h2 id="slots-title">Slots</h2>
