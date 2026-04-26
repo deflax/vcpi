@@ -77,6 +77,7 @@ class FakeHost:
         self.refreshed_slots: list[list[int] | None] = []
         self.save_calls: list[str | None] = []
         self.restore_calls: list[str | None] = []
+        self.removed_slots: list[int] = []
 
     def start_audio(self, output_device: object | None = None) -> None:
         self.started_with = output_device
@@ -93,6 +94,14 @@ class FakeHost:
 
     def restore_session(self, path: str | None = None) -> None:
         self.restore_calls.append(path)
+
+    def remove_instrument(self, idx: int) -> FakeSlot:
+        self.removed_slots.append(idx)
+        slot = self.engine.slots[idx]
+        if slot is None:
+            raise ValueError(f"Slot {idx + 1} is already empty")
+        self.engine.slots[idx] = None
+        return slot
 
 
 class TypedDaemonApiContractTests(unittest.TestCase):
@@ -158,6 +167,66 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         response = json.loads(daemon._run_json_request('{"op":"slot.mute","payload":{"slot":1,"toggle":"yes"}}', "test"))
         self.assertFalse(response["ok"])
         self.assertEqual(response["status"], 400)
+
+    def test_json_slot_clear_unloads_loaded_slot_and_returns_updated_state(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("slot.clear", {"slot": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.removed_slots, [0])
+        self.assertEqual(host.refreshed_slots, [[0]])
+        self.assertFalse(result["slot"]["loaded"])
+        self.assertIsNone(result["slot"]["name"])
+        self.assertEqual(result["slot"]["slot"], 1)
+        self.assertEqual(result["slot"]["midi_channels"], [1, 10])
+        self.assertEqual(result["status"]["slots_loaded"], 0)
+        self.assertFalse(result["slots"][0]["loaded"])
+
+    def test_json_slot_unload_alias_uses_same_clear_contract(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("slot.unload", {"slot": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.removed_slots, [0])
+        self.assertFalse(result["slot"]["loaded"])
+
+    def test_json_slot_clear_empty_slot_returns_typed_error(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        response = json.loads(daemon._run_json_request('{"op":"slot.clear","payload":{"slot":2}}', "test"))
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["status"], 400)
+        self.assertIn("slot 2 is empty", response["error"])
+        self.assertEqual(host.removed_slots, [])
+        self.assertEqual(host.refreshed_slots, [])
+
+    def test_json_slot_clear_rejects_invalid_slot_before_core_call(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        response = json.loads(daemon._run_json_request('{"op":"slot.clear","payload":{"slot":9}}', "test"))
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["status"], 400)
+        self.assertEqual(host.removed_slots, [])
 
     def test_json_master_gain_mutation_validates_range(self) -> None:
         if server is None:
@@ -295,6 +364,20 @@ class WebSafetyTests(unittest.TestCase):
         web.VcpiWebHandler._validate_optional_bool_payload({"toggle": True}, "muted")
         with self.assertRaises(ValueError):
             web.VcpiWebHandler._validate_optional_bool_payload({"toggle": "yes"}, "muted")
+
+    def test_typed_web_slot_route_validation_accepts_clear_and_unload(self) -> None:
+        clear_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/1/clear")
+        unload_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/8/unload")
+        bad_slot_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/9/clear")
+
+        self.assertIsNotNone(clear_match)
+        self.assertEqual(clear_match.group(1), "1")
+        self.assertEqual(clear_match.group(2), "clear")
+        self.assertIsNotNone(unload_match)
+        self.assertEqual(unload_match.group(1), "8")
+        self.assertEqual(unload_match.group(2), "unload")
+        with self.assertRaises(ValueError):
+            web.VcpiWebHandler._validate_slot_number(bad_slot_match.group(1))
 
     def test_session_name_validation_accepts_safe_names(self) -> None:
         self.assertEqual(web.VcpiWebHandler._validate_session_name("demo"), "demo")

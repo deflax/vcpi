@@ -358,6 +358,20 @@ class VcpiServer:
                 slot.solo = self._slot_bool_from_payload(payload, "solo", slot.solo)
                 self.host.refresh_mixer_leds([idx])
                 return {"ok": True, "slot": self._slot_payload(idx, slot)}
+            case "slot.clear" | "slot.unload":
+                idx = self._slot_index_from_payload(payload)
+                _ = self._loaded_slot(idx)
+                _ = self.host.remove_instrument(idx)
+                refresh = getattr(self.host, "refresh_mixer_leds", None)
+                if callable(refresh):
+                    _ = refresh([idx])
+                status = self._status_payload()
+                return {
+                    "ok": True,
+                    "slot": self._slot_payload(idx, self.host.engine.slots[idx]),
+                    "status": status,
+                    "slots": self._slots_payload(),
+                }
             case _:
                 raise _JsonOperationError(f"unknown operation: {operation}")
 

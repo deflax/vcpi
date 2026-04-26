@@ -34,7 +34,7 @@ JSON_REQUEST_PREFIX = "__vcpi_json__ "
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo)$")
+SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload)$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 
 logger = logging.getLogger(__name__)
@@ -698,7 +698,7 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
     def _handle_slot_action(self, path: str) -> None:
         match = SLOT_ACTION_RE.fullmatch(path)
         if match is None:
-            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot route must be /api/slots/{1-8}/{gain|mute|solo}"})
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot route must be /api/slots/{1-8}/{gain|mute|solo|clear|unload}"})
             return
 
         try:
@@ -715,9 +715,11 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             elif action == "mute":
                 self._validate_optional_bool_payload(payload, "muted")
                 operation = "slot.mute"
-            else:
+            elif action == "solo":
                 self._validate_optional_bool_payload(payload, "solo")
                 operation = "slot.solo"
+            else:
+                operation = f"slot.{action}"
         except json.JSONDecodeError as exc:
             _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return
