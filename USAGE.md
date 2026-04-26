@@ -131,15 +131,17 @@ binding on a trusted network because both the command console and typed API can
 control the running daemon.
 
 The browser dashboard automatically refreshes `/api/status`, `/api/slots`,
-`/api/sessions`, and `/api/audio/devices` on a conservative client-side
-interval. It slows while the tab is hidden, skips polling during typed control
-updates, and keeps the Refresh button available for an immediate manual read.
-Loaded slot cards include an Unload action that calls the typed slot clear
-endpoint. The session field can suggest saved sessions from the picker, while
-manual safe-name entry remains supported. The audio-device picker uses the
-read-only device list and sends the selected value to `/api/audio/start` as
-`{"device": "name or index"}`. Tempo and Link browser controls call typed POST
-routes for BPM, Link start, and Link stop actions.
+`/api/sessions`, `/api/audio/devices`, and `/api/flow` on a conservative
+client-side interval. It slows while the tab is hidden, skips polling during
+typed control updates, and keeps the Refresh button available for an immediate
+manual read. Loaded slot cards include an Unload action that calls the typed
+slot clear endpoint. The signal-flow panel displays the current ASCII mixer
+diagram returned by the read-only flow endpoint. The session field can suggest
+saved sessions from the picker, while manual safe-name entry remains supported.
+The audio-device picker uses the read-only device list and sends the selected
+value to `/api/audio/start` as `{"device": "name or index"}`. Tempo and Link
+browser controls call typed POST routes for BPM, Link start, and Link stop
+actions.
 
 ### Typed HTTP API
 
@@ -155,6 +157,7 @@ requirements.
 | `GET` | `/api/slots` | none | All 8 slots with slot number, loaded name, source type, routed MIDI channels, gain, mute, solo, and effect count |
 | `GET` | `/api/sessions` | none | Saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `GET` | `/api/audio/devices` | none | Output-capable audio devices for the browser picker, returned as `{"ok": true, "available": true, "current": "Built-in Output", "default_device": 1, "devices": [{"id": 1, "name": "Built-in Output", "output_channels": 2, "default": true, "selected": true}]}` |
+| `GET` | `/api/flow` | none | Current ASCII signal-flow diagram for the browser diagnostics panel, returned as `{"ok": true, "flow": "..."}` |
 | `POST` | `/api/session/save` | optional `{"name": "demo"}` | Save the current daemon state. Without a name, saves to the loaded session path. |
 | `POST` | `/api/session/load` | `{"name": "demo"}` | Load a named session, refresh mixer state, update autosave, and return refreshed slots |
 | `POST` | `/api/audio/start` | optional `{"device": "name or index"}` | Start the audio engine. The browser picker sends the selected device value here. |
@@ -180,12 +183,14 @@ not supported.
 Tempo and Link BPM payloads must be JSON numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected.
 
-`GET /api/audio/devices` is read-only and does not need a CSRF token. It lists
-only devices with output channels. If `sounddevice` is unavailable or device
-querying fails in the daemon, the endpoint returns `{"ok": true, "available":
-false, "devices": []}` so the browser can keep the system-default option
-available. Starting audio still uses a state-changing POST and must include the
-CSRF token, even when the device value came from the picker.
+`GET /api/audio/devices` and `GET /api/flow` are read-only and do not need a
+CSRF token. The audio-device endpoint lists only devices with output channels.
+If `sounddevice` is unavailable or device querying fails in the daemon, the
+endpoint returns `{"ok": true, "available": false, "devices": []}` so the
+browser can keep the system-default option available. `GET /api/flow` returns
+the same current ASCII signal-flow diagram shown by the CLI `flow` command.
+Starting audio still uses a state-changing POST and must include the CSRF token,
+even when the device value came from the picker.
 
 Read-only requests can be called directly:
 
@@ -194,6 +199,7 @@ curl http://127.0.0.1:8765/api/status
 curl http://127.0.0.1:8765/api/slots
 curl http://127.0.0.1:8765/api/sessions
 curl http://127.0.0.1:8765/api/audio/devices
+curl http://127.0.0.1:8765/api/flow
 ```
 
 For `POST` requests, read the CSRF token from `/` and send it as

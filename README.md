@@ -36,9 +36,10 @@ python main.py web
 ```
 
 vcpi runs with a separate server (`serve`) and multiple clients. Use `cli`
-for the terminal client or `web` for the local browser command console. Phase 2
-adds typed JSON endpoints for status, slots, audio transport, audio-device
-listing, and slot mixer controls while keeping the command console available.
+for the terminal client or `web` for the local browser command console. The
+typed JSON API covers status, slots, signal-flow diagnostics, audio transport,
+audio-device listing, and slot mixer controls while keeping the command console
+available.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcli` with `audio start [device]`.
@@ -356,17 +357,18 @@ strings. The typed endpoints are still local/protected. They use the same
 loopback bind default, the same `--allow-remote` guard, and the same per-process
 CSRF token for state-changing requests.
 
-The browser dashboard polls `/api/status`, `/api/slots`, `/api/sessions`, and
-`/api/audio/devices` on a conservative client-side interval so CLI or hardware
-changes appear without pressing Refresh. Polling slows while the tab is hidden
-and waits for typed control updates to finish; the Refresh button still performs
-an immediate read. Loaded slot cards include an Unload action that calls the
-typed slot clear endpoint. The session field can suggest saved sessions from
-the picker, while manual safe-name entry remains supported. The audio-device
-picker uses the read-only device list and sends the selected value to
-`/api/audio/start` as `{"device": "name or index"}`. Tempo and Link controls
-use typed POST routes so browser controls can set BPM, enable Link, and disable
-Link without sending free-form CLI commands.
+The browser dashboard polls `/api/status`, `/api/slots`, `/api/sessions`,
+`/api/audio/devices`, and `/api/flow` on a conservative client-side interval so
+CLI or hardware changes appear without pressing Refresh. Polling slows while
+the tab is hidden and waits for typed control updates to finish; the Refresh
+button still performs an immediate read. Loaded slot cards include an Unload
+action that calls the typed slot clear endpoint. The signal-flow panel displays
+the current ASCII mixer diagram from the read-only flow endpoint. The session
+field can suggest saved sessions from the picker, while manual safe-name entry
+remains supported. The audio-device picker uses the read-only device list and
+sends the selected value to `/api/audio/start` as `{"device": "name or index"}`.
+Tempo and Link controls use typed POST routes so browser controls can set BPM,
+enable Link, and disable Link without sending free-form CLI commands.
 
 Expected typed endpoints:
 
@@ -376,6 +378,7 @@ Expected typed endpoints:
 | `GET` | `/api/slots` | Return all 8 slots with name, source type, route channels, gain, mute, solo, and loaded effect count |
 | `GET` | `/api/sessions` | Return saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `GET` | `/api/audio/devices` | Return output-capable audio devices as `{"ok": true, "available": true, "current": "Built-in Output", "default_device": 1, "devices": [{"id": 1, "name": "Built-in Output", "output_channels": 2, "default": true, "selected": true}]}` for the browser picker |
+| `GET` | `/api/flow` | Return the current ASCII signal-flow diagram as `{"ok": true, "flow": "..."}` for the browser diagnostics panel |
 | `POST` | `/api/session/save` | Save the current daemon state, with optional JSON `{"name": "demo"}` |
 | `POST` | `/api/session/load` | Load a named session with JSON `{"name": "demo"}` and return refreshed slots |
 | `POST` | `/api/audio/start` | Start audio, optionally with JSON `{"device": "name or index"}` from the audio-device picker |
@@ -396,12 +399,14 @@ Session save and load only accept a safe session `name`, for example `demo` or
 the browser picker. Arbitrary paths, absolute paths, nested paths, dotfiles, and
 spaces are still not supported.
 
-`GET /api/audio/devices` is read-only and does not need a CSRF token. It lists
-only devices with output channels. If `sounddevice` is unavailable or device
-querying fails in the daemon, the endpoint returns `{"ok": true, "available":
-false, "devices": []}` so the browser can keep the system-default option
-available. Starting audio still uses a state-changing POST and must include the
-CSRF token, even when the device value came from the picker.
+`GET /api/audio/devices` and `GET /api/flow` are read-only and do not need a
+CSRF token. The audio-device endpoint lists only devices with output channels.
+If `sounddevice` is unavailable or device querying fails in the daemon, the
+endpoint returns `{"ok": true, "available": false, "devices": []}` so the
+browser can keep the system-default option available. `GET /api/flow` returns
+the same current ASCII signal-flow diagram shown by the CLI `flow` command.
+Starting audio still uses a state-changing POST and must include the CSRF token,
+even when the device value came from the picker.
 
 Tempo and Link BPM payloads must be numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected before reaching the daemon.
@@ -420,6 +425,7 @@ curl http://127.0.0.1:8765/api/status
 curl http://127.0.0.1:8765/api/slots
 curl http://127.0.0.1:8765/api/sessions
 curl http://127.0.0.1:8765/api/audio/devices
+curl http://127.0.0.1:8765/api/flow
 
 curl -X POST http://127.0.0.1:8765/api/audio/start \
   -H "Content-Type: application/json" \
