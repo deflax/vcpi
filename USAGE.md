@@ -130,6 +130,11 @@ refuses non-loopback binds unless `--allow-remote` is set. Only use remote
 binding on a trusted network because both the command console and typed API can
 control the running daemon.
 
+The browser dashboard automatically refreshes `/api/status` and `/api/slots` on
+a conservative client-side interval. It slows while the tab is hidden, skips
+polling during typed control updates, and keeps the Refresh button available for
+an immediate manual read.
+
 ### Typed HTTP API
 
 The typed API is a small local control surface for browser UI code. It avoids

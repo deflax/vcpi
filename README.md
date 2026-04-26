@@ -356,6 +356,11 @@ strings. The typed endpoints are still local/protected. They use the same
 loopback bind default, the same `--allow-remote` guard, and the same per-process
 CSRF token for state-changing requests.
 
+The browser dashboard polls `/api/status` and `/api/slots` on a conservative
+client-side interval so CLI or hardware changes appear without pressing
+Refresh. Polling slows while the tab is hidden and waits for typed control
+updates to finish; the Refresh button still performs an immediate read.
+
 Expected typed endpoints:
 
 | Method | Path | Purpose |
