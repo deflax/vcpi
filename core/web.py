@@ -482,6 +482,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_audio_start()
         elif path == "/api/audio/stop":
             self._handle_json_post("audio.stop", {})
+        elif path == "/api/master/gain":
+            self._handle_master_gain()
         elif path.startswith("/api/slots/"):
             self._handle_slot_action(path)
         else:
@@ -646,6 +648,18 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             )
             return
         self._handle_json_post("audio.start", payload)
+
+    def _handle_master_gain(self) -> None:
+        try:
+            payload = self._read_secure_optional_json_body()
+            if payload is None:
+                return
+            self._validate_gain_payload(payload)
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("master.gain", payload)
 
     def _handle_slot_action(self, path: str) -> None:
         match = SLOT_ACTION_RE.fullmatch(path)

@@ -336,6 +336,10 @@ class VcpiServer:
                 slot = self._loaded_slot(idx)
                 slot.gain = gain
                 return {"ok": True, "slot": self._slot_payload(idx, slot)}
+            case "master.gain":
+                gain = self._gain_from_payload(payload)
+                self.host.engine.master_gain = gain
+                return {"ok": True, "status": self._status_payload()}
             case "slot.mute":
                 idx = self._slot_index_from_payload(payload)
                 slot = self._loaded_slot(idx)

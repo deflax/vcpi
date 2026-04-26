@@ -150,6 +150,23 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertEqual(response["status"], 400)
 
+    def test_json_master_gain_mutation_validates_range(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        gain = daemon._handle_json_operation("master.gain", {"gain": 0.35})
+
+        self.assertTrue(gain["ok"])
+        self.assertEqual(host.engine.master_gain, 0.35)
+        self.assertEqual(gain["status"]["audio"]["master_gain"], 0.35)
+        with self.assertRaises(server._JsonOperationError):
+            daemon._handle_json_operation("master.gain", {"gain": 1.25})
+        response = json.loads(daemon._run_json_request('{"op":"master.gain","payload":{"gain":"loud"}}', "test"))
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["status"], 400)
+
 
 class WebSafetyTests(unittest.TestCase):
     def test_command_validation_blocks_shutdown_without_opt_in(self) -> None:
@@ -175,6 +192,7 @@ class WebSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             web.VcpiWebHandler._validate_slot_number("9")
         web.VcpiWebHandler._validate_gain_payload({"gain": 0.25})
+        web.VcpiWebHandler._validate_gain_payload({"gain": 1.0})
         with self.assertRaises(ValueError):
             web.VcpiWebHandler._validate_gain_payload({"gain": 1.25})
         web.VcpiWebHandler._validate_optional_bool_payload({"toggle": True}, "muted")
