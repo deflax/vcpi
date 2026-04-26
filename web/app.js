@@ -52,6 +52,7 @@
   const slotInfoTitle = document.getElementById('slot-info-title');
   const slotInfoStatus = document.getElementById('slot-info-status');
   const slotInfoMeta = document.getElementById('slot-info-meta');
+  const slotInfoParams = document.getElementById('slot-info-params');
   const slotInfoOutput = document.getElementById('slot-info-output');
   const slotInfoClose = document.getElementById('slot-info-close');
   const csrfToken = document.querySelector('meta[name="vcpi-csrf-token"]')?.content || '';
@@ -67,6 +68,7 @@
   let sessionNameDirty = false;
   let slotInfoInFlight = false;
   let currentInfoSlot = '';
+  let currentInfoMode = '';
   let latestTypedStatusData = {};
   let latestTypedSlotsData = {};
 
@@ -802,7 +804,7 @@
     if (Object.keys(metadata).length > 0) {
       return metadata;
     }
-    const excluded = new Set(['ok', 'rendered', 'info', 'text', 'output', 'details', 'description', 'message', 'error']);
+    const excluded = new Set(['ok', 'rendered', 'info', 'text', 'output', 'details', 'description', 'message', 'error', 'params', 'parameters', 'items', 'rows', 'ascii', 'knobs']);
     const shallow = {};
     Object.keys(data).forEach((key) => {
       const value = data[key];
@@ -811,6 +813,153 @@
       }
     });
     return shallow;
+  }
+
+  function resetSlotParamsTable() {
+    slotInfoParams.textContent = '';
+    slotInfoParams.hidden = true;
+  }
+
+  function slotParamsText(data) {
+    if (typeof data === 'string') {
+      return data;
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return '';
+    }
+    return normalizeOutput(firstPresent(data, ['rendered', 'ascii', 'knobs', 'output', 'text'], ''));
+  }
+
+  function parameterRowsFromSource(source, groupLabel) {
+    const rows = [];
+    const addRow = (name, value, group) => {
+      const valueObject = asObject(value);
+      const displayName = firstPresent(valueObject, ['name', 'label', 'id', 'key'], name);
+      const displayValue = Object.keys(valueObject).length > 0
+        ? firstPresent(valueObject, ['display', 'display_value', 'value', 'current', 'normalized', 'default'], '')
+        : value;
+      const units = firstPresent(valueObject, ['units', 'unit'], '');
+      const type = firstPresent(valueObject, ['type', 'kind'], '');
+      const minimum = firstPresent(valueObject, ['min', 'minimum', 'lo', 'low'], undefined);
+      const maximum = firstPresent(valueObject, ['max', 'maximum', 'hi', 'high'], undefined);
+      const range = minimum != null || maximum != null ? `${formatValue(minimum, '—')}–${formatValue(maximum, '—')}` : '—';
+      rows.push({
+        group: formatValue(group, 'Instrument'),
+        name: formatValue(displayName, 'Unnamed parameter'),
+        value: units ? `${formatValue(displayValue, '—')} ${units}` : formatValue(displayValue, '—'),
+        range: type && range === '—' ? formatValue(type, '—') : range,
+      });
+    };
+
+    const collect = (value, group) => {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => {
+          if (item && typeof item === 'object' && !Array.isArray(item)) {
+            const nested = firstPresent(item, ['params', 'parameters', 'items', 'rows'], undefined);
+            if (nested != null && !firstPresent(item, ['value', 'current', 'display', 'display_value', 'normalized', 'default'], undefined)) {
+              collect(nested, formatValue(firstPresent(item, ['name', 'label', 'component', 'plugin', 'type'], group), group));
+              return;
+            }
+          }
+          addRow(String(index + 1), item, group);
+        });
+        return;
+      }
+      if (value && typeof value === 'object') {
+        const nested = firstPresent(value, ['params', 'parameters', 'items', 'rows'], undefined);
+        if (nested != null && value === source) {
+          collect(nested, group);
+          return;
+        }
+        Object.keys(value).forEach((key) => {
+          const item = value[key];
+          if (item && typeof item === 'object' && !Array.isArray(item)) {
+            const nestedItem = firstPresent(item, ['params', 'parameters', 'items', 'rows'], undefined);
+            if (nestedItem != null && !firstPresent(item, ['value', 'current', 'display', 'display_value', 'normalized', 'default'], undefined)) {
+              collect(nestedItem, formatValue(firstPresent(item, ['name', 'label', 'component', 'plugin', 'type'], key), key));
+              return;
+            }
+          }
+          addRow(key, item, group);
+        });
+      }
+    };
+
+    collect(source, groupLabel);
+    return rows;
+  }
+
+  function slotParameterRows(data) {
+    if (Array.isArray(data)) {
+      return parameterRowsFromSource(data, 'Instrument');
+    }
+    if (!data || typeof data !== 'object') {
+      return [];
+    }
+    const rows = [];
+    const topLevelParams = firstPresent(data, ['params', 'parameters', 'items', 'rows'], undefined);
+    if (topLevelParams != null) {
+      rows.push(...parameterRowsFromSource(topLevelParams, 'Instrument'));
+    }
+    const instrument = asObject(data.instrument || data.plugin);
+    const instrumentParams = firstPresent(instrument, ['params', 'parameters', 'items', 'rows'], undefined);
+    if (instrumentParams != null) {
+      rows.push(...parameterRowsFromSource(instrumentParams, formatValue(firstPresent(instrument, ['name', 'label', 'type'], 'Instrument'), 'Instrument')));
+    }
+    const effects = Array.isArray(data.effects) ? data.effects : [];
+    effects.forEach((effect, index) => {
+      const effectObject = asObject(effect);
+      const effectParams = firstPresent(effectObject, ['params', 'parameters', 'items', 'rows'], undefined);
+      if (effectParams != null) {
+        rows.push(...parameterRowsFromSource(effectParams, formatValue(firstPresent(effectObject, ['name', 'label', 'type'], `Effect ${index + 1}`), `Effect ${index + 1}`)));
+      }
+    });
+    return rows;
+  }
+
+  function appendHeaderCell(row, label) {
+    const cell = document.createElement('th');
+    cell.scope = 'col';
+    cell.textContent = label;
+    row.append(cell);
+  }
+
+  function appendParamCell(row, value) {
+    const cell = document.createElement('td');
+    cell.textContent = value;
+    row.append(cell);
+  }
+
+  function renderSlotParamsTable(rows) {
+    slotInfoParams.textContent = '';
+    if (rows.length === 0) {
+      slotInfoParams.hidden = true;
+      return;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'slot-params-table';
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    appendHeaderCell(headerRow, 'Component');
+    appendHeaderCell(headerRow, 'Parameter');
+    appendHeaderCell(headerRow, 'Value');
+    appendHeaderCell(headerRow, 'Range');
+    thead.append(headerRow);
+
+    const tbody = document.createElement('tbody');
+    rows.forEach((param) => {
+      const row = document.createElement('tr');
+      appendParamCell(row, param.group);
+      appendParamCell(row, param.name);
+      appendParamCell(row, param.value);
+      appendParamCell(row, param.range);
+      tbody.append(row);
+    });
+
+    table.append(thead, tbody);
+    slotInfoParams.append(table);
+    slotInfoParams.hidden = false;
   }
 
   function renderSlotInfoMetadata(metadata) {
@@ -834,19 +983,23 @@
     const text = slotInfoText(data).trimEnd();
     const metadata = slotInfoMetadata(data);
     currentInfoSlot = String(slotNumber);
+    currentInfoMode = 'info';
     slotInfoTitle.textContent = `Slot ${slotNumber} info`;
     slotInfoStatus.textContent = slotName ? `Loaded details for ${slotName}.` : 'Loaded slot details.';
     renderSlotInfoMetadata(metadata);
+    resetSlotParamsTable();
     slotInfoOutput.textContent = text || 'The slot info endpoint returned no details for this loaded slot.';
     setSlotInfoPanelVisible(true);
   }
 
   function renderSlotInfoUnavailable(slotNumber, message) {
     currentInfoSlot = String(slotNumber);
-    slotInfoTitle.textContent = `Slot ${slotNumber} info`;
-    slotInfoStatus.textContent = message || 'Slot info unavailable.';
+    currentInfoMode = '';
+    slotInfoTitle.textContent = `Slot ${slotNumber} details`;
+    slotInfoStatus.textContent = message || 'Slot details unavailable.';
     renderSlotInfoMetadata({});
-    slotInfoOutput.textContent = message || 'Slot info unavailable.';
+    resetSlotParamsTable();
+    slotInfoOutput.textContent = message || 'Slot details unavailable.';
     setSlotInfoPanelVisible(true);
   }
 
@@ -859,15 +1012,59 @@
     showTypedError('');
     setSlotInfoPanelVisible(true);
     currentInfoSlot = String(slotNumber);
+    currentInfoMode = 'info';
     slotInfoTitle.textContent = `Slot ${slotNumber} info`;
     slotInfoStatus.textContent = `Loading read-only info for slot ${slotNumber}…`;
     renderSlotInfoMetadata({});
+    resetSlotParamsTable();
     slotInfoOutput.textContent = 'Inspecting plugin details…';
     try {
       const data = await fetchJson(`/api/slots/${encodeURIComponent(slotNumber)}/info`, {headers: {'Accept': 'application/json'}});
       renderSlotInfo(slotNumber, slotName, data);
     } catch (error) {
       const message = `Slot info unavailable: ${error.message || String(error)}`;
+      renderSlotInfoUnavailable(slotNumber, message);
+      showTypedError(message);
+    } finally {
+      slotInfoInFlight = false;
+      updateSlotInfoControlsDisabled();
+    }
+  }
+
+
+  function renderSlotParams(slotNumber, slotName, data) {
+    const rows = slotParameterRows(data);
+    const text = slotParamsText(data).trimEnd();
+    currentInfoSlot = String(slotNumber);
+    currentInfoMode = 'params';
+    slotInfoTitle.textContent = `Slot ${slotNumber} params`;
+    slotInfoStatus.textContent = slotName ? `Loaded read-only parameters for ${slotName}.` : 'Loaded read-only parameters.';
+    renderSlotInfoMetadata(slotInfoMetadata(data));
+    renderSlotParamsTable(rows);
+    slotInfoOutput.textContent = text || (rows.length > 0 ? 'No rendered parameter diagram supplied by the backend.' : 'The params endpoint returned no parameters for this loaded slot.');
+    setSlotInfoPanelVisible(true);
+  }
+
+  async function loadSlotParams(slotNumber, slotName) {
+    if (!slotNumber || slotInfoInFlight) {
+      return;
+    }
+    slotInfoInFlight = true;
+    updateSlotInfoControlsDisabled();
+    showTypedError('');
+    setSlotInfoPanelVisible(true);
+    currentInfoSlot = String(slotNumber);
+    currentInfoMode = 'params';
+    slotInfoTitle.textContent = `Slot ${slotNumber} params`;
+    slotInfoStatus.textContent = `Loading read-only params for slot ${slotNumber}…`;
+    renderSlotInfoMetadata({});
+    resetSlotParamsTable();
+    slotInfoOutput.textContent = 'Inspecting plugin parameters…';
+    try {
+      const data = await fetchJson(`/api/slots/${encodeURIComponent(slotNumber)}/params`, {headers: {'Accept': 'application/json'}});
+      renderSlotParams(slotNumber, slotName, data);
+    } catch (error) {
+      const message = `Slot params unavailable: ${error.message || String(error)}`;
       renderSlotInfoUnavailable(slotNumber, message);
       showTypedError(message);
     } finally {
@@ -951,7 +1148,7 @@
   }
 
   function slotInfoButton(slotNumber, slotName) {
-    const selected = currentInfoSlot === String(slotNumber);
+    const selected = currentInfoSlot === String(slotNumber) && currentInfoMode === 'info';
     const button = document.createElement('button');
     button.type = 'button';
     button.className = selected ? 'typed-button typed-button--info typed-button--active' : 'typed-button typed-button--ghost typed-button--info';
@@ -960,6 +1157,21 @@
     button.dataset.slotInfoAction = 'true';
     button.addEventListener('click', () => {
       loadSlotInfo(slotNumber, slotName);
+    });
+    return button;
+  }
+
+
+  function slotParamsButton(slotNumber, slotName) {
+    const selected = currentInfoSlot === String(slotNumber) && currentInfoMode === 'params';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = selected ? 'typed-button typed-button--info typed-button--active' : 'typed-button typed-button--ghost typed-button--info';
+    button.textContent = 'Params';
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    button.dataset.slotInfoAction = 'true';
+    button.addEventListener('click', () => {
+      loadSlotParams(slotNumber, slotName);
     });
     return button;
   }
@@ -1051,6 +1263,7 @@
       if (loaded) {
         controls.append(
           slotInfoButton(slotNumber, slotName),
+          slotParamsButton(slotNumber, slotName),
           typedActionButton('Audition', false, () => {
             auditionSlot(slotNumber);
           }),
@@ -1435,6 +1648,7 @@
   sessionLoadButton.addEventListener('click', loadSession);
   slotInfoClose.addEventListener('click', () => {
     currentInfoSlot = '';
+    currentInfoMode = '';
     setSlotInfoPanelVisible(false);
     updateSlotInfoControlsDisabled();
   });

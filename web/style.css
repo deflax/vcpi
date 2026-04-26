@@ -600,6 +600,44 @@ h2 {
   max-height: calc(var(--space-7) * 7);
 }
 
+.slot-params-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-terminal);
+}
+
+.slot-params-table-wrap[hidden] {
+  display: none;
+}
+
+.slot-params-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+}
+
+.slot-params-table th,
+.slot-params-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.slot-params-table th {
+  color: var(--color-accent-strong);
+  background: var(--color-panel-strong);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.slot-params-table tr:last-child td {
+  border-bottom: 0;
+}
+
 .slot-badge {
   border: 1px solid var(--color-line);
   border-radius: 999px;
