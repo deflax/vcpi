@@ -30,8 +30,10 @@ DEFAULT_WEB_HOST = "127.0.0.1"
 DEFAULT_WEB_PORT = 8765
 MAX_COMMAND_BODY_BYTES = 64 * 1024
 DEFAULT_DAEMON_TIMEOUT_SECONDS = 60.0
+JSON_REQUEST_PREFIX = "__vcpi_json__ "
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo)$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 
 logger = logging.getLogger(__name__)
@@ -170,6 +172,14 @@ class CommandResult:
         self.banner: list[str] = banner
 
 
+class JsonOperationResult:
+    """Structured output from one daemon JSON operation."""
+
+    def __init__(self, payload: dict[str, object], banner: list[str]):
+        self.payload: dict[str, object] = payload
+        self.banner: list[str] = banner
+
+
 def _socket_path(sock_path: str | Path | None) -> Path:
     return Path(sock_path) if sock_path else DEFAULT_SOCK_PATH
 
@@ -221,6 +231,61 @@ def execute_command(
             if output is None:
                 raise ConnectionError("daemon closed connection before response")
             return CommandResult(output=output, banner=banner)
+        finally:
+            try:
+                wfile.close()
+            finally:
+                rfile.close()
+
+
+def execute_json_operation(
+    operation: str,
+    payload: dict[str, object] | None = None,
+    sock_path: str | Path | None = None,
+    *,
+    daemon_timeout: float = DEFAULT_DAEMON_TIMEOUT_SECONDS,
+) -> JsonOperationResult:
+    """Send one typed JSON operation to the daemon and return its payload."""
+    if not isinstance(operation, str) or not operation.strip():
+        raise ValueError("operation must be a non-empty string")
+    if "\n" in operation or "\r" in operation:
+        raise ValueError("operation must be a single line")
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a JSON object")
+
+    request = json.dumps(
+        {"op": operation.strip(), "payload": payload},
+        separators=(",", ":"),
+    )
+    line = JSON_REQUEST_PREFIX + request
+    path = _socket_path(sock_path)
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(daemon_timeout)
+        sock.connect(str(path))
+        rfile = sock.makefile("r", encoding="utf-8", errors="replace")
+        wfile = sock.makefile("w", encoding="utf-8")
+        try:
+            banner = _read_response_lines(rfile)
+            if banner is None:
+                raise ConnectionError("daemon closed connection before banner")
+
+            _ = wfile.write(line + "\n")
+            wfile.flush()
+
+            output = _read_response_lines(rfile)
+            if output is None:
+                raise ConnectionError("daemon closed connection before JSON response")
+            if not output:
+                raise ConnectionError("daemon returned an empty JSON response")
+
+            raw_payload = "\n".join(output)
+            parsed = cast(object, json.loads(raw_payload))
+            if not isinstance(parsed, dict):
+                raise ConnectionError("daemon JSON response must be an object")
+            return JsonOperationResult(cast(dict[str, object], parsed), banner=banner)
         finally:
             try:
                 wfile.close()
@@ -339,6 +404,18 @@ def _send_text(
     _ = handler.wfile.write(body)
 
 
+def _http_status_from_payload(payload: dict[str, object]) -> HTTPStatus:
+    if payload.get("ok") is True:
+        return HTTPStatus.OK
+    status = payload.get("status")
+    if isinstance(status, int):
+        try:
+            return HTTPStatus(status)
+        except ValueError:
+            pass
+    return HTTPStatus.INTERNAL_SERVER_ERROR
+
+
 class VcpiWebServer(ThreadingHTTPServer):
     """HTTP server carrying daemon connection settings for handlers."""
 
@@ -390,6 +467,10 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_health()
         elif path == "/api/commands":
             self._handle_commands()
+        elif path == "/api/status":
+            self._handle_json_get("status")
+        elif path == "/api/slots":
+            self._handle_json_get("slots")
         else:
             _send_json(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
@@ -397,6 +478,12 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/command":
             self._handle_command()
+        elif path == "/api/audio/start":
+            self._handle_audio_start()
+        elif path == "/api/audio/stop":
+            self._handle_json_post("audio.stop", {})
+        elif path.startswith("/api/slots/"):
+            self._handle_slot_action(path)
         else:
             _send_json(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
@@ -495,6 +582,106 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             {"ok": True, "command": command, "output": result.output},
         )
 
+    def _handle_json_get(self, operation: str) -> None:
+        try:
+            result = execute_json_operation(
+                operation,
+                {},
+                self.vcpi_server.sock_path,
+                daemon_timeout=self.vcpi_server.daemon_timeout,
+            )
+        except TimeoutError as exc:
+            _send_json(self, HTTPStatus.GATEWAY_TIMEOUT, {"ok": False, "error": str(exc)})
+            return
+        except json.JSONDecodeError as exc:
+            _send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(exc)})
+            return
+        except (ConnectionError, ConnectionRefusedError, FileNotFoundError, OSError) as exc:
+            _send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(exc)})
+            return
+
+        _send_json(self, _http_status_from_payload(result.payload), result.payload)
+
+    def _handle_json_post(self, operation: str, payload: dict[str, object] | None = None) -> None:
+        try:
+            self._validate_post_security()
+            if payload is None:
+                payload = self._read_optional_json_body()
+            result = execute_json_operation(
+                operation,
+                payload,
+                self.vcpi_server.sock_path,
+                daemon_timeout=self.vcpi_server.daemon_timeout,
+            )
+        except PermissionError as exc:
+            _send_json(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)})
+            return
+        except TimeoutError as exc:
+            _send_json(self, HTTPStatus.GATEWAY_TIMEOUT, {"ok": False, "error": str(exc)})
+            return
+        except json.JSONDecodeError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        except (ConnectionError, ConnectionRefusedError, FileNotFoundError, OSError) as exc:
+            _send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": str(exc)})
+            return
+
+        _send_json(self, _http_status_from_payload(result.payload), result.payload)
+
+    def _handle_audio_start(self) -> None:
+        payload = self._read_secure_optional_json_body()
+        if payload is None:
+            return
+        device = payload.get("device")
+        if isinstance(device, bool) or (
+            device is not None and not isinstance(device, (str, int))
+        ):
+            _send_json(
+                self,
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": "device must be a string, integer, or null"},
+            )
+            return
+        self._handle_json_post("audio.start", payload)
+
+    def _handle_slot_action(self, path: str) -> None:
+        match = SLOT_ACTION_RE.fullmatch(path)
+        if match is None:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot route must be /api/slots/{1-8}/{gain|mute|solo}"})
+            return
+
+        try:
+            slot = self._validate_slot_number(match.group(1))
+            body = self._read_secure_optional_json_body()
+            if body is None:
+                return
+            action = match.group(2)
+            payload = dict(body)
+            payload["slot"] = slot
+            if action == "gain":
+                self._validate_gain_payload(payload)
+                operation = "slot.gain"
+            elif action == "mute":
+                self._validate_optional_bool_payload(payload, "muted")
+                operation = "slot.mute"
+            else:
+                self._validate_optional_bool_payload(payload, "solo")
+                operation = "slot.solo"
+        except json.JSONDecodeError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        except PermissionError as exc:
+            _send_json(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post(operation, payload)
+
     def _validate_post_security(self) -> None:
         content_type = self.headers.get("Content-Type", "")
         media_type = content_type.split(";", 1)[0].strip().lower()
@@ -535,6 +722,66 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("request body must be a JSON object")
         return cast(dict[str, object], payload)
+
+    def _read_secure_optional_json_body(self) -> dict[str, object] | None:
+        try:
+            self._validate_post_security()
+            return self._read_optional_json_body()
+        except PermissionError as exc:
+            _send_json(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)})
+        except json.JSONDecodeError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+        return None
+
+    def _read_optional_json_body(self) -> dict[str, object]:
+        content_length = self.headers.get("Content-Length")
+        if content_length is None:
+            return {}
+        try:
+            size = int(content_length)
+        except ValueError as exc:
+            raise ValueError("Content-Length must be an integer") from exc
+        if size < 0:
+            raise ValueError("Content-Length must not be negative")
+        if size > MAX_COMMAND_BODY_BYTES:
+            raise ValueError("request body is too large")
+        if size == 0:
+            return {}
+
+        raw = self.rfile.read(size)
+        payload = cast(object, json.loads(raw.decode("utf-8")))
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        return cast(dict[str, object], payload)
+
+    @staticmethod
+    def _validate_slot_number(raw_slot: str) -> int:
+        try:
+            slot = int(raw_slot)
+        except ValueError as exc:
+            raise ValueError("slot must be an integer 1-8") from exc
+        if not 1 <= slot <= 8:
+            raise ValueError("slot must be 1-8")
+        return slot
+
+    @staticmethod
+    def _validate_gain_payload(payload: dict[str, object]) -> None:
+        gain = payload.get("gain")
+        if isinstance(gain, bool) or not isinstance(gain, (int, float)):
+            raise ValueError("gain must be a number between 0.0 and 1.0")
+        if not 0.0 <= float(gain) <= 1.0:
+            raise ValueError("gain must be between 0.0 and 1.0")
+
+    @staticmethod
+    def _validate_optional_bool_payload(payload: dict[str, object], key: str) -> None:
+        value = payload.get(key)
+        if key in payload and not isinstance(value, bool):
+            raise ValueError(f"{key} must be a boolean")
+        toggle = payload.get("toggle")
+        if "toggle" in payload and not isinstance(toggle, bool):
+            raise ValueError("toggle must be a boolean")
 
 
 def run_web(
