@@ -356,11 +356,13 @@ strings. The typed endpoints are still local/protected. They use the same
 loopback bind default, the same `--allow-remote` guard, and the same per-process
 CSRF token for state-changing requests.
 
-The browser dashboard polls `/api/status` and `/api/slots` on a conservative
-client-side interval so CLI or hardware changes appear without pressing
-Refresh. Polling slows while the tab is hidden and waits for typed control
-updates to finish; the Refresh button still performs an immediate read. Loaded
-slot cards include an Unload action that calls the typed slot clear endpoint.
+The browser dashboard polls `/api/status`, `/api/slots`, and `/api/sessions` on
+a conservative client-side interval so CLI or hardware changes appear without
+pressing Refresh. Polling slows while the tab is hidden and waits for typed
+control updates to finish; the Refresh button still performs an immediate read.
+Loaded slot cards include an Unload action that calls the typed slot clear
+endpoint. The session field can suggest saved sessions from the picker, while
+manual safe-name entry remains supported.
 
 Expected typed endpoints:
 
@@ -368,6 +370,7 @@ Expected typed endpoints:
 |---|---|---|
 | `GET` | `/api/status` | Return structured daemon status, including audio running state, sample rate, buffer size, tempo, Link state, and selected output name when known |
 | `GET` | `/api/slots` | Return all 8 slots with name, source type, route channels, gain, mute, solo, and loaded effect count |
+| `GET` | `/api/sessions` | Return saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `POST` | `/api/session/save` | Save the current daemon state, with optional JSON `{"name": "demo"}` |
 | `POST` | `/api/session/load` | Load a named session with JSON `{"name": "demo"}` and return refreshed slots |
 | `POST` | `/api/audio/start` | Start audio, optionally with JSON `{"device": "name or index"}` |
@@ -380,9 +383,10 @@ Expected typed endpoints:
 | `POST` | `/api/slots/<slot>/unload` | Alias for `/api/slots/<slot>/clear` |
 
 Session save and load only accept a safe session `name`, for example `demo` or
-`demo.json`. The name is normalized to `sessions/<name>.json`; arbitrary paths,
-absolute paths, nested paths, dotfiles, spaces, and session listing are not part
-of this phase.
+`demo.json`. The name is normalized to `sessions/<name>.json`. `GET
+/api/sessions` lists only safe, top-level JSON session files in `sessions/` for
+the browser picker. Arbitrary paths, absolute paths, nested paths, dotfiles, and
+spaces are still not supported.
 
 Example:
 
@@ -396,6 +400,7 @@ TOKENPY
 
 curl http://127.0.0.1:8765/api/status
 curl http://127.0.0.1:8765/api/slots
+curl http://127.0.0.1:8765/api/sessions
 curl -X POST http://127.0.0.1:8765/api/slots/1/gain \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \

@@ -130,11 +130,13 @@ refuses non-loopback binds unless `--allow-remote` is set. Only use remote
 binding on a trusted network because both the command console and typed API can
 control the running daemon.
 
-The browser dashboard automatically refreshes `/api/status` and `/api/slots` on
-a conservative client-side interval. It slows while the tab is hidden, skips
-polling during typed control updates, and keeps the Refresh button available for
-an immediate manual read. Loaded slot cards include an Unload action that calls
-the typed slot clear endpoint.
+The browser dashboard automatically refreshes `/api/status`, `/api/slots`, and
+`/api/sessions` on a conservative client-side interval. It slows while the tab
+is hidden, skips polling during typed control updates, and keeps the Refresh
+button available for an immediate manual read. Loaded slot cards include an
+Unload action that calls the typed slot clear endpoint. The session field can
+suggest saved sessions from the picker, while manual safe-name entry remains
+supported.
 
 ### Typed HTTP API
 
@@ -148,6 +150,7 @@ requirements.
 |---|---|---|---|
 | `GET` | `/api/status` | none | Structured status: audio running state, sample rate, buffer size, tempo, Link state, selected output name when known |
 | `GET` | `/api/slots` | none | All 8 slots with slot number, loaded name, source type, routed MIDI channels, gain, mute, solo, and effect count |
+| `GET` | `/api/sessions` | none | Saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `POST` | `/api/session/save` | optional `{"name": "demo"}` | Save the current daemon state. Without a name, saves to the loaded session path. |
 | `POST` | `/api/session/load` | `{"name": "demo"}` | Load a named session, refresh mixer state, update autosave, and return refreshed slots |
 | `POST` | `/api/audio/start` | optional `{"device": "name or index"}` | Start the audio engine |
@@ -162,15 +165,17 @@ requirements.
 Session names may be plain names such as `demo` or include the `.json` suffix.
 They must start with a letter or number and use only letters, numbers, dots,
 underscore, or hyphen. The web and daemon
-resolve names to `sessions/<name>.json`; arbitrary `path` payloads, absolute
-paths, nested paths, dotfiles, spaces, and session listing are not supported in
-this phase.
+resolve names to `sessions/<name>.json`. `GET /api/sessions` lists only safe,
+top-level JSON session files in `sessions/` for the browser picker. Arbitrary
+`path` payloads, absolute paths, nested paths, dotfiles, and spaces are still
+not supported.
 
 Read-only requests can be called directly:
 
 ```bash
 curl http://127.0.0.1:8765/api/status
 curl http://127.0.0.1:8765/api/slots
+curl http://127.0.0.1:8765/api/sessions
 ```
 
 For `POST` requests, read the CSRF token from `/` and send it as
