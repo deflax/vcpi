@@ -21,10 +21,10 @@ Source of truth:
 |---|---|
 | `./vcsrv` | Starts headless server mode; bootstraps `.venv` on first run |
 | `./vcli` | Connects interactive client mode; bootstraps `.venv` on first run |
-| `./vweb` | Starts the local-only Phase 1 browser command console; bootstraps `.venv` on first run |
+| `./vweb` | Starts the local-only browser command console and typed API; bootstraps `.venv` on first run |
 | `python main.py serve` | Starts headless server with Unix socket control |
 | `python main.py cli` | Connects to a running headless server |
-| `python main.py web` | Starts the Phase 1 browser console on `127.0.0.1:8765` |
+| `python main.py web` | Starts the browser console and typed API on `127.0.0.1:8765` |
 
 Default socket path (server and client):
 
@@ -100,8 +100,8 @@ Server/client specific:
 
 ## Web Client Flags
 
-The browser console is local-only by default and connects to the running
-daemon over its Unix socket.
+The browser console and typed API are local-only by default and connect to the
+running daemon over its Unix socket.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -123,12 +123,62 @@ Example:
 ./vweb --sock /run/vcpi/vcpi.sock
 ```
 
-Phase 1 note: this is a minimal command console for local use, not the full
-structured web mixer UI. Command requests require the CSRF token embedded in
-the served page and cross-origin command posts are rejected. The server refuses
-non-loopback binds unless `--allow-remote` is set; only use remote binding on a
-trusted network because the browser console can control the running daemon with
-the same command surface as `vcli`.
+Phase 2 keeps the command console for compatibility and adds typed JSON
+endpoints for the browser mixer. State-changing requests require the CSRF token
+embedded in the served page, and cross-origin posts are rejected. The server
+refuses non-loopback binds unless `--allow-remote` is set. Only use remote
+binding on a trusted network because both the command console and typed API can
+control the running daemon.
+
+### Typed HTTP API
+
+The typed API is a small local control surface for browser UI code. It avoids
+stringly typed CLI commands for common mixer actions, but it does not relax the
+safety model. The web process remains a client of the daemon socket. Daemon
+work still runs on the daemon main thread, preserving native audio and plugin
+requirements.
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `GET` | `/api/status` | none | Structured status: audio running state, sample rate, buffer size, tempo, Link state, selected output name when known |
+| `GET` | `/api/slots` | none | All 8 slots with slot number, loaded name, source type, routed MIDI channels, gain, mute, solo, and effect count |
+| `POST` | `/api/audio/start` | optional `{"device": "name or index"}` | Start the audio engine |
+| `POST` | `/api/audio/stop` | `{}` | Stop the audio engine |
+| `POST` | `/api/slots/<slot>/gain` | `{"gain": 0.75}` | Set slot gain, where `<slot>` is 1-8 and gain is 0.0-1.0 |
+| `POST` | `/api/slots/<slot>/mute` | `{"muted": true}` or `{"toggle": true}` | Set or toggle slot mute. Omit the body or send `{"toggle": true}` to toggle. |
+| `POST` | `/api/slots/<slot>/solo` | `{"solo": true}` or `{"toggle": true}` | Set or toggle slot solo. Omit the body or send `{"toggle": true}` to toggle. |
+
+Read-only requests can be called directly:
+
+```bash
+curl http://127.0.0.1:8765/api/status
+curl http://127.0.0.1:8765/api/slots
+```
+
+For `POST` requests, read the CSRF token from `/` and send it as
+`X-VCPI-CSRF`:
+
+```bash
+TOKEN=$(python3 - <<'TOKENPY'
+import re, urllib.request
+html = urllib.request.urlopen('http://127.0.0.1:8765/').read().decode()
+print(re.search(r'name="vcpi-csrf-token" content="([^"]+)"', html).group(1))
+TOKENPY
+)
+
+curl -X POST http://127.0.0.1:8765/api/audio/start \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{}'
+
+curl -X POST http://127.0.0.1:8765/api/slots/1/mute \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"toggle": true}'
+```
+
+The free-form command console remains available at `/api/command` for commands
+that do not yet have typed endpoints.
 
 ## Interactive Commands
 

@@ -31,13 +31,14 @@ python main.py serve
 # Terminal 2: connect interactive client
 python main.py cli
 
-# Or start the local browser command console
+# Or start the local browser console and typed API
 python main.py web
 ```
 
 vcpi runs with a separate server (`serve`) and multiple clients. Use `cli`
-for the terminal client or `web` for the Phase 1 local browser command
-console.
+for the terminal client or `web` for the local browser command console. Phase 2
+adds typed JSON endpoints for status, slots, audio transport, and slot mixer
+controls while keeping the command console available.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcli` with `audio start [device]`.
@@ -88,7 +89,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 # Connect CLI client to a running daemon
 ./vcli
 
-# Start local browser command console (Phase 1)
+# Start local browser console and typed API
 ./vweb
 
 # Direct python equivalents
@@ -106,9 +107,9 @@ LOG_LEVEL=INFO ./vcsrv
 ```
 
 The web console binds to `127.0.0.1` by default, uses a per-process CSRF token
-for command requests, and refuses non-loopback hosts unless you pass
-`--allow-remote`. Only expose it on a trusted network; it controls the running
-daemon with the same command surface as `vcli`.
+for state-changing requests, and refuses non-loopback hosts unless you pass
+`--allow-remote`. Only expose it on a trusted network; both the command console
+and typed API control the running daemon.
 
 Full CLI and startup flag reference: `USAGE.md`
 
@@ -332,7 +333,7 @@ Headless server + remote CLI:
 From `vcli`, use `shutdown` to terminate the daemon process (for example, to
 let systemd restart it).
 
-Phase 1 browser console:
+Browser console and typed API:
 
 ```bash
 # Terminal 1
@@ -348,6 +349,42 @@ open http://127.0.0.1:8765
 `vweb` binds to `127.0.0.1:8765` by default and talks to the local vcpi
 daemon over its Unix socket. Pass `--allow-shutdown` only if you want the web
 console to expose daemon shutdown.
+
+Phase 2 keeps the free-form command console at `/api/command` and adds typed
+JSON endpoints for controls that a browser mixer can call without building CLI
+strings. The typed endpoints are still local/protected. They use the same
+loopback bind default, the same `--allow-remote` guard, and the same per-process
+CSRF token for state-changing requests.
+
+Expected typed endpoints:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/status` | Return structured daemon status, including audio running state, sample rate, buffer size, tempo, Link state, and selected output name when known |
+| `GET` | `/api/slots` | Return all 8 slots with name, source type, route channels, gain, mute, solo, and loaded effect names |
+| `POST` | `/api/audio/start` | Start audio, optionally with JSON `{"device": "name or index"}` |
+| `POST` | `/api/audio/stop` | Stop audio |
+| `POST` | `/api/slots/<slot>/gain` | Set slot gain with JSON `{"gain": 0.75}` where `<slot>` is 1-8 |
+| `POST` | `/api/slots/<slot>/mute` | Set or toggle slot mute with JSON `{"muted": true}` or `{"toggle": true}` |
+| `POST` | `/api/slots/<slot>/solo` | Set or toggle slot solo with JSON `{"solo": true}` or `{"toggle": true}` |
+
+Example:
+
+```bash
+TOKEN=$(python3 - <<'TOKENPY'
+import re, urllib.request
+html = urllib.request.urlopen('http://127.0.0.1:8765/').read().decode()
+print(re.search(r'name="vcpi-csrf-token" content="([^"]+)"', html).group(1))
+TOKENPY
+)
+
+curl http://127.0.0.1:8765/api/status
+curl http://127.0.0.1:8765/api/slots
+curl -X POST http://127.0.0.1:8765/api/slots/1/gain \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"gain": 0.65}'
+```
 
 ## Raspberry Pi Builds
 
