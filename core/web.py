@@ -33,6 +33,7 @@ DEFAULT_DAEMON_TIMEOUT_SECONDS = 60.0
 JSON_REQUEST_PREFIX = "__vcpi_json__ "
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo)$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 
@@ -484,6 +485,10 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_json_post("audio.stop", {})
         elif path == "/api/master/gain":
             self._handle_master_gain()
+        elif path == "/api/session/save":
+            self._handle_session_save()
+        elif path == "/api/session/load":
+            self._handle_session_load()
         elif path.startswith("/api/slots/"):
             self._handle_slot_action(path)
         else:
@@ -661,6 +666,35 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
 
         self._handle_json_post("master.gain", payload)
 
+    def _handle_session_save(self) -> None:
+        payload = self._read_secure_optional_json_body()
+        if payload is None:
+            return
+        try:
+            if "path" in payload:
+                raise ValueError("path is not accepted for session operations")
+            if "name" in payload:
+                payload = dict(payload)
+                payload["name"] = self._validate_session_name(payload["name"])
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        self._handle_json_post("session.save", payload)
+
+    def _handle_session_load(self) -> None:
+        payload = self._read_secure_optional_json_body()
+        if payload is None:
+            return
+        try:
+            if "path" in payload:
+                raise ValueError("path is not accepted for session operations")
+            payload = dict(payload)
+            payload["name"] = self._validate_session_name(payload.get("name"))
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        self._handle_json_post("session.load", payload)
+
     def _handle_slot_action(self, path: str) -> None:
         match = SLOT_ACTION_RE.fullmatch(path)
         if match is None:
@@ -769,6 +803,27 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("request body must be a JSON object")
         return cast(dict[str, object], payload)
+
+    @staticmethod
+    def _validate_session_name(value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("name must be a string")
+        name = value.strip()
+        if name.lower().endswith(".json"):
+            name = name[:-5]
+        if not name:
+            raise ValueError("name must not be empty")
+        if ".." in name:
+            raise ValueError("name must not contain '..'")
+        if any(separator in name for separator in ("/", "\\")):
+            raise ValueError("name must not contain path separators")
+        if Path(name).is_absolute():
+            raise ValueError("name must not be an absolute path")
+        if not SESSION_NAME_RE.fullmatch(name):
+            raise ValueError(
+                "name must start with a letter or number and contain only letters, numbers, dots, underscores, or hyphens"
+            )
+        return name
 
     @staticmethod
     def _validate_slot_number(raw_slot: str) -> int:

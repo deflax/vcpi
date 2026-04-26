@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import queue
+import re
 import signal
 import socket
 import sys
@@ -39,6 +40,7 @@ from core.paths import DEFAULT_SOCK_PATH
 # Sentinel that marks the end of a command's output.
 END_OF_RESPONSE = "\x00"
 JSON_REQUEST_PREFIX = "__vcpi_json__ "
+SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 logger = logging.getLogger(__name__)
@@ -340,6 +342,10 @@ class VcpiServer:
                 gain = self._gain_from_payload(payload)
                 self.host.engine.master_gain = gain
                 return {"ok": True, "status": self._status_payload()}
+            case "session.save":
+                return self._save_session_from_payload(payload)
+            case "session.load":
+                return self._load_session_from_payload(payload)
             case "slot.mute":
                 idx = self._slot_index_from_payload(payload)
                 slot = self._loaded_slot(idx)
@@ -402,6 +408,112 @@ class VcpiServer:
         if isinstance(value, bool) or not isinstance(value, (str, int)):
             raise _JsonOperationError("device must be a string, integer, or null")
         return value
+
+    @staticmethod
+    def _normalize_session_name(raw_name: object, *, required: bool) -> str | None:
+        if raw_name is None:
+            if required:
+                raise _JsonOperationError("name is required")
+            return None
+        if not isinstance(raw_name, str):
+            raise _JsonOperationError("name must be a string")
+
+        name = raw_name.strip()
+        if name.lower().endswith(".json"):
+            name = name[:-5]
+        if not name:
+            raise _JsonOperationError("name must not be empty")
+        if ".." in name:
+            raise _JsonOperationError("name must not contain '..'")
+        if any(separator in name for separator in ("/", "\\")):
+            raise _JsonOperationError("name must not contain path separators")
+        if Path(name).is_absolute():
+            raise _JsonOperationError("name must not be an absolute path")
+        if not SESSION_NAME_RE.fullmatch(name):
+            raise _JsonOperationError(
+                "name must start with a letter or number and contain only letters, numbers, dots, underscores, or hyphens"
+            )
+        return name
+
+    def _session_cli(self) -> HostCLI:
+        return HostCLI(self.host, stdout=io.StringIO(), owns_host=False)
+
+    def _sessions_root(self) -> Path:
+        root = self._session_cli()._sessions_root().expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    @staticmethod
+    def _require_path_within_root(path: Path, root: Path) -> Path:
+        resolved = path.expanduser().resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise _JsonOperationError("session path must stay inside the session directory") from exc
+        return resolved
+
+    def _session_path_for_name(self, name: str) -> Path:
+        root = self._sessions_root()
+        return self._require_path_within_root(root / f"{name}.json", root)
+
+    def _loaded_session_path(self) -> Path:
+        raw_path = self.host.loaded_session_path
+        if raw_path is None:
+            raise _JsonOperationError("name is required when no session is loaded")
+        root = self._sessions_root()
+        return self._require_path_within_root(Path(raw_path), root)
+
+    def _session_payload(self) -> dict[str, Any]:
+        return {
+            "path": str(self.host.session_path),
+            "loaded_name": self.host.loaded_session_name,
+            "loaded_path": str(self.host.loaded_session_path) if self.host.loaded_session_path else None,
+        }
+
+    def _save_session_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if "path" in payload:
+            raise _JsonOperationError("path is not accepted for session operations")
+        name = self._normalize_session_name(payload.get("name"), required=False)
+
+        if name is None:
+            path = self._loaded_session_path()
+            if self.host.loaded_session_name is None:
+                self.host.loaded_session_name = path.stem
+            self.host.loaded_session_path = path
+        else:
+            path = self._session_path_for_name(name)
+            self.host.loaded_session_name = name
+            self.host.loaded_session_path = path
+
+        self.host.save_session(str(path))
+        status = self._status_payload()
+        return {"ok": True, "session": status["session"], "status": status}
+
+    def _load_session_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if "path" in payload:
+            raise _JsonOperationError("path is not accepted for session operations")
+        name = self._normalize_session_name(payload.get("name"), required=True)
+        if name is None:
+            raise _JsonOperationError("name is required")
+
+        path = self._session_path_for_name(name)
+        if not path.exists() or not path.is_file():
+            raise _JsonOperationError(f"session not found: {name}", status=404)
+
+        self.host.restore_session(str(path))
+        refresh = getattr(self.host, "refresh_mixer_leds", None)
+        if callable(refresh):
+            refresh()
+        self.host.loaded_session_name = name
+        self.host.loaded_session_path = path
+        self.host.save_session()
+        status = self._status_payload()
+        return {
+            "ok": True,
+            "session": status["session"],
+            "status": status,
+            "slots": self._slots_payload(),
+        }
 
     def _loaded_slot(self, idx: int) -> InstrumentSlot:
         slot = self.host.engine.slots[idx]

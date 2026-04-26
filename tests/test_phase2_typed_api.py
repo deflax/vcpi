@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -73,7 +74,9 @@ class FakeHost:
         self.mixer_midi_out_name: str | None = "MIDI Mix Out"
         self.audio_output_name: str = "Built-in Output"
         self.started_with: object | None = None
-        self.refreshed_slots: list[list[int]] = []
+        self.refreshed_slots: list[list[int] | None] = []
+        self.save_calls: list[str | None] = []
+        self.restore_calls: list[str | None] = []
 
     def start_audio(self, output_device: object | None = None) -> None:
         self.started_with = output_device
@@ -82,8 +85,14 @@ class FakeHost:
     def stop_audio(self) -> None:
         self.engine.stop()
 
-    def refresh_mixer_leds(self, slots: list[int]) -> None:
+    def refresh_mixer_leds(self, slots: list[int] | None = None) -> None:
         self.refreshed_slots.append(slots)
+
+    def save_session(self, path: str | None = None) -> None:
+        self.save_calls.append(path)
+
+    def restore_session(self, path: str | None = None) -> None:
+        self.restore_calls.append(path)
 
 
 class TypedDaemonApiContractTests(unittest.TestCase):
@@ -167,6 +176,94 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertEqual(response["status"], 400)
 
+    def test_json_session_save_with_name_updates_loaded_session(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_root = Path(tmp) / "sessions"
+            sessions_root.mkdir()
+            daemon._sessions_root = lambda: sessions_root
+
+            result = daemon._handle_json_operation("session.save", {"name": "demo.json"})
+
+            expected_path = sessions_root / "demo.json"
+            self.assertTrue(result["ok"])
+            self.assertEqual(host.save_calls, [str(expected_path)])
+            self.assertEqual(host.loaded_session_name, "demo")
+            self.assertEqual(host.loaded_session_path, expected_path)
+            self.assertEqual(result["session"]["loaded_path"], str(expected_path))
+
+    def test_json_session_save_without_name_uses_existing_loaded_path(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("session.save", {})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.save_calls, [str(ROOT / "sessions" / "demo.json")])
+        self.assertEqual(host.loaded_session_name, "demo")
+
+    def test_json_session_save_without_name_requires_loaded_path(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        host.loaded_session_name = None
+        host.loaded_session_path = None
+        daemon = server.VcpiServer(host)
+
+        response = json.loads(daemon._run_json_request('{"op":"session.save","payload":{}}', "test"))
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["status"], 400)
+        self.assertEqual(host.save_calls, [])
+
+    def test_json_session_load_existing_restores_refreshes_and_returns_slots(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_root = Path(tmp) / "sessions"
+            sessions_root.mkdir()
+            session_path = sessions_root / "demo.json"
+            session_path.write_text("{}")
+            daemon._sessions_root = lambda: sessions_root
+
+            result = daemon._handle_json_operation("session.load", {"name": "demo"})
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(host.restore_calls, [str(session_path)])
+            self.assertEqual(host.refreshed_slots, [None])
+            self.assertEqual(host.save_calls, [None])
+            self.assertEqual(host.loaded_session_name, "demo")
+            self.assertEqual(host.loaded_session_path, session_path)
+            self.assertEqual(result["slots"][0]["slot"], 1)
+
+    def test_json_session_load_missing_file_returns_typed_404(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_root = Path(tmp) / "sessions"
+            sessions_root.mkdir()
+            daemon._sessions_root = lambda: sessions_root
+
+            response = json.loads(daemon._run_json_request('{"op":"session.load","payload":{"name":"missing"}}', "test"))
+
+            self.assertFalse(response["ok"])
+            self.assertEqual(response["status"], 404)
+            self.assertEqual(host.restore_calls, [])
+
 
 class WebSafetyTests(unittest.TestCase):
     def test_command_validation_blocks_shutdown_without_opt_in(self) -> None:
@@ -198,6 +295,27 @@ class WebSafetyTests(unittest.TestCase):
         web.VcpiWebHandler._validate_optional_bool_payload({"toggle": True}, "muted")
         with self.assertRaises(ValueError):
             web.VcpiWebHandler._validate_optional_bool_payload({"toggle": "yes"}, "muted")
+
+    def test_session_name_validation_accepts_safe_names(self) -> None:
+        self.assertEqual(web.VcpiWebHandler._validate_session_name("demo"), "demo")
+        self.assertEqual(web.VcpiWebHandler._validate_session_name("demo.json"), "demo")
+
+    def test_session_name_validation_rejects_unsafe_names(self) -> None:
+        unsafe_names = [
+            "../x",
+            "/tmp/x",
+            "a/b",
+            ".hidden",
+            "",
+            "   ",
+            "bad name",
+            123,
+            "a" * 65,
+        ]
+        for value in unsafe_names:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    web.VcpiWebHandler._validate_session_name(value)
 
 
 if __name__ == "__main__":
