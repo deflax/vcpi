@@ -12,6 +12,7 @@
   const clearButton = document.getElementById('clear-button');
   const commandsList = document.getElementById('commands-list');
   const typedRefreshButton = document.getElementById('typed-refresh-button');
+  const typedRefreshStatus = document.getElementById('typed-refresh-status');
   const audioStartButton = document.getElementById('audio-start-button');
   const audioStopButton = document.getElementById('audio-stop-button');
   const typedError = document.getElementById('typed-error');
@@ -29,6 +30,22 @@
   let entryCount = 0;
   let commandInFlight = false;
   let typedMutationInFlight = false;
+  let typedRefreshInFlight = false;
+  let typedRefreshPromise = null;
+  let typedRefreshTimer = 0;
+
+  const typedRefreshVisibleIntervalMs = 10000;
+  const typedRefreshHiddenIntervalMs = 60000;
+
+  function updateTypedControlsDisabled() {
+    const disabled = typedMutationInFlight || typedRefreshInFlight;
+    typedRefreshButton.disabled = disabled;
+    audioStartButton.disabled = disabled;
+    audioStopButton.disabled = disabled;
+    document.querySelectorAll('[data-typed-action]').forEach((control) => {
+      control.disabled = disabled;
+    });
+  }
 
   function setCommandControlsDisabled(disabled) {
     commandInFlight = disabled;
@@ -40,12 +57,7 @@
 
   function setTypedControlsDisabled(disabled) {
     typedMutationInFlight = disabled;
-    typedRefreshButton.disabled = disabled;
-    audioStartButton.disabled = disabled;
-    audioStopButton.disabled = disabled;
-    document.querySelectorAll('[data-typed-action]').forEach((control) => {
-      control.disabled = disabled;
-    });
+    updateTypedControlsDisabled();
   }
 
   function setHealth(state, message) {
@@ -71,6 +83,31 @@
     }
     typedError.textContent = message;
     typedError.hidden = false;
+  }
+
+  function setTypedRefreshStatus(message) {
+    typedRefreshStatus.textContent = message;
+  }
+
+  function typedRefreshIntervalLabel() {
+    return document.hidden ? 'Auto-refresh slowed while hidden' : 'Auto-refresh every 10s';
+  }
+
+  function formatRefreshTime(date) {
+    return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  }
+
+  function nextTypedRefreshDelay() {
+    return document.hidden ? typedRefreshHiddenIntervalMs : typedRefreshVisibleIntervalMs;
+  }
+
+  function scheduleTypedRefresh(delay) {
+    window.clearTimeout(typedRefreshTimer);
+    typedRefreshTimer = window.setTimeout(runTypedRefreshPoll, delay);
+  }
+
+  function scheduleNextTypedRefresh() {
+    scheduleTypedRefresh(nextTypedRefreshDelay());
   }
 
   function normalizeOutput(value) {
@@ -373,10 +410,25 @@
     });
   }
 
-  async function refreshTypedApi() {
+  async function refreshTypedApi(options) {
+    const source = options && options.source ? options.source : 'manual';
+    if (typedRefreshInFlight) {
+      return typedRefreshPromise;
+    }
+    if (source === 'auto' && typedMutationInFlight) {
+      setTypedRefreshStatus('Auto-refresh waiting for the current control update.');
+      return Promise.resolve();
+    }
+
+    typedRefreshInFlight = true;
+    updateTypedControlsDisabled();
     showTypedError('');
-    typedRefreshButton.textContent = 'Refreshing…';
-    try {
+    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status and slots…' : 'Refreshing status and slots…');
+    if (source !== 'auto') {
+      typedRefreshButton.textContent = 'Refreshing…';
+    }
+
+    typedRefreshPromise = (async () => {
       const results = await Promise.allSettled([
         fetchJson('/api/status', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/slots', {headers: {'Accept': 'application/json'}}),
@@ -403,12 +455,39 @@
 
       if (messages.length > 0) {
         showTypedError(`Typed API is not ready: ${messages.join(' · ')}`);
+        setTypedRefreshStatus(`Last refresh failed at ${formatRefreshTime(new Date())} · ${typedRefreshIntervalLabel()}`);
+      } else {
+        setTypedRefreshStatus(`Updated ${formatRefreshTime(new Date())} · ${typedRefreshIntervalLabel()}`);
       }
+
+      return results;
+    })();
+
+    try {
+      return await typedRefreshPromise;
     } catch (error) {
       showTypedError(error.message || String(error));
+      setTypedRefreshStatus(`Last refresh failed at ${formatRefreshTime(new Date())} · ${typedRefreshIntervalLabel()}`);
+      return undefined;
     } finally {
+      typedRefreshInFlight = false;
+      typedRefreshPromise = null;
       typedRefreshButton.textContent = 'Refresh';
+      updateTypedControlsDisabled();
+      if (source !== 'auto') {
+        scheduleNextTypedRefresh();
+      }
     }
+  }
+
+  async function runTypedRefreshPoll() {
+    if (typedMutationInFlight) {
+      setTypedRefreshStatus('Auto-refresh waiting for the current control update.');
+      scheduleNextTypedRefresh();
+      return;
+    }
+    await refreshTypedApi({source: 'auto'});
+    scheduleNextTypedRefresh();
   }
 
   async function mutateTyped(path, payload) {
@@ -420,7 +499,7 @@
     setTypedControlsDisabled(true);
     try {
       await postTyped(path, payload);
-      await refreshTypedApi();
+      await refreshTypedApi({source: 'mutation'});
     } catch (error) {
       showTypedError(`Typed control unavailable: ${error.message || String(error)}`);
     } finally {
@@ -453,7 +532,7 @@
         showError(payload.error || `Command failed (${response.status})`);
       }
       checkHealth();
-      refreshTypedApi();
+      refreshTypedApi({source: 'command'});
     } catch (error) {
       const message = error.message || String(error);
       appendTranscript(command, {ok: false, error: message});
@@ -496,11 +575,18 @@
     input.focus();
   });
 
-  typedRefreshButton.addEventListener('click', refreshTypedApi);
+  typedRefreshButton.addEventListener('click', () => {
+    refreshTypedApi({source: 'manual'});
+  });
   audioStartButton.addEventListener('click', () => mutateTyped('/api/audio/start', {}));
   audioStopButton.addEventListener('click', () => mutateTyped('/api/audio/stop', {}));
 
+  document.addEventListener('visibilitychange', () => {
+    setTypedRefreshStatus(document.hidden ? 'Auto-refresh slowed while this tab is hidden.' : 'Auto-refresh resumed.');
+    scheduleTypedRefresh(document.hidden ? typedRefreshHiddenIntervalMs : 1000);
+  });
+
   checkHealth();
   loadCommands();
-  refreshTypedApi();
+  refreshTypedApi({source: 'initial'});
 })();
