@@ -361,7 +361,7 @@ Expected typed endpoints:
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/status` | Return structured daemon status, including audio running state, sample rate, buffer size, tempo, Link state, and selected output name when known |
-| `GET` | `/api/slots` | Return all 8 slots with name, source type, route channels, gain, mute, solo, and loaded effect names |
+| `GET` | `/api/slots` | Return all 8 slots with name, source type, route channels, gain, mute, solo, and loaded effect count |
 | `POST` | `/api/audio/start` | Start audio, optionally with JSON `{"device": "name or index"}` |
 | `POST` | `/api/audio/stop` | Stop audio |
 | `POST` | `/api/slots/<slot>/gain` | Set slot gain with JSON `{"gain": 0.75}` where `<slot>` is 1-8 |

@@ -127,7 +127,7 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertEqual(status["status"]["audio"]["output"], "Built-in Output")
         self.assertTrue(slots["ok"])
         self.assertEqual(slots["slots"][0]["slot"], 1)
-        self.assertEqual(slots["slots"][0]["midi_channels"], [])
+        self.assertEqual(slots["slots"][0]["midi_channels"], [1, 10])
         self.assertFalse(slots["slots"][1]["loaded"])
 
     def test_json_slot_mutations_validate_gain_and_toggle(self) -> None:

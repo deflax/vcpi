@@ -436,8 +436,14 @@ class VcpiServer:
     def _slots_payload(self) -> list[dict[str, Any]]:
         return [self._slot_payload(idx, slot) for idx, slot in enumerate(self.host.engine.slots)]
 
-    @staticmethod
-    def _slot_payload(idx: int, slot: InstrumentSlot | None) -> dict[str, Any]:
+    def _midi_channels_for_slot(self, idx: int, slot: InstrumentSlot | None) -> list[int]:
+        channels = {ch for ch, slot_idx in self.host.channel_map.items() if slot_idx == idx}
+        if slot is not None:
+            channels.update(slot.midi_channels)
+        return sorted(ch + 1 for ch in channels)
+
+    def _slot_payload(self, idx: int, slot: InstrumentSlot | None) -> dict[str, Any]:
+        midi_channels = self._midi_channels_for_slot(idx, slot)
         if slot is None:
             return {
                 "slot": idx + 1,
@@ -451,7 +457,7 @@ class VcpiServer:
                 "muted": False,
                 "solo": False,
                 "enabled": False,
-                "midi_channels": [],
+                "midi_channels": midi_channels,
                 "effects": 0,
             }
         return {
@@ -466,7 +472,7 @@ class VcpiServer:
             "muted": slot.muted,
             "solo": slot.solo,
             "enabled": slot.enabled,
-            "midi_channels": sorted(ch + 1 for ch in slot.midi_channels),
+            "midi_channels": midi_channels,
             "effects": len(slot.effects),
         }
 
