@@ -18,6 +18,10 @@
   const typedError = document.getElementById('typed-error');
   const masterGainInput = document.getElementById('master-gain-input');
   const masterGainValue = document.getElementById('master-gain-value');
+  const sessionNameInput = document.getElementById('session-name-input');
+  const sessionSaveButton = document.getElementById('session-save-button');
+  const sessionLoadButton = document.getElementById('session-load-button');
+  const sessionControlStatus = document.getElementById('session-control-status');
   const statusFields = {
     daemon: document.getElementById('status-daemon'),
     audio: document.getElementById('status-audio'),
@@ -35,6 +39,7 @@
   let typedRefreshInFlight = false;
   let typedRefreshPromise = null;
   let typedRefreshTimer = 0;
+  let sessionNameDirty = false;
 
   const typedRefreshVisibleIntervalMs = 10000;
   const typedRefreshHiddenIntervalMs = 60000;
@@ -89,6 +94,10 @@
 
   function setTypedRefreshStatus(message) {
     typedRefreshStatus.textContent = message;
+  }
+
+  function setSessionControlStatus(message) {
+    sessionControlStatus.textContent = message;
   }
 
   function typedRefreshIntervalLabel() {
@@ -295,6 +304,26 @@
     masterGainInput.value = normalizedGain.toFixed(2);
   }
 
+  function currentSessionName(session, status) {
+    const value = firstPresent(
+      session,
+      ['name', 'loaded_name', 'current_name', 'session_name', 'loaded'],
+      firstPresent(status, ['session_name', 'current_session', 'loaded_session'], ''),
+    );
+    return typeof value === 'string' && value.trim() ? value.trim() : '';
+  }
+
+  function syncSessionNameInput(session, status) {
+    const name = currentSessionName(session, status);
+    if (!name) {
+      return;
+    }
+    if (document.activeElement === sessionNameInput || sessionNameDirty) {
+      return;
+    }
+    sessionNameInput.value = name;
+  }
+
   function renderStatus(data) {
     const status = asObject(data.status || data);
     const daemon = asObject(status.daemon);
@@ -315,6 +344,7 @@
       firstPresent(session, ['name', 'path', 'loaded', 'dirty'], firstPresent(status, ['session'], undefined)),
       formatValue(firstPresent(session, ['modified', 'slot_count', 'slots'], ''), ''),
     );
+    syncSessionNameInput(session, status);
     statusFields.link.textContent = statusText(
       firstPresent(link, ['enabled', 'active', 'running', 'state'], firstPresent(status, ['link_enabled'], undefined)),
       formatValue(firstPresent(link, ['tempo', 'bpm', 'peers'], ''), ''),
@@ -517,17 +547,77 @@
   async function mutateTyped(path, payload) {
     if (typedMutationInFlight) {
       showTypedError('Wait for the current typed control update to finish.');
-      return;
+      return false;
     }
     showTypedError('');
     setTypedControlsDisabled(true);
     try {
       await postTyped(path, payload);
       await refreshTypedApi({source: 'mutation'});
+      return true;
     } catch (error) {
       showTypedError(`Typed control unavailable: ${error.message || String(error)}`);
+      return false;
     } finally {
       setTypedControlsDisabled(false);
+    }
+  }
+
+  function sessionPayloadFromInput() {
+    const name = sessionNameInput.value.trim();
+    return name ? {name} : {};
+  }
+
+  function isSafeSessionName(name) {
+    const normalized = name.toLowerCase().endsWith('.json') ? name.slice(0, -5) : name;
+    return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(normalized) && !normalized.includes('..');
+  }
+
+  function validateSessionName(name, required) {
+    if (!name) {
+      if (required) {
+        return 'Enter a session name before loading.';
+      }
+      return '';
+    }
+    return isSafeSessionName(name) ? '' : 'Start with a letter or number and use only letters, numbers, dots, dashes, or underscores.';
+  }
+
+  async function saveSession() {
+    const name = sessionNameInput.value.trim();
+    const validationMessage = validateSessionName(name, false);
+    if (validationMessage) {
+      setSessionControlStatus(validationMessage);
+      showTypedError(validationMessage);
+      sessionNameInput.focus();
+      return;
+    }
+    setSessionControlStatus('Saving session…');
+    const ok = await mutateTyped('/api/session/save', sessionPayloadFromInput());
+    if (ok) {
+      sessionNameDirty = false;
+      setSessionControlStatus('Session saved. Status and slots refreshed.');
+    } else {
+      setSessionControlStatus('Session save failed. See typed API status above.');
+    }
+  }
+
+  async function loadSession() {
+    const name = sessionNameInput.value.trim();
+    const validationMessage = validateSessionName(name, true);
+    if (validationMessage) {
+      setSessionControlStatus(validationMessage);
+      showTypedError(validationMessage);
+      sessionNameInput.focus();
+      return;
+    }
+    setSessionControlStatus(`Loading ${name}…`);
+    const ok = await mutateTyped('/api/session/load', {name});
+    if (ok) {
+      sessionNameDirty = false;
+      setSessionControlStatus('Session loaded. Status and slots refreshed.');
+    } else {
+      setSessionControlStatus('Session load failed. See typed API status above.');
     }
   }
 
@@ -607,6 +697,11 @@
   masterGainInput.addEventListener('change', () => {
     mutateTyped('/api/master/gain', {gain: Number(masterGainInput.value)});
   });
+  sessionNameInput.addEventListener('input', () => {
+    sessionNameDirty = sessionNameInput.value.trim() !== '';
+  });
+  sessionSaveButton.addEventListener('click', saveSession);
+  sessionLoadButton.addEventListener('click', loadSession);
 
   document.addEventListener('visibilitychange', () => {
     setTypedRefreshStatus(document.hidden ? 'Auto-refresh slowed while this tab is hidden.' : 'Auto-refresh resumed.');
