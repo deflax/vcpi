@@ -135,16 +135,19 @@ The browser dashboard automatically refreshes `/api/status`, `/api/slots`,
 client-side interval. It slows while the tab is hidden, skips polling during
 typed control updates, and keeps the Refresh button available for an immediate
 manual read. Loaded slot cards include an Unload action that calls the typed
-slot clear endpoint and an Info action that opens a read-only details panel from
-`/api/slots/<slot>/info`. The signal-flow panel displays the current ASCII mixer
+slot clear endpoint, an Info action that opens a read-only details panel from
+`/api/slots/<slot>/info`, and an Audition control that sends one short test note
+to that loaded slot. The signal-flow panel displays the current ASCII mixer
 diagram returned by the read-only flow endpoint. The session field can suggest
 saved sessions from the picker, while manual safe-name entry remains supported.
 The audio-device picker uses the read-only device list and sends the selected
 value to `/api/audio/start` as `{"device": "name or index"}`. Tempo and Link
 browser controls call typed POST routes for BPM, Link start, and Link stop
 actions. MIDI browser controls call typed POST routes to map 1-based channels to
-1-based slots and to cut channel routes. This phase does not add typed MIDI port
-listing, selection, open, or close controls.
+1-based slots and to cut channel routes. The Audition control is only a
+test-note trigger for an already-loaded slot. It is not a sequencer control and
+it does not manage MIDI ports. This phase does not add typed MIDI port listing,
+selection, open, or close controls.
 
 ### Typed HTTP API
 
@@ -175,6 +178,7 @@ requirements.
 | `POST` | `/api/slots/<slot>/gain` | `{"gain": 0.75}` | Set slot gain, where `<slot>` is 1-8 and gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/mute` | `{"muted": true}` or `{"toggle": true}` | Set or toggle slot mute. Omit the body or send `{"toggle": true}` to toggle. |
 | `POST` | `/api/slots/<slot>/solo` | `{"solo": true}` or `{"toggle": true}` | Set or toggle slot solo. Omit the body or send `{"toggle": true}` to toggle. |
+| `POST` | `/api/slots/<slot>/note` | `{"note": 60, "velocity": 100, "duration_ms": 300}` | Send one audition/test note to a loaded slot. `velocity` defaults to 100 and `duration_ms` defaults to 300. |
 | `POST` | `/api/slots/<slot>/clear` | `{}` | Unload an already-loaded slot and return updated slot/status data. Existing MIDI routing behavior follows the same core clear semantics as `slot <n> clear`. |
 | `POST` | `/api/slots/<slot>/unload` | `{}` | Alias for `/api/slots/<slot>/clear` |
 
@@ -192,6 +196,15 @@ booleans, and values outside that range are rejected.
 MIDI route payloads use 1-based JSON integers. `channel` must be 1-16 and
 `slot` must be 1-8. The typed MIDI endpoints only edit channel routing. MIDI
 port listing, selection, opening, and closing stay in the CLI for this phase.
+
+`POST /api/slots/<slot>/note` requires the CSRF token because it changes audio
+state by sending a note. It only sends a short audition/test note to a loaded
+slot, similar to the CLI `note` command. It does not create a sequence, attach a
+sequencer bank, open a MIDI input, select a MIDI port, or change channel
+routing. The route accepts `<slot>` from 1 to 8 and requires integer `note` from
+0 to 127. `velocity` defaults to 100 and must be an integer from 0 to 127.
+`duration_ms` defaults to 300 and must be an integer from 1 to 5000. Empty slots
+and invalid payloads are rejected before a note is sent.
 
 `GET /api/audio/devices`, `GET /api/flow`, and `GET /api/slots/<slot>/info` are
 read-only and do not need a CSRF token. The audio-device endpoint lists only
@@ -260,6 +273,11 @@ curl -X POST http://127.0.0.1:8765/api/midi/cut \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"channel": 10}'
+
+curl -X POST http://127.0.0.1:8765/api/slots/1/note \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"note": 60, "velocity": 100, "duration_ms": 300}'
 
 curl -X POST http://127.0.0.1:8765/api/session/save \
   -H "Content-Type: application/json" \

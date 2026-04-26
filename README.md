@@ -38,8 +38,9 @@ python main.py web
 vcpi runs with a separate server (`serve`) and multiple clients. Use `cli`
 for the terminal client or `web` for the local browser command console. The
 typed JSON API covers status, slots, signal-flow diagnostics, read-only slot
-plugin info, audio transport, audio-device listing, MIDI channel routing, and
-slot mixer controls while keeping the command console available.
+plugin info, audio transport, audio-device listing, MIDI channel routing, slot
+mixer controls, and loaded-slot audition notes while keeping the command console
+available.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcli` with `audio start [device]`.
@@ -362,17 +363,20 @@ The browser dashboard polls `/api/status`, `/api/slots`, `/api/sessions`,
 CLI or hardware changes appear without pressing Refresh. Polling slows while
 the tab is hidden and waits for typed control updates to finish; the Refresh
 button still performs an immediate read. Loaded slot cards include an Unload
-action that calls the typed slot clear endpoint and an Info action that opens a
-read-only panel backed by `/api/slots/<slot>/info`. The signal-flow panel
-displays the current ASCII mixer diagram from the read-only flow endpoint. The
+action that calls the typed slot clear endpoint, an Info action that opens a
+read-only panel backed by `/api/slots/<slot>/info`, and an Audition control that
+sends one short test note to that loaded slot. The signal-flow panel displays
+the current ASCII mixer diagram from the read-only flow endpoint. The
 session field can suggest saved sessions from the picker, while manual safe-name
 entry remains supported. The audio-device picker uses the read-only device list
 and sends the selected value to `/api/audio/start` as `{"device": "name or index"}`.
 Tempo and Link controls use typed POST routes so browser controls can set BPM,
 enable Link, and disable Link without sending free-form CLI commands. MIDI
 routing controls can map 1-based MIDI channels to 1-based slots and cut channel
-routes. This phase does not add MIDI port selection, open, or close controls to
-the typed browser API.
+routes. The Audition control is only a test-note trigger for an already-loaded
+slot. It is not a sequencer control and it does not manage MIDI ports. This
+phase does not add MIDI port selection, open, or close controls to the typed
+browser API.
 
 Expected typed endpoints:
 
@@ -397,6 +401,7 @@ Expected typed endpoints:
 | `POST` | `/api/slots/<slot>/gain` | Set slot gain with JSON `{"gain": 0.75}` where `<slot>` is 1-8 |
 | `POST` | `/api/slots/<slot>/mute` | Set or toggle slot mute with JSON `{"muted": true}` or `{"toggle": true}` |
 | `POST` | `/api/slots/<slot>/solo` | Set or toggle slot solo with JSON `{"solo": true}` or `{"toggle": true}` |
+| `POST` | `/api/slots/<slot>/note` | Send one audition/test note to a loaded slot with JSON `{"note": 60, "velocity": 100, "duration_ms": 300}` |
 | `POST` | `/api/slots/<slot>/clear` | Unload an already-loaded slot and return updated slot/status data. Existing MIDI routing behavior follows the same core clear semantics as `slot <n> clear`. |
 | `POST` | `/api/slots/<slot>/unload` | Alias for `/api/slots/<slot>/clear` |
 
@@ -423,6 +428,15 @@ MIDI route payloads use 1-based numbers: `channel` must be an integer from 1 to
 16, and `slot` must be an integer from 1 to 8. State-changing MIDI route POSTs
 require the CSRF token. The typed MIDI routes only edit the daemon channel map;
 MIDI port listing, selection, opening, and closing remain CLI-only in this phase.
+
+`POST /api/slots/<slot>/note` is also state-changing and requires the CSRF token.
+It only sends a short audition/test note to a loaded slot, similar to the CLI
+`note` command. It does not create a sequence, attach a sequencer bank, open a
+MIDI input, select a MIDI port, or change channel routing. The route accepts
+`<slot>` from 1 to 8 and requires integer `note` from 0 to 127. `velocity`
+defaults to 100 and must be an integer from 0 to 127. `duration_ms` defaults to
+300 and must be an integer from 1 to 5000. Empty slots and invalid payloads are
+rejected before a note is sent.
 
 Example:
 
@@ -475,6 +489,11 @@ curl -X POST http://127.0.0.1:8765/api/midi/cut \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"channel": 10}'
+
+curl -X POST http://127.0.0.1:8765/api/slots/1/note \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"note": 60, "velocity": 100, "duration_ms": 300}'
 
 curl -X POST http://127.0.0.1:8765/api/session/save \
   -H "Content-Type: application/json" \
