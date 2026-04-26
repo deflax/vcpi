@@ -21,8 +21,10 @@ Source of truth:
 |---|---|
 | `./vcsrv` | Starts headless server mode; bootstraps `.venv` on first run |
 | `./vcli` | Connects interactive client mode; bootstraps `.venv` on first run |
+| `./vweb` | Starts the local-only Phase 1 browser command console; bootstraps `.venv` on first run |
 | `python main.py serve` | Starts headless server with Unix socket control |
 | `python main.py cli` | Connects to a running headless server |
+| `python main.py web` | Starts the Phase 1 browser console on `127.0.0.1:8765` |
 
 Default socket path (server and client):
 
@@ -95,6 +97,38 @@ Server/client specific:
 |---|---|---|---|
 | `serve` | `--sock` | auto (see above) | Unix socket to bind |
 | `cli` | `--sock` | auto (see above) | Unix socket to connect to |
+
+## Web Client Flags
+
+The browser console is local-only by default and connects to the running
+daemon over its Unix socket.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host` | `127.0.0.1` | HTTP bind host for the browser console |
+| `--port` | `8765` | HTTP bind port for the browser console |
+| `--sock` | auto (see above) | Unix socket to connect to |
+| `--allow-shutdown` | off | Allow the browser UI to request daemon shutdown |
+| `--daemon-timeout` | `60.0` | Seconds to wait for daemon command responses |
+| `--allow-remote` | off | Allow binding to non-loopback hosts such as `0.0.0.0` |
+
+Example:
+
+```bash
+./vcsrv
+./vweb
+# open http://127.0.0.1:8765
+
+# If connecting to a Raspberry Pi/systemd service socket:
+./vweb --sock /run/vcpi/vcpi.sock
+```
+
+Phase 1 note: this is a minimal command console for local use, not the full
+structured web mixer UI. Command requests require the CSRF token embedded in
+the served page and cross-origin command posts are rejected. The server refuses
+non-loopback binds unless `--allow-remote` is set; only use remote binding on a
+trusted network because the browser console can control the running daemon with
+the same command surface as `vcli`.
 
 ## Interactive Commands
 

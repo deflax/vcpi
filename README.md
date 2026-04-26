@@ -12,7 +12,10 @@ Fastest path:
 ./vcsrv
 
 # Terminal 2
-./vcli
+./vweb
+
+# Browser
+open http://127.0.0.1:8765
 ```
 
 Manual setup:
@@ -27,9 +30,14 @@ python main.py serve
 
 # Terminal 2: connect interactive client
 python main.py cli
+
+# Or start the local browser command console
+python main.py web
 ```
 
-vcpi runs with separate server (`serve`) and client (`cli`) processes.
+vcpi runs with a separate server (`serve`) and multiple clients. Use `cli`
+for the terminal client or `web` for the Phase 1 local browser command
+console.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcli` with `audio start [device]`.
@@ -65,6 +73,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
   main.py             # Top-level Python entry point
   vcsrv               # Server launcher (creates .venv on first run)
   vcli                # Client launcher (creates .venv on first run)
+  vweb                # Local browser console launcher (creates .venv on first run)
   requirements.txt    # Python dependencies
   USAGE.md            # Full CLI and startup flag reference
   rpi-build/          # Raspberry Pi image build/provisioning tools only
@@ -79,15 +88,27 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 # Connect CLI client to a running daemon
 ./vcli
 
+# Start local browser command console (Phase 1)
+./vweb
+
 # Direct python equivalents
 python main.py serve
 python main.py cli
+python main.py web --host 127.0.0.1 --port 8765
+
+# Raspberry Pi/systemd installs may need the service socket explicitly
+./vweb --sock /run/vcpi/vcpi.sock
 
 # Logging defaults:
 # - python main.py serve -> WARNING
 # - ./vcsrv -> DEBUG
 LOG_LEVEL=INFO ./vcsrv
 ```
+
+The web console binds to `127.0.0.1` by default, uses a per-process CSRF token
+for command requests, and refuses non-loopback hosts unless you pass
+`--allow-remote`. Only expose it on a trusted network; it controls the running
+daemon with the same command surface as `vcli`.
 
 Full CLI and startup flag reference: `USAGE.md`
 
@@ -310,6 +331,23 @@ Headless server + remote CLI:
 
 From `vcli`, use `shutdown` to terminate the daemon process (for example, to
 let systemd restart it).
+
+Phase 1 browser console:
+
+```bash
+# Terminal 1
+./vcsrv
+
+# Terminal 2
+./vweb
+
+# Browser
+open http://127.0.0.1:8765
+```
+
+`vweb` binds to `127.0.0.1:8765` by default and talks to the local vcpi
+daemon over its Unix socket. Pass `--allow-shutdown` only if you want the web
+console to expose daemon shutdown.
 
 ## Raspberry Pi Builds
 
