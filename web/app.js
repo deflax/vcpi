@@ -20,6 +20,9 @@
   const typedError = document.getElementById('typed-error');
   const masterGainInput = document.getElementById('master-gain-input');
   const masterGainValue = document.getElementById('master-gain-value');
+  const masterFxSelect = document.getElementById('master-fx-select');
+  const masterFxLoadButton = document.getElementById('master-fx-load-button');
+  const masterFxStatus = document.getElementById('master-fx-status');
   const tempoBpmInput = document.getElementById('tempo-bpm-input');
   const tempoSetButton = document.getElementById('tempo-set-button');
   const linkStartButton = document.getElementById('link-start-button');
@@ -152,6 +155,10 @@
 
   function setMidiRoutingStatus(message) {
     midiRoutingStatus.textContent = message;
+  }
+
+  function setMasterFxStatus(message) {
+    masterFxStatus.textContent = message;
   }
 
   function typedRefreshIntervalLabel() {
@@ -356,6 +363,34 @@
     const normalizedGain = normalizeGain(gain, 1);
     masterGainValue.textContent = formatValue(normalizedGain, 'Unknown');
     masterGainInput.value = normalizedGain.toFixed(2);
+  }
+
+  function normalizeMasterFxCount(audio) {
+    const count = Number(firstPresent(audio, ['master_effects', 'master_fx', 'effects'], 0));
+    return Number.isInteger(count) && count > 0 ? count : 0;
+  }
+
+  function selectedMasterFx() {
+    return normalizeMidiNumber(masterFxSelect.value, 1, 9999);
+  }
+
+  function renderMasterFxControls(audio) {
+    const count = normalizeMasterFxCount(audio);
+    const previousValue = selectedMasterFx() || 1;
+    masterFxSelect.textContent = '';
+    if (count === 0) {
+      appendSelectOption(masterFxSelect, '1', 'FX 1');
+      masterFxSelect.value = '1';
+      setMasterFxStatus('No master FX reported by typed status.');
+      return;
+    }
+    for (let effect = 1; effect <= count; effect += 1) {
+      appendSelectOption(masterFxSelect, String(effect), `FX ${effect}`);
+    }
+    masterFxSelect.value = String(Math.min(previousValue, count));
+    if (!currentInfoMode.startsWith('master-fx')) {
+      setMasterFxStatus(`${count} master ${count === 1 ? 'FX' : 'FX'} available.`);
+    }
   }
 
   function audioDeviceValue(device) {
@@ -933,6 +968,19 @@
     return rows;
   }
 
+  function masterFxParameterRows(data) {
+    if (Array.isArray(data)) {
+      return parameterRowsFromSource(data, 'Master FX', {targetKind: 'master_effect'});
+    }
+    if (!data || typeof data !== 'object') {
+      return [];
+    }
+    const effect = asObject(data.effect || data.plugin);
+    const effectName = formatValue(firstPresent(effect, ['name', 'label', 'type'], 'Master FX'), 'Master FX');
+    const source = firstPresent(effect, ['params', 'parameters', 'items', 'rows'], firstPresent(data, ['params', 'parameters', 'items', 'rows'], undefined));
+    return source == null ? [] : parameterRowsFromSource(source, effectName, {targetKind: 'master_effect'});
+  }
+
   function appendHeaderCell(row, label) {
     const cell = document.createElement('th');
     cell.scope = 'col';
@@ -998,6 +1046,26 @@
     }
   }
 
+  async function applyMasterFxParam(effectNumber, param, input) {
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) {
+      showTypedError(`Enter a finite numeric value for ${param.paramName}.`);
+      input.focus();
+      return;
+    }
+
+    slotInfoStatus.textContent = `Applying ${param.paramName} on master FX ${effectNumber}…`;
+    const ok = await mutateTyped(`/api/master/fx/${encodeURIComponent(effectNumber)}/params`, {
+      name: param.paramName,
+      value,
+    });
+    if (ok) {
+      await loadMasterFxParams(effectNumber);
+    } else {
+      slotInfoStatus.textContent = `Could not apply ${param.paramName}. See typed API status above.`;
+    }
+  }
+
   function appendParamEditCell(row, slotNumber, slotName, param) {
     const cell = document.createElement('td');
     if (!editableSlotParam(param)) {
@@ -1047,6 +1115,50 @@
     row.append(cell);
   }
 
+  function appendMasterFxParamEditCell(row, effectNumber, param) {
+    const cell = document.createElement('td');
+    if (!editableSlotParam(param)) {
+      cell.textContent = '—';
+      cell.title = 'This parameter is read-only in the dashboard.';
+      row.append(cell);
+      return;
+    }
+
+    const form = document.createElement('form');
+    form.className = 'slot-param-edit';
+    const labelText = `Set ${param.paramName} for master FX ${effectNumber}`;
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.inputMode = 'decimal';
+    input.value = String(param.currentValue);
+    input.dataset.typedAction = 'true';
+    input.setAttribute('aria-label', labelText);
+    input.title = labelText;
+    if (isFiniteNumericParamValue(param.minimum)) {
+      input.min = String(param.minimum);
+    }
+    if (isFiniteNumericParamValue(param.maximum)) {
+      input.max = String(param.maximum);
+    }
+    input.step = isFiniteNumericParamValue(param.step) ? String(param.step) : 'any';
+
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.className = 'typed-button typed-button--ghost slot-param-apply';
+    button.textContent = 'Apply';
+    button.dataset.typedAction = 'true';
+    button.setAttribute('aria-label', `Apply ${param.paramName} to master FX ${effectNumber}`);
+    button.title = `Apply ${param.paramName}`;
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      applyMasterFxParam(effectNumber, param, input);
+    });
+    form.append(input, button);
+    cell.append(form);
+    row.append(cell);
+  }
+
   function renderSlotParamsTable(rows, slotNumber, slotName) {
     slotInfoParams.textContent = '';
     if (rows.length === 0) {
@@ -1073,6 +1185,40 @@
       appendParamCell(row, param.value);
       appendParamCell(row, param.range);
       appendParamEditCell(row, slotNumber, slotName, param);
+      tbody.append(row);
+    });
+
+    table.append(thead, tbody);
+    slotInfoParams.append(table);
+    slotInfoParams.hidden = false;
+  }
+
+  function renderMasterFxParamsTable(rows, effectNumber) {
+    slotInfoParams.textContent = '';
+    if (rows.length === 0) {
+      slotInfoParams.hidden = true;
+      return;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'slot-params-table';
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    appendHeaderCell(headerRow, 'Component');
+    appendHeaderCell(headerRow, 'Parameter');
+    appendHeaderCell(headerRow, 'Value');
+    appendHeaderCell(headerRow, 'Range');
+    appendHeaderCell(headerRow, 'Edit');
+    thead.append(headerRow);
+
+    const tbody = document.createElement('tbody');
+    rows.forEach((param) => {
+      const row = document.createElement('tr');
+      appendParamCell(row, param.group);
+      appendParamCell(row, param.name);
+      appendParamCell(row, param.value);
+      appendParamCell(row, param.range);
+      appendMasterFxParamEditCell(row, effectNumber, param);
       tbody.append(row);
     });
 
@@ -1192,6 +1338,50 @@
     }
   }
 
+  function renderMasterFxParams(effectNumber, data) {
+    const rows = masterFxParameterRows(data);
+    const text = slotParamsText(data).trimEnd();
+    currentInfoSlot = `master-fx-${effectNumber}`;
+    currentInfoMode = 'master-fx-params';
+    slotInfoTitle.textContent = `Master FX ${effectNumber} params`;
+    slotInfoStatus.textContent = `Loaded parameters for master FX ${effectNumber}.`;
+    setMasterFxStatus(`Loaded master FX ${effectNumber} parameters.`);
+    renderSlotInfoMetadata(slotInfoMetadata(data));
+    renderMasterFxParamsTable(rows, effectNumber);
+    slotInfoOutput.textContent = text || (rows.length > 0 ? 'No rendered parameter diagram supplied by the backend.' : 'The params endpoint returned no parameters for this master FX.');
+    setSlotInfoPanelVisible(true);
+  }
+
+  async function loadMasterFxParams(effectNumber) {
+    if (!effectNumber || slotInfoInFlight) {
+      return;
+    }
+    slotInfoInFlight = true;
+    updateSlotInfoControlsDisabled();
+    showTypedError('');
+    setSlotInfoPanelVisible(true);
+    currentInfoSlot = `master-fx-${effectNumber}`;
+    currentInfoMode = 'master-fx-params';
+    slotInfoTitle.textContent = `Master FX ${effectNumber} params`;
+    slotInfoStatus.textContent = `Loading params for master FX ${effectNumber}…`;
+    setMasterFxStatus(`Loading master FX ${effectNumber} params…`);
+    renderSlotInfoMetadata({});
+    resetSlotParamsTable();
+    slotInfoOutput.textContent = 'Inspecting master FX parameters…';
+    try {
+      const data = await fetchJson(`/api/master/fx/${encodeURIComponent(effectNumber)}/params`, {headers: {'Accept': 'application/json'}});
+      renderMasterFxParams(effectNumber, data);
+    } catch (error) {
+      const message = `Master FX params unavailable: ${error.message || String(error)}`;
+      renderSlotInfoUnavailable(`master FX ${effectNumber}`, message);
+      setMasterFxStatus(message);
+      showTypedError(message);
+    } finally {
+      slotInfoInFlight = false;
+      updateSlotInfoControlsDisabled();
+    }
+  }
+
   function renderStatus(data) {
     latestTypedStatusData = data;
     const status = asObject(data.status || data);
@@ -1223,6 +1413,7 @@
       formatValue(firstPresent(midi, ['ports', 'output_count', 'outputs'], ''), ''),
     );
     renderMasterGain(audio);
+    renderMasterFxControls(audio);
     renderLinkTempo(link, status);
     renderMidiRouting(latestTypedStatusData, latestTypedSlotsData);
   }
@@ -1398,7 +1589,7 @@
       card.append(header, meta, controls);
       slotsList.append(card);
     });
-    if (currentInfoSlot && !loadedSlotNumbers.has(currentInfoSlot) && !slotInfoInFlight) {
+    if (currentInfoSlot && currentInfoMode !== 'master-fx-params' && !loadedSlotNumbers.has(currentInfoSlot) && !slotInfoInFlight) {
       renderSlotInfoUnavailable(currentInfoSlot, `Slot ${currentInfoSlot} is empty or no longer loaded.`);
     }
     updateSlotInfoControlsDisabled();
@@ -1751,6 +1942,15 @@
   });
   masterGainInput.addEventListener('change', () => {
     mutateTyped('/api/master/gain', {gain: Number(masterGainInput.value)});
+  });
+  masterFxLoadButton.addEventListener('click', () => {
+    const effect = selectedMasterFx();
+    if (effect == null) {
+      setMasterFxStatus('Choose a valid master FX index.');
+      showTypedError('Choose a valid master FX index.');
+      return;
+    }
+    loadMasterFxParams(effect);
   });
   tempoBpmInput.addEventListener('input', () => {
     tempoBpmDirty = tempoBpmInput.value.trim() !== '';

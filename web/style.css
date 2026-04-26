@@ -230,6 +230,7 @@ h2 {
 .link-tempo-actions,
 .midi-routing-actions,
 .session-actions,
+.master-fx-controls,
 .slot-controls {
   display: flex;
   flex-wrap: wrap;
@@ -299,9 +300,40 @@ h2 {
 }
 
 .master-gain-card {
+  flex-wrap: wrap;
   border-radius: var(--radius-md);
   padding: var(--space-4);
   background: var(--color-soft-panel);
+}
+
+.master-fx-controls {
+  justify-content: flex-end;
+}
+
+.master-fx-control {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: min(100%, 12rem);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-muted);
+  background: var(--color-panel-strong);
+  font-weight: 850;
+}
+
+.master-fx-control select {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  color: var(--color-text);
+  background: transparent;
+  font-family: var(--font-mono);
+}
+
+.master-fx-status {
+  width: 100%;
 }
 
 .audio-card {
@@ -940,6 +972,8 @@ pre {
     .midi-routing-controls,
     .midi-routing-control,
     .midi-routing-list,
+    .master-fx-controls,
+    .master-fx-control,
     .session-actions,
   .session-controls,
   .session-name-control,

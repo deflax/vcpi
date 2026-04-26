@@ -100,6 +100,16 @@
             aria-label="Set master gain"
           >
         </label>
+        <div class="master-fx-controls" aria-label="Master FX parameters">
+          <label class="master-fx-control" for="master-fx-select">
+            <span>Master FX</span>
+            <select id="master-fx-select" data-typed-action="true" aria-label="Select master FX index">
+              <option value="1">FX 1</option>
+            </select>
+          </label>
+          <button id="master-fx-load-button" type="button" class="typed-button typed-button--ghost" data-typed-action="true">Params</button>
+        </div>
+        <p id="master-fx-status" class="typed-refresh-status master-fx-status" aria-live="polite">Master FX params have not loaded yet.</p>
       </div>
 
       <div class="link-tempo-card" aria-labelledby="link-tempo-title">
