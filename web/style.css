@@ -138,6 +138,7 @@ h2 {
 .audio-card,
 .link-tempo-card,
 .session-card,
+.flow-card,
 .slots-card,
 .transcript-card {
   border: 1px solid var(--color-line);
@@ -210,6 +211,7 @@ h2 {
 
 .typed-header,
 .slots-header,
+.flow-header,
 .master-gain-card,
 .audio-card,
 .link-tempo-card,
@@ -412,6 +414,18 @@ h2 {
 .session-help {
   width: 100%;
   margin: 0;
+}
+
+.flow-card {
+  display: grid;
+  gap: var(--space-3);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--color-soft-panel);
+}
+
+.flow-output {
+  max-height: calc(var(--space-7) * 7);
 }
 
 .status-grid {
@@ -733,6 +747,7 @@ pre {
 
   .typed-header,
   .slots-header,
+  .flow-header,
   .master-gain-card,
   .audio-card,
   .link-tempo-card,

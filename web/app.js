@@ -31,6 +31,8 @@
   const sessionControlStatus = document.getElementById('session-control-status');
   const sessionNameOptions = document.getElementById('session-name-options');
   const sessionOptionsStatus = document.getElementById('session-options-status');
+  const flowStatus = document.getElementById('flow-status');
+  const flowOutput = document.getElementById('flow-output');
   const statusFields = {
     daemon: document.getElementById('status-daemon'),
     audio: document.getElementById('status-audio'),
@@ -117,6 +119,10 @@
 
   function setAudioDeviceStatus(message) {
     audioDeviceStatus.textContent = message;
+  }
+
+  function setFlowStatus(message) {
+    flowStatus.textContent = message;
   }
 
   function typedRefreshIntervalLabel() {
@@ -550,6 +556,27 @@
     sessionOptionsStatus.textContent = 'Saved session suggestions unavailable; manual entry still works.';
   }
 
+  function signalFlowText(data) {
+    if (typeof data === 'string') {
+      return data;
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return '';
+    }
+    return normalizeOutput(firstPresent(data, ['flow', 'ascii', 'diagram', 'output', 'text'], ''));
+  }
+
+  function renderSignalFlow(data) {
+    const flow = signalFlowText(data).trimEnd();
+    flowOutput.textContent = flow || 'Signal-flow endpoint returned no diagram.';
+    setFlowStatus(flow ? 'Typed signal flow loaded.' : 'No signal-flow diagram returned.');
+  }
+
+  function renderSignalFlowUnavailable() {
+    flowOutput.textContent = 'Signal-flow diagnostics are unavailable. Status and slots can still refresh.';
+    setFlowStatus('Signal-flow endpoint unavailable.');
+  }
+
   function renderStatus(data) {
     const status = asObject(data.status || data);
     const daemon = asObject(status.daemon);
@@ -719,7 +746,7 @@
     typedRefreshInFlight = true;
     updateTypedControlsDisabled();
     showTypedError('');
-    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, sessions, and audio devices…' : 'Refreshing status, slots, sessions, and audio devices…');
+    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, sessions, audio devices, and signal flow…' : 'Refreshing status, slots, sessions, audio devices, and signal flow…');
     if (source !== 'auto') {
       typedRefreshButton.textContent = 'Refreshing…';
     }
@@ -730,6 +757,7 @@
         fetchJson('/api/slots', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/sessions', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/audio/devices', {headers: {'Accept': 'application/json'}}),
+        fetchJson('/api/flow', {headers: {'Accept': 'application/json'}}),
       ]);
 
       const messages = [];
@@ -764,6 +792,12 @@
       } else {
         const statusData = results[0].status === 'fulfilled' ? results[0].value : {};
         renderAudioDevicesUnavailable(statusData);
+      }
+
+      if (results[4].status === 'fulfilled') {
+        renderSignalFlow(results[4].value);
+      } else {
+        renderSignalFlowUnavailable();
       }
 
       if (messages.length > 0) {
