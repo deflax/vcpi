@@ -638,6 +638,29 @@ h2 {
   border-bottom: 0;
 }
 
+.slot-param-edit {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.slot-param-edit input {
+  width: 7rem;
+  min-width: 0;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text);
+  background: var(--color-field);
+  font-family: var(--font-mono);
+}
+
+.slot-param-apply {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+}
+
 .slot-badge {
   border: 1px solid var(--color-line);
   border-radius: 999px;

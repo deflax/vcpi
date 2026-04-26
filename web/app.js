@@ -842,12 +842,20 @@
       const type = firstPresent(valueObject, ['type', 'kind'], '');
       const minimum = firstPresent(valueObject, ['min', 'minimum', 'lo', 'low'], undefined);
       const maximum = firstPresent(valueObject, ['max', 'maximum', 'hi', 'high'], undefined);
+      const step = firstPresent(valueObject, ['step', 'increment'], undefined);
       const range = minimum != null || maximum != null ? `${formatValue(minimum, '—')}–${formatValue(maximum, '—')}` : '—';
+      const paramName = formatValue(displayName, '').trim();
+      const currentValue = firstPresent(valueObject, ['value', 'current'], displayValue);
       rows.push({
         group: formatValue(group, 'Instrument'),
-        name: formatValue(displayName, 'Unnamed parameter'),
+        name: paramName || 'Unnamed parameter',
         value: units ? `${formatValue(displayValue, '—')} ${units}` : formatValue(displayValue, '—'),
         range: type && range === '—' ? formatValue(type, '—') : range,
+        paramName,
+        currentValue,
+        minimum,
+        maximum,
+        step,
       });
     };
 
@@ -930,7 +938,95 @@
     row.append(cell);
   }
 
-  function renderSlotParamsTable(rows) {
+  function isFiniteNumericParamValue(value) {
+    return typeof value === 'number' && Number.isFinite(value);
+  }
+
+  function optionalFiniteNumericParamValue(value) {
+    if (value == null) {
+      return true;
+    }
+    return isFiniteNumericParamValue(value);
+  }
+
+  function editableSlotParam(param) {
+    return Boolean(
+      param.paramName
+        && isFiniteNumericParamValue(param.currentValue)
+        && optionalFiniteNumericParamValue(param.minimum)
+        && optionalFiniteNumericParamValue(param.maximum),
+    );
+  }
+
+  async function applySlotParam(slotNumber, slotName, param, input) {
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) {
+      showTypedError(`Enter a finite numeric value for ${param.paramName}.`);
+      input.focus();
+      return;
+    }
+
+    slotInfoStatus.textContent = `Applying ${param.paramName} on slot ${slotNumber}…`;
+    const ok = await mutateTyped(`/api/slots/${encodeURIComponent(slotNumber)}/params`, {
+      name: param.paramName,
+      value,
+    });
+    if (ok) {
+      await loadSlotParams(slotNumber, slotName);
+    } else {
+      slotInfoStatus.textContent = `Could not apply ${param.paramName}. See typed API status above.`;
+    }
+  }
+
+  function appendParamEditCell(row, slotNumber, slotName, param) {
+    const cell = document.createElement('td');
+    if (!editableSlotParam(param)) {
+      cell.textContent = '—';
+      cell.title = 'This parameter is read-only in the dashboard.';
+      row.append(cell);
+      return;
+    }
+
+    const form = document.createElement('form');
+    form.className = 'slot-param-edit';
+    const labelText = `Set ${param.paramName} for slot ${slotNumber}`;
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.inputMode = 'decimal';
+    input.value = String(param.currentValue);
+    input.dataset.typedAction = 'true';
+    input.setAttribute('aria-label', labelText);
+    input.title = labelText;
+    if (isFiniteNumericParamValue(param.minimum)) {
+      input.min = String(param.minimum);
+    }
+    if (isFiniteNumericParamValue(param.maximum)) {
+      input.max = String(param.maximum);
+    }
+    if (isFiniteNumericParamValue(param.step)) {
+      input.step = String(param.step);
+    } else {
+      input.step = 'any';
+    }
+
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.className = 'typed-button typed-button--ghost slot-param-apply';
+    button.textContent = 'Apply';
+    button.dataset.typedAction = 'true';
+    button.setAttribute('aria-label', `Apply ${param.paramName} to slot ${slotNumber}`);
+    button.title = `Apply ${param.paramName}`;
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      applySlotParam(slotNumber, slotName, param, input);
+    });
+    form.append(input, button);
+    cell.append(form);
+    row.append(cell);
+  }
+
+  function renderSlotParamsTable(rows, slotNumber, slotName) {
     slotInfoParams.textContent = '';
     if (rows.length === 0) {
       slotInfoParams.hidden = true;
@@ -945,6 +1041,7 @@
     appendHeaderCell(headerRow, 'Parameter');
     appendHeaderCell(headerRow, 'Value');
     appendHeaderCell(headerRow, 'Range');
+    appendHeaderCell(headerRow, 'Edit');
     thead.append(headerRow);
 
     const tbody = document.createElement('tbody');
@@ -954,6 +1051,7 @@
       appendParamCell(row, param.name);
       appendParamCell(row, param.value);
       appendParamCell(row, param.range);
+      appendParamEditCell(row, slotNumber, slotName, param);
       tbody.append(row);
     });
 
@@ -1038,9 +1136,9 @@
     currentInfoSlot = String(slotNumber);
     currentInfoMode = 'params';
     slotInfoTitle.textContent = `Slot ${slotNumber} params`;
-    slotInfoStatus.textContent = slotName ? `Loaded read-only parameters for ${slotName}.` : 'Loaded read-only parameters.';
+    slotInfoStatus.textContent = slotName ? `Loaded parameters for ${slotName}.` : 'Loaded parameters.';
     renderSlotInfoMetadata(slotInfoMetadata(data));
-    renderSlotParamsTable(rows);
+    renderSlotParamsTable(rows, slotNumber, slotName);
     slotInfoOutput.textContent = text || (rows.length > 0 ? 'No rendered parameter diagram supplied by the backend.' : 'The params endpoint returned no parameters for this loaded slot.');
     setSlotInfoPanelVisible(true);
   }
@@ -1056,7 +1154,7 @@
     currentInfoSlot = String(slotNumber);
     currentInfoMode = 'params';
     slotInfoTitle.textContent = `Slot ${slotNumber} params`;
-    slotInfoStatus.textContent = `Loading read-only params for slot ${slotNumber}…`;
+    slotInfoStatus.textContent = `Loading params for slot ${slotNumber}…`;
     renderSlotInfoMetadata({});
     resetSlotParamsTable();
     slotInfoOutput.textContent = 'Inspecting plugin parameters…';
