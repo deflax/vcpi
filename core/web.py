@@ -1020,6 +1020,18 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _validate_slot_param_payload(payload: dict[str, object]) -> None:
+        target = payload.get("target", "instrument")
+        if target == "instrument":
+            pass
+        elif target == "effect":
+            effect = payload.get("effect")
+            if isinstance(effect, bool) or not isinstance(effect, int):
+                raise ValueError("effect must be an integer >= 1")
+            if effect < 1:
+                raise ValueError("effect must be >= 1")
+        else:
+            raise ValueError("target must be 'instrument' or 'effect'")
+
         raw_name = payload.get("name")
         if not isinstance(raw_name, str):
             raise ValueError("name must be a string")

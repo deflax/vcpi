@@ -50,7 +50,16 @@ class FakeSlot:
         self.solo: bool = True
         self.enabled: bool = True
         self.midi_channels: set[int] = set()
-        self.effects: list[SimpleNamespace] = [SimpleNamespace(name="Room")]
+        self.effects: list[SimpleNamespace] = [
+            SimpleNamespace(
+                name="Room",
+                mix=0.25,
+                parameters={
+                    "mix": SimpleNamespace(value=0.25, range=(0.0, 1.0), unit="%", label="Mix"),
+                    "mode": SimpleNamespace(range=("small", "large")),
+                },
+            )
+        ]
 
 
 class FakeEngine:
@@ -374,6 +383,18 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertEqual(result["parameters"][2]["name"], "shape")
         self.assertEqual(result["parameters"][2]["minimum"], "sine")
         self.assertEqual(result["parameters"][2]["maximum"], "saw")
+        self.assertEqual(result["instrument"]["kind"], "instrument")
+        self.assertIsNone(result["instrument"]["index"])
+        self.assertEqual(result["instrument"]["parameters"], result["parameters"])
+        self.assertEqual(result["instrument"]["count"], result["count"])
+        self.assertEqual(result["instrument"]["rendered"], result["rendered"])
+        self.assertEqual(len(result["effects"]), 1)
+        self.assertEqual(result["effects"][0]["kind"], "effect")
+        self.assertEqual(result["effects"][0]["index"], 1)
+        self.assertEqual(result["effects"][0]["name"], "Room")
+        self.assertEqual(result["effects"][0]["count"], 2)
+        self.assertEqual(result["effects"][0]["parameters"][0]["name"], "mix")
+        self.assertEqual(result["effects"][0]["parameters"][0]["value"], 0.25)
 
     def test_json_slot_params_rejects_empty_slot(self) -> None:
         if server is None:
@@ -429,6 +450,34 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertEqual(result["count"], 3)
         self.assertIn("cutoff = 0.75", result["rendered"])
         self.assertEqual(result["parameters"][0]["value"], 0.75)
+
+    def test_json_slot_param_set_updates_slot_effect_numeric_parameter(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        slot = host.engine.slots[0]
+        if slot is None:
+            self.fail("FakeHost slot 1 should be loaded")
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation(
+            "slot.param.set",
+            {"slot": 1, "target": "effect", "effect": 1, "name": "mix", "value": 0.5},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.engine.param_changes, [])
+        self.assertEqual(slot.plugin.cutoff, 0.42)
+        self.assertEqual(slot.effects[0].mix, 0.5)
+        self.assertEqual(result["slot"]["slot"], 1)
+        self.assertTrue(result["slot"]["loaded"])
+        self.assertEqual(result["effect"]["kind"], "effect")
+        self.assertEqual(result["effect"]["index"], 1)
+        self.assertEqual(result["parameter"]["name"], "mix")
+        self.assertEqual(result["parameter"]["value"], 0.5)
+        self.assertEqual(result["effects"][0]["parameters"][0]["value"], 0.5)
+        self.assertEqual(result["parameters"][0]["value"], 0.42)
 
     def test_json_slot_param_set_rejects_empty_slot(self) -> None:
         if server is None:
@@ -530,6 +579,47 @@ class TypedDaemonApiContractTests(unittest.TestCase):
                 self.assertFalse(response["ok"])
                 self.assertEqual(response["status"], 400)
                 self.assertIn(message, response["error"])
+                self.assertEqual(slot.plugin.cutoff, 0.42)
+                self.assertEqual(host.engine.param_changes, [])
+
+    def test_json_slot_param_set_rejects_invalid_effect_targets_and_payloads(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        slot = host.engine.slots[0]
+        if slot is None:
+            self.fail("FakeHost slot 1 should be loaded")
+        daemon = server.VcpiServer(host)
+        cases = [
+            ({"slot": 1, "target": "master", "name": "mix", "value": 0.5}, "target"),
+            ({"slot": 1, "target": "effect", "name": "mix", "value": 0.5}, "effect must be an integer"),
+            ({"slot": 1, "target": "effect", "effect": True, "name": "mix", "value": 0.5}, "effect must be an integer"),
+            ({"slot": 1, "target": "effect", "effect": "1", "name": "mix", "value": 0.5}, "effect must be an integer"),
+            ({"slot": 1, "target": "effect", "effect": 0, "name": "mix", "value": 0.5}, "effect index is out of range"),
+            ({"slot": 1, "target": "effect", "effect": 2, "name": "mix", "value": 0.5}, "effect index is out of range"),
+            ({"slot": 1, "target": "effect", "effect": 1, "name": "missing", "value": 0.5}, "unknown parameter"),
+            ({"slot": 1, "target": "effect", "effect": 1, "name": "mode", "value": 0.5}, "non-numeric range"),
+            ({"slot": 1, "target": "effect", "effect": 1, "name": "mix", "value": -0.01}, "value must be >= 0"),
+            ({"slot": 1, "target": "effect", "effect": 1, "name": "mix", "value": 1.01}, "value must be <= 1"),
+            ({"slot": 1, "target": "effect", "effect": 1, "name": "mix"}, "value must be a finite number"),
+            ({"slot": 1, "target": "effect", "effect": 1, "name": "mix", "value": True}, "value must be a finite number"),
+            ({"slot": 1, "target": "effect", "effect": 1, "name": "mix", "value": float("nan")}, "value must be a finite number"),
+            ({"slot": 1, "target": "effect", "effect": 1, "name": "mix", "value": float("inf")}, "value must be a finite number"),
+        ]
+
+        for payload, message in cases:
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "slot.param.set", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertIn(message, response["error"])
+                self.assertEqual(slot.effects[0].mix, 0.25)
                 self.assertEqual(slot.plugin.cutoff, 0.42)
                 self.assertEqual(host.engine.param_changes, [])
 
@@ -1080,6 +1170,13 @@ class WebSafetyTests(unittest.TestCase):
 
         self.assertEqual(payload, {"name": "cutoff", "value": 0.75})
 
+    def test_typed_web_slot_param_validation_accepts_effect_numeric_payload(self) -> None:
+        payload: dict[str, object] = {"target": "effect", "effect": 1, "name": " mix ", "value": 0.5}
+
+        web.VcpiWebHandler._validate_slot_param_payload(payload)
+
+        self.assertEqual(payload, {"target": "effect", "effect": 1, "name": "mix", "value": 0.5})
+
     def test_typed_web_slot_param_validation_rejects_invalid_payloads(self) -> None:
         invalid_payloads = [
             {},
@@ -1095,6 +1192,12 @@ class WebSafetyTests(unittest.TestCase):
             {"name": "cutoff", "value": {"amount": 0.5}},
             {"name": "cutoff", "value": float("nan")},
             {"name": "cutoff", "value": float("inf")},
+            {"target": "master", "name": "cutoff", "value": 0.5},
+            {"target": True, "name": "cutoff", "value": 0.5},
+            {"target": "effect", "name": "mix", "value": 0.5},
+            {"target": "effect", "effect": 0, "name": "mix", "value": 0.5},
+            {"target": "effect", "effect": True, "name": "mix", "value": 0.5},
+            {"target": "effect", "effect": "1", "name": "mix", "value": 0.5},
         ]
         for value in invalid_payloads:
             with self.subTest(value=value):
@@ -1499,6 +1602,40 @@ class WebSafetyTests(unittest.TestCase):
         )
         send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
 
+    def test_typed_web_slot_param_post_effect_route_maps_to_set_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/params"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {
+            "ok": True,
+            "slot": {"slot": 1, "loaded": True},
+            "effect": {"kind": "effect", "index": 1},
+            "parameter": {"name": "mix", "value": 0.5},
+        }
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"target": "effect", "effect": 1, "name": " mix ", "value": 0.5},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "slot.param.set",
+            {"target": "effect", "effect": 1, "name": "mix", "value": 0.5, "slot": 1},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
     def test_typed_web_slot_param_post_rejects_invalid_payload_before_daemon(self) -> None:
         cases = [
             ("/api/slots/9/params", {"name": "cutoff", "value": 0.5}),
@@ -1515,6 +1652,12 @@ class WebSafetyTests(unittest.TestCase):
             ("/api/slots/1/params", {"name": "cutoff", "value": {"amount": 0.5}}),
             ("/api/slots/1/params", {"name": "cutoff", "value": float("nan")}),
             ("/api/slots/1/params", {"name": "cutoff", "value": float("inf")}),
+            ("/api/slots/1/params", {"target": "master", "name": "mix", "value": 0.5}),
+            ("/api/slots/1/params", {"target": True, "name": "mix", "value": 0.5}),
+            ("/api/slots/1/params", {"target": "effect", "name": "mix", "value": 0.5}),
+            ("/api/slots/1/params", {"target": "effect", "effect": 0, "name": "mix", "value": 0.5}),
+            ("/api/slots/1/params", {"target": "effect", "effect": True, "name": "mix", "value": 0.5}),
+            ("/api/slots/1/params", {"target": "effect", "effect": "1", "name": "mix", "value": 0.5}),
         ]
 
         for path, body in cases:

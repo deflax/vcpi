@@ -351,9 +351,10 @@ class VcpiServer:
             case "slot.param.set":
                 idx = self._slot_index_from_payload(payload)
                 slot = self._loaded_slot(idx)
+                target = self._parameter_target_from_payload(payload, slot)
                 name = self._parameter_name_from_payload(payload)
                 value = self._parameter_value_from_payload(payload)
-                return self._slot_param_set_payload(idx, slot, name, value)
+                return self._slot_param_set_payload(idx, slot, target, name, value)
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -590,6 +591,27 @@ class VcpiServer:
         return numeric_value
 
     @staticmethod
+    def _parameter_target_from_payload(payload: dict[str, Any], slot: InstrumentSlot) -> tuple[str, int | None]:
+        target = payload.get("target", "instrument")
+        if target == "instrument":
+            return "instrument", None
+        if target != "effect":
+            raise _JsonOperationError("target must be 'instrument' or 'effect'")
+
+        effect_index = payload.get("effect")
+        if isinstance(effect_index, bool) or not isinstance(effect_index, int):
+            raise _JsonOperationError("effect must be an integer 1-N")
+
+        effects = getattr(slot, "effects", [])
+        try:
+            effect_count = len(effects)
+        except Exception:
+            effect_count = 0
+        if not 1 <= effect_index <= effect_count:
+            raise _JsonOperationError("effect index is out of range")
+        return "effect", effect_index - 1
+
+    @staticmethod
     def _normalize_session_name(raw_name: object, *, required: bool) -> str | None:
         if raw_name is None:
             if required:
@@ -778,29 +800,50 @@ class VcpiServer:
 
     def _slot_params_payload(self, idx: int) -> dict[str, Any]:
         slot = self._loaded_slot(idx)
-        parameters, total_count = self._plugin_parameters_payload(slot.plugin)
-        truncated = total_count > len(parameters)
         label = f"Slot {idx + 1}: {slot.name}"
+        instrument = self._plugin_params_group_payload(
+            slot.plugin,
+            label,
+            kind="instrument",
+            index=None,
+        )
+        effects = [
+            self._plugin_params_group_payload(
+                effect,
+                f"Slot {idx + 1} FX {effect_idx + 1}",
+                kind="effect",
+                index=effect_idx + 1,
+            )
+            for effect_idx, effect in enumerate(slot.effects)
+        ]
         payload: dict[str, Any] = {
             "ok": True,
             "slot": self._slot_payload(idx, slot),
-            "parameters": parameters,
-            "count": total_count,
-            "rendered": self._render_parameters(label, parameters, truncated, total_count),
+            "parameters": instrument["parameters"],
+            "count": instrument["count"],
+            "rendered": instrument["rendered"],
+            "instrument": instrument,
+            "effects": effects,
         }
-        if truncated:
+        if instrument.get("truncated"):
             payload["truncated"] = True
             payload["limit"] = MAX_SLOT_PARAMETERS
-            payload["count"] = total_count
         return payload
 
     def _slot_param_set_payload(
         self,
         idx: int,
         slot: InstrumentSlot,
+        target: tuple[str, int | None],
         name: str,
         value: float,
     ) -> dict[str, Any]:
+        target_kind, effect_idx = target
+        if target_kind == "effect":
+            if effect_idx is None:
+                raise _JsonOperationError("effect must be an integer 1-N")
+            return self._slot_effect_param_set_payload(idx, slot, effect_idx, name, value)
+
         current = self._slot_params_payload(idx)
         parameter = self._find_parameter_payload(current["parameters"], name)
         if parameter is None:
@@ -817,6 +860,39 @@ class VcpiServer:
         if refreshed_parameter is None:
             refreshed_parameter = dict(parameter)
             refreshed_parameter["value"] = value
+        refreshed["parameter"] = refreshed_parameter
+        return refreshed
+
+    def _slot_effect_param_set_payload(
+        self,
+        idx: int,
+        slot: InstrumentSlot,
+        effect_idx: int,
+        name: str,
+        value: float,
+    ) -> dict[str, Any]:
+        effect = slot.effects[effect_idx]
+        current = self._slot_params_payload(idx)
+        current_effects = current.get("effects", [])
+        if not isinstance(current_effects, list) or effect_idx >= len(current_effects):
+            raise _JsonOperationError("effect index is out of range")
+        effect_payload = current_effects[effect_idx]
+        if not isinstance(effect_payload, dict):
+            raise _JsonOperationError("effect index is out of range")
+        parameter = self._find_parameter_payload(effect_payload.get("parameters"), name)
+        if parameter is None:
+            raise _JsonOperationError(f"unknown parameter: {name}")
+        self._validate_numeric_parameter(parameter, name, value)
+
+        setattr(effect, name, value)
+
+        refreshed = self._slot_params_payload(idx)
+        refreshed_effect = refreshed["effects"][effect_idx]
+        refreshed_parameter = self._find_parameter_payload(refreshed_effect.get("parameters"), name)
+        if refreshed_parameter is None:
+            refreshed_parameter = dict(parameter)
+            refreshed_parameter["value"] = value
+        refreshed["effect"] = refreshed_effect
         refreshed["parameter"] = refreshed_parameter
         return refreshed
 
@@ -919,6 +995,30 @@ class VcpiServer:
             if declared_count is not None:
                 total_count = max(total_count, declared_count)
         return parameters, total_count
+
+    def _plugin_params_group_payload(
+        self,
+        plugin: object,
+        label: str,
+        *,
+        kind: str,
+        index: int | None,
+    ) -> dict[str, Any]:
+        parameters, total_count = self._plugin_parameters_payload(plugin)
+        truncated = total_count > len(parameters)
+        payload: dict[str, Any] = {
+            "kind": kind,
+            "index": index,
+            "label": label,
+            "name": self._safe_plugin_attr(plugin, "name", type(plugin).__name__),
+            "parameters": parameters,
+            "count": total_count,
+            "rendered": self._render_parameters(label, parameters, truncated, total_count),
+        }
+        if truncated:
+            payload["truncated"] = True
+            payload["limit"] = MAX_SLOT_PARAMETERS
+        return payload
 
     @staticmethod
     def _safe_collection_len(value: Any) -> int | None:
