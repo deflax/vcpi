@@ -32,6 +32,7 @@ import threading
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from core import deps
 from core.host import VcpiCore
 from core.cli import HostCLI
 from core.models import NUM_SLOTS, InstrumentSlot
@@ -329,6 +330,8 @@ class VcpiServer:
                 return {"ok": True, "slots": self._slots_payload()}
             case "sessions":
                 return self._sessions_payload()
+            case "audio.devices":
+                return self._audio_devices_payload()
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -627,6 +630,69 @@ class VcpiServer:
 
     def _slots_payload(self) -> list[dict[str, Any]]:
         return [self._slot_payload(idx, slot) for idx, slot in enumerate(self.host.engine.slots)]
+
+    def _audio_devices_payload(self) -> dict[str, Any]:
+        current = self.host.audio_output_name
+        unavailable_payload = {
+            "ok": True,
+            "available": False,
+            "current": current,
+            "default_device": None,
+            "devices": [],
+        }
+        if not deps.HAS_SOUNDDEVICE or deps.sd is None:
+            return unavailable_payload
+
+        try:
+            raw_devices = deps.sd.query_devices()
+        except Exception:
+            logger.debug("audio device query failed", exc_info=True)
+            return unavailable_payload
+
+        default_device = self._output_device_index(getattr(deps.sd.default, "device", None))
+        devices: list[dict[str, Any]] = []
+        for idx, info in enumerate(raw_devices):
+            if not isinstance(info, dict):
+                continue
+            try:
+                output_channels = int(info.get("max_output_channels", 0))
+            except (TypeError, ValueError):
+                output_channels = 0
+            if output_channels <= 0:
+                continue
+
+            name = str(info.get("name", "")).strip()
+            if not name:
+                continue
+
+            devices.append(
+                {
+                    "id": idx,
+                    "name": name,
+                    "output_channels": output_channels,
+                    "default": idx == default_device,
+                    "selected": current == name,
+                }
+            )
+
+        return {
+            "ok": True,
+            "available": True,
+            "current": current,
+            "default_device": default_device,
+            "devices": devices,
+        }
+
+    @staticmethod
+    def _output_device_index(device: object) -> int | None:
+        if isinstance(device, int):
+            return device
+        if isinstance(device, (tuple, list)):
+            if len(device) >= 2 and isinstance(device[1], int):
+                return device[1]
+            if len(device) == 1 and isinstance(device[0], int):
+                return device[0]
+        return None
 
     def _midi_channels_for_slot(self, idx: int, slot: InstrumentSlot | None) -> list[int]:
         channels = {ch for ch, slot_idx in self.host.channel_map.items() if slot_idx == idx}

@@ -161,6 +161,62 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertEqual(slots["slots"][0]["midi_channels"], [1, 10])
         self.assertFalse(slots["slots"][1]["loaded"])
 
+    def test_json_audio_devices_lists_output_devices_only(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+        fake_sd = SimpleNamespace(
+            default=SimpleNamespace(device=(None, 2)),
+            query_devices=lambda: [
+                {"name": "Built-in Mic", "max_input_channels": 2, "max_output_channels": 0, "default_samplerate": 44100.0},
+                {"name": "Built-in Output", "max_input_channels": 0, "max_output_channels": 2, "default_samplerate": 44100.0},
+                {"name": "USB Interface", "max_input_channels": 2, "max_output_channels": 4, "default_samplerate": 48000.0},
+            ]
+        )
+
+        with mock.patch.object(server.deps, "HAS_SOUNDDEVICE", True), mock.patch.object(server.deps, "sd", fake_sd):
+            result = daemon._handle_json_operation("audio.devices", {})
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["available"])
+        self.assertEqual(result["current"], "Built-in Output")
+        self.assertEqual(result["default_device"], 2)
+        self.assertEqual(
+            result["devices"],
+            [
+                {
+                    "id": 1,
+                    "name": "Built-in Output",
+                    "output_channels": 2,
+                    "default": False,
+                    "selected": True,
+                },
+                {
+                    "id": 2,
+                    "name": "USB Interface",
+                    "output_channels": 4,
+                    "default": True,
+                    "selected": False,
+                },
+            ],
+        )
+
+    def test_json_audio_devices_reports_unavailable_without_sounddevice(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        with mock.patch.object(server.deps, "HAS_SOUNDDEVICE", False), mock.patch.object(server.deps, "sd", None):
+            result = daemon._handle_json_operation("audio.devices", {})
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["available"])
+        self.assertEqual(result["current"], "Built-in Output")
+        self.assertIsNone(result["default_device"])
+        self.assertEqual(result["devices"], [])
+
     def test_json_slot_mutations_validate_gain_and_toggle(self) -> None:
         if server is None:
             self.skipTest("core.server import needs optional native dependencies in this checkout")
@@ -619,6 +675,75 @@ class WebSafetyTests(unittest.TestCase):
             daemon_timeout=1.0,
         )
         send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_audio_devices_route_maps_to_read_only_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/audio/devices"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "devices": []}
+
+        with mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_GET()
+
+        execute_json_operation.assert_called_once_with(
+            "audio.devices",
+            {},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_audio_start_accepts_selected_picker_device(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/audio/start"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "status": {"audio": {"running": True}}}
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"device": "USB Interface"},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "audio.start",
+            {"device": "USB Interface"},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_audio_start_rejects_invalid_device_payload(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/audio/start"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"device": True},
+        ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+            web,
+            "_send_json",
+        ) as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_not_called()
+        self.assertEqual(send_json.call_args.args[0], handler)
+        self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
 
     def test_session_name_validation_accepts_safe_names(self) -> None:
         self.assertEqual(web.VcpiWebHandler._validate_session_name("demo"), "demo")
