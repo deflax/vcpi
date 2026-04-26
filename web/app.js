@@ -381,10 +381,13 @@
     card.append(item);
   }
 
-  function typedActionButton(label, pressed, onClick) {
+  function typedActionButton(label, pressed, onClick, extraClassName) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = pressed ? 'typed-button typed-button--active' : 'typed-button typed-button--ghost';
+    if (extraClassName) {
+      button.className = `${button.className} ${extraClassName}`;
+    }
     button.textContent = label;
     button.setAttribute('aria-pressed', pressed ? 'true' : 'false');
     button.dataset.typedAction = 'true';
@@ -408,6 +411,8 @@
       const gain = firstPresent(slot, ['gain', 'volume', 'level'], 1);
       const muted = Boolean(firstPresent(slot, ['muted', 'mute'], false));
       const soloed = Boolean(firstPresent(slot, ['soloed', 'solo'], false));
+      const loaded = slot.loaded !== false;
+      const slotName = formatValue(firstPresent(slot, ['name', 'plugin', 'instrument', 'type'], 'Loaded'), 'Loaded');
 
       const card = document.createElement('article');
       card.className = 'slot-card';
@@ -417,8 +422,8 @@
       const title = document.createElement('h3');
       title.textContent = `Slot ${slotNumber}`;
       const badge = document.createElement('span');
-      badge.className = slot.loaded === false ? 'slot-badge' : 'slot-badge slot-badge--loaded';
-      badge.textContent = slot.loaded === false ? 'Empty' : formatValue(firstPresent(slot, ['name', 'plugin', 'instrument', 'type'], 'Loaded'), 'Loaded');
+      badge.className = loaded ? 'slot-badge slot-badge--loaded' : 'slot-badge';
+      badge.textContent = loaded ? slotName : 'Empty';
       header.append(title, badge);
 
       const meta = document.createElement('div');
@@ -457,6 +462,17 @@
           mutateTyped(`/api/slots/${encodeURIComponent(slotNumber)}/solo`, {solo: !soloed});
         }),
       );
+
+      if (loaded) {
+        controls.append(
+          typedActionButton('Unload', false, () => {
+            if (!window.confirm(`Unload slot ${slotNumber} (${slotName})?`)) {
+              return;
+            }
+            mutateTyped(`/api/slots/${encodeURIComponent(slotNumber)}/clear`, {});
+          }, 'typed-button--danger'),
+        );
+      }
 
       card.append(header, meta, controls);
       slotsList.append(card);

@@ -259,6 +259,16 @@ h2 {
   background: var(--color-warning);
 }
 
+.typed-button--danger {
+  border-color: color-mix(in srgb, var(--color-danger) 55%, var(--color-line));
+  color: var(--color-danger);
+}
+
+.typed-button--danger:hover {
+  border-color: var(--color-danger);
+  background: var(--color-danger-panel);
+}
+
 .typed-error {
   padding: var(--space-3) var(--space-4);
   border: 1px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
