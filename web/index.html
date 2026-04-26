@@ -35,8 +35,6 @@
         </div>
         <div class="typed-actions" aria-label="Typed API actions">
           <button id="typed-refresh-button" type="button" class="typed-button">Refresh</button>
-          <button id="audio-start-button" type="button" class="typed-button typed-button--ghost">Start audio</button>
-          <button id="audio-stop-button" type="button" class="typed-button typed-button--ghost">Stop audio</button>
         </div>
       </div>
 
@@ -63,6 +61,25 @@
           <span class="status-label">MIDI</span>
           <strong id="status-midi">Unknown</strong>
         </article>
+      </div>
+
+      <div class="audio-card" aria-labelledby="audio-control-title">
+        <div>
+          <h2 id="audio-control-title">Audio output</h2>
+          <p id="audio-device-status" class="typed-refresh-status" aria-live="polite">Device list has not loaded yet.</p>
+        </div>
+        <div class="audio-controls">
+          <label class="audio-device-control" for="audio-device-select">
+            <span>Device</span>
+            <select id="audio-device-select" data-typed-action="true" aria-label="Select audio output device">
+              <option value="">System default</option>
+            </select>
+          </label>
+          <div class="audio-actions" aria-label="Audio actions">
+            <button id="audio-start-button" type="button" class="typed-button typed-button--ghost" data-typed-action="true">Start audio</button>
+            <button id="audio-stop-button" type="button" class="typed-button typed-button--ghost" data-typed-action="true">Stop audio</button>
+          </div>
+        </div>
       </div>
 
       <div class="master-gain-card" aria-labelledby="master-gain-title">

@@ -52,7 +52,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -134,6 +135,7 @@ h2 {
 .typed-dashboard,
 .console,
 .master-gain-card,
+.audio-card,
 .link-tempo-card,
 .session-card,
 .slots-card,
@@ -209,6 +211,7 @@ h2 {
 .typed-header,
 .slots-header,
 .master-gain-card,
+.audio-card,
 .link-tempo-card,
 .session-card,
 .slot-card-header {
@@ -219,6 +222,7 @@ h2 {
 }
 
 .typed-actions,
+.audio-actions,
 .link-tempo-actions,
 .session-actions,
 .slot-controls {
@@ -285,6 +289,44 @@ h2 {
   border-radius: var(--radius-md);
   padding: var(--space-4);
   background: var(--color-soft-panel);
+}
+
+.audio-card {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--color-soft-panel);
+}
+
+.audio-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.audio-device-control {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: min(100%, 22rem);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-muted);
+  background: var(--color-panel-strong);
+  font-weight: 850;
+}
+
+.audio-device-control select {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  color: var(--color-text);
+  background: transparent;
+  font-family: var(--font-mono);
 }
 
 .link-tempo-card {
@@ -692,6 +734,7 @@ pre {
   .typed-header,
   .slots-header,
   .master-gain-card,
+  .audio-card,
   .link-tempo-card,
   .session-card,
   .slot-card-header {
@@ -700,6 +743,9 @@ pre {
   }
 
   .typed-actions,
+  .audio-actions,
+  .audio-controls,
+  .audio-device-control,
   .link-tempo-actions,
   .link-tempo-controls,
   .session-actions,

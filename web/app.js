@@ -15,6 +15,8 @@
   const typedRefreshStatus = document.getElementById('typed-refresh-status');
   const audioStartButton = document.getElementById('audio-start-button');
   const audioStopButton = document.getElementById('audio-stop-button');
+  const audioDeviceSelect = document.getElementById('audio-device-select');
+  const audioDeviceStatus = document.getElementById('audio-device-status');
   const typedError = document.getElementById('typed-error');
   const masterGainInput = document.getElementById('master-gain-input');
   const masterGainValue = document.getElementById('master-gain-value');
@@ -46,6 +48,7 @@
   let typedRefreshInFlight = false;
   let typedRefreshPromise = null;
   let typedRefreshTimer = 0;
+  let audioDeviceDirty = false;
   let tempoBpmDirty = false;
   let sessionNameDirty = false;
 
@@ -110,6 +113,10 @@
 
   function setLinkTempoStatus(message) {
     linkTempoStatus.textContent = message;
+  }
+
+  function setAudioDeviceStatus(message) {
+    audioDeviceStatus.textContent = message;
   }
 
   function typedRefreshIntervalLabel() {
@@ -314,6 +321,147 @@
     const normalizedGain = normalizeGain(gain, 1);
     masterGainValue.textContent = formatValue(normalizedGain, 'Unknown');
     masterGainInput.value = normalizedGain.toFixed(2);
+  }
+
+  function audioDeviceValue(device) {
+    if (typeof device === 'number' && Number.isFinite(device)) {
+      return String(device);
+    }
+    if (typeof device === 'string') {
+      return device.trim();
+    }
+    if (!device || typeof device !== 'object' || Array.isArray(device)) {
+      return '';
+    }
+    const id = firstPresent(device, ['id', 'index', 'device', 'value'], undefined);
+    if (typeof id === 'number' && Number.isFinite(id)) {
+      return String(id);
+    }
+    if (typeof id === 'string' && id.trim()) {
+      return id.trim();
+    }
+    const name = firstPresent(device, ['name', 'label', 'display_name'], '');
+    return typeof name === 'string' ? name.trim() : '';
+  }
+
+  function audioDeviceLabel(device) {
+    if (typeof device === 'number' && Number.isFinite(device)) {
+      return `Device ${device}`;
+    }
+    if (typeof device === 'string') {
+      return device.trim();
+    }
+    if (!device || typeof device !== 'object' || Array.isArray(device)) {
+      return '';
+    }
+    const name = firstPresent(device, ['name', 'label', 'display_name'], '');
+    const index = firstPresent(device, ['index', 'id'], undefined);
+    const hostApi = firstPresent(device, ['hostapi_name', 'host_api', 'api'], '');
+    const base = typeof name === 'string' && name.trim() ? name.trim() : audioDeviceValue(device);
+    const suffix = typeof index === 'number' && Number.isFinite(index) ? ` #${index}` : '';
+    const prefix = typeof hostApi === 'string' && hostApi.trim() ? `${hostApi.trim()} · ` : '';
+    return base ? `${prefix}${base}${suffix}` : '';
+  }
+
+  function normalizeAudioDevices(data) {
+    const source = data && typeof data === 'object'
+      ? data.devices || data.outputs || data.output_devices || data.items || data
+      : data;
+    if (source === data && data && typeof data === 'object' && !Array.isArray(data) && Object.prototype.hasOwnProperty.call(data, 'ok')) {
+      return [];
+    }
+    const rawDevices = Array.isArray(source)
+      ? source
+      : source && typeof source === 'object'
+        ? Object.keys(source).map((key) => {
+          const device = source[key];
+          return device && typeof device === 'object' && !Array.isArray(device)
+            ? {id: key, ...device}
+            : {id: key, name: String(device)};
+        })
+        : [];
+    const seen = new Set();
+    const devices = [];
+    rawDevices.forEach((device) => {
+      const value = audioDeviceValue(device);
+      const label = audioDeviceLabel(device);
+      if (!value || seen.has(value)) {
+        return;
+      }
+      seen.add(value);
+      devices.push({
+        value,
+        label: label || value,
+        selected: device && typeof device === 'object' && !Array.isArray(device) ? device.selected === true : false,
+        default: device && typeof device === 'object' && !Array.isArray(device) ? device.default === true : false,
+      });
+    });
+    return devices;
+  }
+
+  function currentAudioDevice(audio, status, devicesData) {
+    const devices = normalizeAudioDevices(devicesData);
+    const selectedDevice = devices.find((device) => device.selected) || devices.find((device) => device.default);
+    if (selectedDevice) {
+      return selectedDevice.value;
+    }
+    const fromAudio = firstPresent(
+      audio,
+      ['device', 'output_device', 'output', 'selected_device', 'current_device', 'device_name'],
+      undefined,
+    );
+    const fromStatus = firstPresent(status, ['audio_device', 'output_device'], undefined);
+    const devicesObject = asObject(devicesData);
+    const fromDevices = firstPresent(devicesObject, ['current', 'selected', 'active', 'device', 'output_device'], undefined);
+    return audioDeviceValue(fromAudio) || audioDeviceValue(fromStatus) || audioDeviceValue(fromDevices);
+  }
+
+  function appendAudioDeviceOption(value, label) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    audioDeviceSelect.append(option);
+  }
+
+  function renderAudioDevices(data, statusData) {
+    const status = asObject(statusData.status || statusData);
+    const audio = asObject(status.audio);
+    const devices = normalizeAudioDevices(data);
+    const previousValue = audioDeviceSelect.value;
+    const currentDevice = currentAudioDevice(audio, status, data);
+    const preservingUserChoice = document.activeElement === audioDeviceSelect || audioDeviceDirty;
+    const selectedValue = preservingUserChoice ? previousValue : currentDevice || previousValue;
+
+    audioDeviceSelect.textContent = '';
+    appendAudioDeviceOption('', 'System default');
+    devices.forEach((device) => {
+      appendAudioDeviceOption(device.value, device.label);
+    });
+
+    if (selectedValue && !devices.some((device) => device.value === selectedValue)) {
+      appendAudioDeviceOption(selectedValue, currentDevice === selectedValue ? `Current: ${selectedValue}` : `Selected: ${selectedValue}`);
+    }
+
+    audioDeviceSelect.value = selectedValue || '';
+    const currentText = currentDevice ? `Current ${currentDevice}` : 'Current device not reported';
+    const countText = devices.length === 1 ? '1 output available' : `${devices.length} outputs available`;
+    setAudioDeviceStatus(`${currentText} · ${countText}`);
+  }
+
+  function renderAudioDevicesUnavailable(statusData) {
+    const status = asObject(statusData.status || statusData);
+    const audio = asObject(status.audio);
+    const currentDevice = currentAudioDevice(audio, status, {});
+    const previousValue = audioDeviceSelect.value;
+    const selectedValue = previousValue || currentDevice;
+
+    audioDeviceSelect.textContent = '';
+    appendAudioDeviceOption('', 'System default');
+    if (selectedValue) {
+      appendAudioDeviceOption(selectedValue, currentDevice === selectedValue ? `Current: ${selectedValue}` : `Selected: ${selectedValue}`);
+    }
+    audioDeviceSelect.value = selectedValue || '';
+    setAudioDeviceStatus(currentDevice ? `Current ${currentDevice} · Device list unavailable` : 'Device list unavailable; system default can still be used.');
   }
 
   function normalizeBpm(value, fallback) {
@@ -571,7 +719,7 @@
     typedRefreshInFlight = true;
     updateTypedControlsDisabled();
     showTypedError('');
-    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, and sessions…' : 'Refreshing status, slots, and sessions…');
+    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, sessions, and audio devices…' : 'Refreshing status, slots, sessions, and audio devices…');
     if (source !== 'auto') {
       typedRefreshButton.textContent = 'Refreshing…';
     }
@@ -581,6 +729,7 @@
         fetchJson('/api/status', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/slots', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/sessions', {headers: {'Accept': 'application/json'}}),
+        fetchJson('/api/audio/devices', {headers: {'Accept': 'application/json'}}),
       ]);
 
       const messages = [];
@@ -607,6 +756,14 @@
         renderSessions(results[2].value);
       } else {
         renderSessionsUnavailable();
+      }
+
+      if (results[3].status === 'fulfilled') {
+        const statusData = results[0].status === 'fulfilled' ? results[0].value : {};
+        renderAudioDevices(results[3].value, statusData);
+      } else {
+        const statusData = results[0].status === 'fulfilled' ? results[0].value : {};
+        renderAudioDevicesUnavailable(statusData);
       }
 
       if (messages.length > 0) {
@@ -663,6 +820,30 @@
     } finally {
       setTypedControlsDisabled(false);
     }
+  }
+
+  function audioStartPayloadFromInput() {
+    const device = audioDeviceSelect.value.trim();
+    return device ? {device} : {};
+  }
+
+  async function startAudio() {
+    const payload = audioStartPayloadFromInput();
+    const target = payload.device ? ` on ${payload.device}` : ' with the system default';
+    setAudioDeviceStatus(`Starting audio${target}…`);
+    const ok = await mutateTyped('/api/audio/start', payload);
+    if (ok) {
+      audioDeviceDirty = false;
+      setAudioDeviceStatus('Audio started. Status refreshed.');
+    } else {
+      setAudioDeviceStatus('Audio start failed. See typed API status above.');
+    }
+  }
+
+  async function stopAudio() {
+    setAudioDeviceStatus('Stopping audio…');
+    const ok = await mutateTyped('/api/audio/stop', {});
+    setAudioDeviceStatus(ok ? 'Audio stopped. Status refreshed.' : 'Audio stop failed. See typed API status above.');
   }
 
   function sessionPayloadFromInput() {
@@ -854,8 +1035,11 @@
   typedRefreshButton.addEventListener('click', () => {
     refreshTypedApi({source: 'manual'});
   });
-  audioStartButton.addEventListener('click', () => mutateTyped('/api/audio/start', {}));
-  audioStopButton.addEventListener('click', () => mutateTyped('/api/audio/stop', {}));
+  audioStartButton.addEventListener('click', startAudio);
+  audioStopButton.addEventListener('click', stopAudio);
+  audioDeviceSelect.addEventListener('change', () => {
+    audioDeviceDirty = true;
+  });
   masterGainInput.addEventListener('change', () => {
     mutateTyped('/api/master/gain', {gain: Number(masterGainInput.value)});
   });
