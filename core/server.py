@@ -355,6 +355,14 @@ class VcpiServer:
                 name = self._parameter_name_from_payload(payload)
                 value = self._parameter_value_from_payload(payload)
                 return self._slot_param_set_payload(idx, slot, target, name, value)
+            case "master.fx.params":
+                effect_idx = self._master_effect_index_from_payload(payload)
+                return self._master_fx_params_payload(effect_idx)
+            case "master.fx.param.set":
+                effect_idx = self._master_effect_index_from_payload(payload)
+                name = self._parameter_name_from_payload(payload)
+                value = self._parameter_value_from_payload(payload)
+                return self._master_fx_param_set_payload(effect_idx, name, value)
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -610,6 +618,20 @@ class VcpiServer:
         if not 1 <= effect_index <= effect_count:
             raise _JsonOperationError("effect index is out of range")
         return "effect", effect_index - 1
+
+    def _master_effect_index_from_payload(self, payload: dict[str, Any]) -> int:
+        effect_index = payload.get("effect")
+        if isinstance(effect_index, bool) or not isinstance(effect_index, int):
+            raise _JsonOperationError("effect must be an integer 1-N")
+
+        effects = getattr(self.host.engine, "master_effects", [])
+        try:
+            effect_count = len(effects)
+        except Exception:
+            effect_count = 0
+        if not 1 <= effect_index <= effect_count:
+            raise _JsonOperationError("effect index is out of range")
+        return effect_index - 1
 
     @staticmethod
     def _normalize_session_name(raw_name: object, *, required: bool) -> str | None:
@@ -893,6 +915,44 @@ class VcpiServer:
             refreshed_parameter = dict(parameter)
             refreshed_parameter["value"] = value
         refreshed["effect"] = refreshed_effect
+        refreshed["parameter"] = refreshed_parameter
+        return refreshed
+
+    def _master_fx_params_payload(self, effect_idx: int) -> dict[str, Any]:
+        effect = self.host.engine.master_effects[effect_idx]
+        effect_payload = self._plugin_params_group_payload(
+            effect,
+            f"Master FX {effect_idx + 1}",
+            kind="master_effect",
+            index=effect_idx + 1,
+        )
+        payload: dict[str, Any] = {
+            "ok": True,
+            "effect": effect_payload,
+            "parameters": effect_payload["parameters"],
+            "count": effect_payload["count"],
+            "rendered": effect_payload["rendered"],
+        }
+        if effect_payload.get("truncated"):
+            payload["truncated"] = True
+            payload["limit"] = MAX_SLOT_PARAMETERS
+        return payload
+
+    def _master_fx_param_set_payload(self, effect_idx: int, name: str, value: float) -> dict[str, Any]:
+        effect = self.host.engine.master_effects[effect_idx]
+        current = self._master_fx_params_payload(effect_idx)
+        parameter = self._find_parameter_payload(current["parameters"], name)
+        if parameter is None:
+            raise _JsonOperationError(f"unknown parameter: {name}")
+        self._validate_numeric_parameter(parameter, name, value)
+
+        setattr(effect, name, value)
+
+        refreshed = self._master_fx_params_payload(effect_idx)
+        refreshed_parameter = self._find_parameter_payload(refreshed["parameters"], name)
+        if refreshed_parameter is None:
+            refreshed_parameter = dict(parameter)
+            refreshed_parameter["value"] = value
         refreshed["parameter"] = refreshed_parameter
         return refreshed
 
@@ -1240,6 +1300,7 @@ class VcpiServer:
                 "running": self.host.engine.running,
                 "output": self.host.audio_output_name,
                 "master_gain": self.host.engine.master_gain,
+                "master_effects": len(getattr(self.host.engine, "master_effects", [])),
             },
             "midi": {
                 "inputs": self.host.midi_input_names,

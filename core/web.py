@@ -37,6 +37,7 @@ HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLOT_READ_RE = re.compile(r"^/api/slots/([^/]+)/(info|params)$")
 SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload|note|params)$")
+MASTER_FX_PARAMS_RE = re.compile(r"^/api/master/fx/([^/]+)/params$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 MIN_BPM = 20.0
 MAX_BPM = 300.0
@@ -487,6 +488,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_json_get("audio.devices")
         elif path == "/api/flow":
             self._handle_json_get("flow")
+        elif path.startswith("/api/master/fx/"):
+            self._handle_master_fx_params_get(path)
         elif path.startswith("/api/slots/"):
             self._handle_slot_read_get(path)
         else:
@@ -512,6 +515,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_midi_cut()
         elif path == "/api/master/gain":
             self._handle_master_gain()
+        elif path.startswith("/api/master/fx/"):
+            self._handle_master_fx_params_post(path)
         elif path == "/api/session/save":
             self._handle_session_save()
         elif path == "/api/session/load":
@@ -651,6 +656,20 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
         operation = "slot.info" if match.group(2) == "info" else "slot.params"
         self._handle_json_get(operation, {"slot": slot})
 
+    def _handle_master_fx_params_get(self, path: str) -> None:
+        match = MASTER_FX_PARAMS_RE.fullmatch(path)
+        if match is None:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "master FX params route must be /api/master/fx/{1-N}/params"})
+            return
+
+        try:
+            effect = self._validate_effect_number(match.group(1))
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_get("master.fx.params", {"effect": effect})
+
     def _handle_json_post(self, operation: str, payload: dict[str, object] | None = None) -> None:
         try:
             self._validate_post_security()
@@ -756,6 +775,34 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             return
 
         self._handle_json_post("master.gain", payload)
+
+    def _handle_master_fx_params_post(self, path: str) -> None:
+        match = MASTER_FX_PARAMS_RE.fullmatch(path)
+        if match is None:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "master FX params route must be /api/master/fx/{1-N}/params"})
+            return
+
+        try:
+            effect = self._validate_effect_number(match.group(1))
+            body = self._read_secure_optional_json_body()
+            if body is None:
+                return
+            if set(body) != {"name", "value"}:
+                raise ValueError("master FX params payload must contain only name and value")
+            payload = dict(body)
+            payload["effect"] = effect
+            self._validate_master_fx_param_payload(payload)
+        except json.JSONDecodeError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        except PermissionError as exc:
+            _send_json(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("master.fx.param.set", payload)
 
     def _handle_session_save(self) -> None:
         payload = self._read_secure_optional_json_body()
@@ -935,6 +982,16 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
         return slot
 
     @staticmethod
+    def _validate_effect_number(raw_effect: str) -> int:
+        try:
+            effect = int(raw_effect)
+        except ValueError as exc:
+            raise ValueError("effect must be an integer >= 1") from exc
+        if effect < 1:
+            raise ValueError("effect must be >= 1")
+        return effect
+
+    @staticmethod
     def _validate_gain_payload(payload: dict[str, object]) -> None:
         gain = payload.get("gain")
         if isinstance(gain, bool) or not isinstance(gain, (int, float)):
@@ -1031,6 +1088,36 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
                 raise ValueError("effect must be >= 1")
         else:
             raise ValueError("target must be 'instrument' or 'effect'")
+
+        raw_name = payload.get("name")
+        if not isinstance(raw_name, str):
+            raise ValueError("name must be a string")
+        name = raw_name.strip()
+        if not name:
+            raise ValueError("name must not be empty")
+        if len(name) > MAX_PARAMETER_NAME_LENGTH:
+            raise ValueError(f"name must be at most {MAX_PARAMETER_NAME_LENGTH} characters")
+        payload["name"] = name
+
+        if "value" not in payload:
+            raise ValueError("value must be a finite number")
+        value = payload["value"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("value must be a finite number")
+        if not math.isfinite(float(value)):
+            raise ValueError("value must be a finite number")
+
+    @staticmethod
+    def _validate_master_fx_param_payload(payload: dict[str, object]) -> None:
+        body_keys = set(payload) - {"effect"}
+        if body_keys != {"name", "value"}:
+            raise ValueError("master FX params payload must contain only name and value")
+
+        effect = payload.get("effect")
+        if isinstance(effect, bool) or not isinstance(effect, int):
+            raise ValueError("effect must be an integer >= 1")
+        if effect < 1:
+            raise ValueError("effect must be >= 1")
 
         raw_name = payload.get("name")
         if not isinstance(raw_name, str):

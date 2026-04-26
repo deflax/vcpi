@@ -67,7 +67,16 @@ class FakeEngine:
         self.running: bool = False
         self.slots: list[FakeSlot | None] = [FakeSlot(), None, None, None, None, None, None, None]
         self.master_gain: float = 0.8
-        self.master_effects: list[object] = []
+        self.master_effects: list[SimpleNamespace] = [
+            SimpleNamespace(
+                name="MasterVerb",
+                mix=0.25,
+                parameters={
+                    "mix": SimpleNamespace(value=0.25, range=(0.0, 1.0), unit="%", label="Mix"),
+                    "mode": SimpleNamespace(range=("dark", "bright")),
+                },
+            )
+        ]
         self.routes: dict[int, int] = {1: 0, 10: 0}
         self.output_device: object | None = None
         self.param_changes: list[tuple[int, str, float]] = []
@@ -206,6 +215,7 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertTrue(status["ok"])
         self.assertEqual(status["status"]["sample_rate"], 44100)
         self.assertEqual(status["status"]["audio"]["output"], "Built-in Output")
+        self.assertEqual(status["status"]["audio"]["master_effects"], 1)
         self.assertTrue(slots["ok"])
         self.assertEqual(slots["slots"][0]["slot"], 1)
         self.assertEqual(slots["slots"][0]["midi_channels"], [1, 10])
@@ -621,6 +631,111 @@ class TypedDaemonApiContractTests(unittest.TestCase):
                 self.assertIn(message, response["error"])
                 self.assertEqual(slot.effects[0].mix, 0.25)
                 self.assertEqual(slot.plugin.cutoff, 0.42)
+                self.assertEqual(host.engine.param_changes, [])
+
+    def test_json_master_fx_params_returns_master_effect_parameter_metadata(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        result = daemon._handle_json_operation("master.fx.params", {"effect": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["effect"]["kind"], "master_effect")
+        self.assertEqual(result["effect"]["index"], 1)
+        self.assertEqual(result["effect"]["name"], "MasterVerb")
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["parameters"], result["effect"]["parameters"])
+        self.assertEqual(result["parameters"][0]["name"], "mix")
+        self.assertEqual(result["parameters"][0]["value"], 0.25)
+        self.assertEqual(result["parameters"][0]["minimum"], 0.0)
+        self.assertEqual(result["parameters"][0]["maximum"], 1.0)
+        self.assertEqual(result["parameters"][1]["name"], "mode")
+        self.assertEqual(result["parameters"][1]["minimum"], "dark")
+        self.assertEqual(result["parameters"][1]["maximum"], "bright")
+        self.assertIn("Master FX 1", result["rendered"])
+
+    def test_json_master_fx_params_rejects_invalid_effect_payloads(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        for payload in ({}, {"effect": "1"}, {"effect": True}, {"effect": 0}, {"effect": 2}):
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "master.fx.params", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+
+    def test_json_master_fx_param_set_updates_numeric_parameter(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        effect = host.engine.master_effects[0]
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation(
+            "master.fx.param.set",
+            {"effect": 1, "name": "mix", "value": 0.5},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.engine.param_changes, [])
+        self.assertEqual(effect.mix, 0.5)
+        self.assertEqual(result["effect"]["kind"], "master_effect")
+        self.assertEqual(result["effect"]["index"], 1)
+        self.assertEqual(result["parameter"]["name"], "mix")
+        self.assertEqual(result["parameter"]["value"], 0.5)
+        self.assertEqual(result["parameters"][0]["value"], 0.5)
+        self.assertIn("mix = 0.5", result["rendered"])
+
+    def test_json_master_fx_param_set_rejects_invalid_payloads_before_mutation(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        effect = host.engine.master_effects[0]
+        daemon = server.VcpiServer(host)
+        cases = [
+            ({"name": "mix", "value": 0.5}, "effect must be an integer"),
+            ({"effect": "1", "name": "mix", "value": 0.5}, "effect must be an integer"),
+            ({"effect": True, "name": "mix", "value": 0.5}, "effect must be an integer"),
+            ({"effect": 0, "name": "mix", "value": 0.5}, "effect index is out of range"),
+            ({"effect": 2, "name": "mix", "value": 0.5}, "effect index is out of range"),
+            ({"effect": 1, "value": 0.5}, "name must be a string"),
+            ({"effect": 1, "name": "", "value": 0.5}, "name must not be empty"),
+            ({"effect": 1, "name": "   ", "value": 0.5}, "name must not be empty"),
+            ({"effect": 1, "name": 123, "value": 0.5}, "name must be a string"),
+            ({"effect": 1, "name": "missing", "value": 0.5}, "unknown parameter"),
+            ({"effect": 1, "name": "mode", "value": 0.5}, "non-numeric range"),
+            ({"effect": 1, "name": "mix"}, "value must be a finite number"),
+            ({"effect": 1, "name": "mix", "value": "0.5"}, "value must be a finite number"),
+            ({"effect": 1, "name": "mix", "value": True}, "value must be a finite number"),
+            ({"effect": 1, "name": "mix", "value": float("nan")}, "value must be a finite number"),
+            ({"effect": 1, "name": "mix", "value": float("inf")}, "value must be a finite number"),
+            ({"effect": 1, "name": "mix", "value": -0.01}, "value must be >= 0"),
+            ({"effect": 1, "name": "mix", "value": 1.01}, "value must be <= 1"),
+        ]
+
+        for payload, message in cases:
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "master.fx.param.set", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertIn(message, response["error"])
+                self.assertEqual(effect.mix, 0.25)
                 self.assertEqual(host.engine.param_changes, [])
 
     def test_json_slot_mutations_validate_gain_and_toggle(self) -> None:
@@ -1683,6 +1798,137 @@ class WebSafetyTests(unittest.TestCase):
     def test_typed_web_slot_param_post_requires_csrf(self) -> None:
         handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
         handler.path = "/api/slots/1/params"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            side_effect=PermissionError("missing or invalid CSRF token"),
+        ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+            web,
+            "_send_json",
+        ) as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_not_called()
+        send_json.assert_called_once_with(
+            handler,
+            web.HTTPStatus.FORBIDDEN,
+            {"ok": False, "error": "missing or invalid CSRF token"},
+        )
+
+    def test_typed_web_master_fx_params_route_maps_to_read_only_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/master/fx/1/params"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {
+            "ok": True,
+            "effect": {"kind": "master_effect", "index": 1},
+            "parameters": [{"name": "mix", "value": 0.25}],
+            "count": 1,
+        }
+
+        with mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json, mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+        ) as validate_post_security:
+            handler.do_GET()
+
+        validate_post_security.assert_not_called()
+        execute_json_operation.assert_called_once_with(
+            "master.fx.params",
+            {"effect": 1},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_master_fx_param_post_route_maps_to_set_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/master/fx/1/params"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {
+            "ok": True,
+            "effect": {"kind": "master_effect", "index": 1},
+            "parameter": {"name": "mix", "value": 0.5},
+        }
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"name": " mix ", "value": 0.5},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "master.fx.param.set",
+            {"name": "mix", "value": 0.5, "effect": 1},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_master_fx_param_rejects_invalid_routes_and_payloads_before_daemon(self) -> None:
+        cases = [
+            ("GET", "/api/master/fx/0/params", {}),
+            ("GET", "/api/master/fx/nope/params", {}),
+            ("POST", "/api/master/fx/0/params", {"name": "mix", "value": 0.5}),
+            ("POST", "/api/master/fx/1/params", {}),
+            ("POST", "/api/master/fx/1/params", {"name": "", "value": 0.5}),
+            ("POST", "/api/master/fx/1/params", {"name": "   ", "value": 0.5}),
+            ("POST", "/api/master/fx/1/params", {"name": 123, "value": 0.5}),
+            ("POST", "/api/master/fx/1/params", {"name": "x" * (web.MAX_PARAMETER_NAME_LENGTH + 1), "value": 0.5}),
+            ("POST", "/api/master/fx/1/params", {"name": "mix"}),
+            ("POST", "/api/master/fx/1/params", {"name": "mix", "value": "0.5"}),
+            ("POST", "/api/master/fx/1/params", {"name": "mix", "value": True}),
+            ("POST", "/api/master/fx/1/params", {"name": "mix", "value": None}),
+            ("POST", "/api/master/fx/1/params", {"name": "mix", "value": [0.5]}),
+            ("POST", "/api/master/fx/1/params", {"name": "mix", "value": {"amount": 0.5}}),
+            ("POST", "/api/master/fx/1/params", {"name": "mix", "value": float("nan")}),
+            ("POST", "/api/master/fx/1/params", {"name": "mix", "value": float("inf")}),
+            ("POST", "/api/master/fx/1/params", {"target": "effect", "name": "mix", "value": 0.5}),
+            ("POST", "/api/master/fx/1/params", {"slot": 1, "name": "mix", "value": 0.5}),
+            ("POST", "/api/master/fx/1/params", {"effect": 1, "name": "mix", "value": 0.5}),
+        ]
+
+        for method, path, body in cases:
+            with self.subTest(method=method, path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    if method == "GET":
+                        handler.do_GET()
+                    else:
+                        handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_master_fx_param_post_requires_csrf(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/master/fx/1/params"
         handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
 
         with mock.patch.object(
