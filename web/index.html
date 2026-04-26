@@ -11,10 +11,10 @@
   <main class="shell" aria-labelledby="app-title">
     <section class="hero" aria-describedby="app-summary">
       <div>
-        <p class="eyebrow">Phase 1 web client</p>
+        <p class="eyebrow">Phase 2 web client</p>
         <h1 id="app-title">vcpi command console</h1>
         <p id="app-summary" class="summary">
-          Send local daemon commands through the stdlib HTTP bridge and keep a readable transcript.
+          Monitor typed daemon state when available, or fall back to the local command console transcript.
         </p>
       </div>
       <div class="health-card" aria-live="polite">
@@ -22,6 +22,55 @@
         <div>
           <p class="health-label">Daemon health</p>
           <p id="health-text" class="health-text">Checking connection…</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="typed-dashboard" aria-labelledby="typed-title">
+      <div class="typed-header">
+        <div>
+          <p class="eyebrow">Typed API</p>
+          <h2 id="typed-title">Status and slots</h2>
+        </div>
+        <div class="typed-actions" aria-label="Typed API actions">
+          <button id="typed-refresh-button" type="button" class="typed-button">Refresh</button>
+          <button id="audio-start-button" type="button" class="typed-button typed-button--ghost">Start audio</button>
+          <button id="audio-stop-button" type="button" class="typed-button typed-button--ghost">Stop audio</button>
+        </div>
+      </div>
+
+      <div id="typed-error" class="typed-error" role="status" aria-live="polite" hidden></div>
+
+      <div class="status-grid" aria-label="Daemon status basics">
+        <article class="status-tile">
+          <span class="status-label">Daemon</span>
+          <strong id="status-daemon">Waiting for typed API…</strong>
+        </article>
+        <article class="status-tile">
+          <span class="status-label">Audio</span>
+          <strong id="status-audio">Unknown</strong>
+        </article>
+        <article class="status-tile">
+          <span class="status-label">Session</span>
+          <strong id="status-session">Unknown</strong>
+        </article>
+        <article class="status-tile">
+          <span class="status-label">Link</span>
+          <strong id="status-link">Unknown</strong>
+        </article>
+        <article class="status-tile">
+          <span class="status-label">MIDI</span>
+          <strong id="status-midi">Unknown</strong>
+        </article>
+      </div>
+
+      <div class="slots-card" aria-labelledby="slots-title">
+        <div class="slots-header">
+          <h2 id="slots-title">Slots</h2>
+          <span id="slots-count" class="transcript-count">No slot data</span>
+        </div>
+        <div id="slots-list" class="slots-list" aria-live="polite">
+          <p class="empty-state">Typed slot data has not loaded yet.</p>
         </div>
       </div>
     </section>
