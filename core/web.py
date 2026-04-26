@@ -34,6 +34,7 @@ JSON_REQUEST_PREFIX = "__vcpi_json__ "
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SLOT_INFO_RE = re.compile(r"^/api/slots/([^/]+)/info$")
 SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload)$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 MIN_BPM = 20.0
@@ -480,6 +481,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_json_get("audio.devices")
         elif path == "/api/flow":
             self._handle_json_get("flow")
+        elif path.startswith("/api/slots/"):
+            self._handle_slot_info_get(path)
         else:
             _send_json(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
@@ -603,11 +606,11 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             {"ok": True, "command": command, "output": result.output},
         )
 
-    def _handle_json_get(self, operation: str) -> None:
+    def _handle_json_get(self, operation: str, payload: dict[str, object] | None = None) -> None:
         try:
             result = execute_json_operation(
                 operation,
-                {},
+                payload or {},
                 self.vcpi_server.sock_path,
                 daemon_timeout=self.vcpi_server.daemon_timeout,
             )
@@ -622,6 +625,20 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             return
 
         _send_json(self, _http_status_from_payload(result.payload), result.payload)
+
+    def _handle_slot_info_get(self, path: str) -> None:
+        match = SLOT_INFO_RE.fullmatch(path)
+        if match is None:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot info route must be /api/slots/{1-8}/info"})
+            return
+
+        try:
+            slot = self._validate_slot_number(match.group(1))
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_get("slot.info", {"slot": slot})
 
     def _handle_json_post(self, operation: str, payload: dict[str, object] | None = None) -> None:
         try:

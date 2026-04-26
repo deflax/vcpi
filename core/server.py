@@ -37,6 +37,7 @@ from core.host import VcpiCore
 from core.cli import HostCLI
 from core.models import NUM_SLOTS, InstrumentSlot
 from core.paths import DEFAULT_SOCK_PATH
+from graph.plugin_info import render_plugin_info
 
 # Sentinel that marks the end of a command's output.
 END_OF_RESPONSE = "\x00"
@@ -334,6 +335,9 @@ class VcpiServer:
                 return self._audio_devices_payload()
             case "flow":
                 return {"ok": True, "flow": self._flow_payload()}
+            case "slot.info":
+                idx = self._slot_index_from_payload(payload)
+                return self._slot_info_payload(idx)
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -608,6 +612,100 @@ class VcpiServer:
         cli.use_rawinput = False
         _ = cli.onecmd("flow")
         return buf.getvalue().rstrip("\n")
+
+    def _slot_info_payload(self, idx: int) -> dict[str, Any]:
+        slot = self.host.engine.slots[idx]
+        slot_payload = self._slot_payload(idx, slot)
+        if slot is None:
+            return {
+                "ok": True,
+                "slot": slot_payload,
+                "instrument": None,
+                "effects": [],
+                "rendered": "",
+                "message": f"Slot {idx + 1} is empty",
+            }
+
+        instrument_label = f"Slot {idx + 1}: {slot.name}"
+        instrument = self._plugin_info_payload(
+            slot.plugin,
+            instrument_label,
+            kind="instrument",
+            index=None,
+        )
+        effects = [
+            self._plugin_info_payload(
+                effect,
+                f"Slot {idx + 1} FX {effect_idx + 1}",
+                kind="effect",
+                index=effect_idx + 1,
+            )
+            for effect_idx, effect in enumerate(slot.effects)
+        ]
+        return {
+            "ok": True,
+            "slot": slot_payload,
+            "instrument": instrument,
+            "effects": effects,
+            "rendered": instrument["rendered"],
+        }
+
+    def _plugin_info_payload(
+        self,
+        plugin: object,
+        label: str,
+        *,
+        kind: str,
+        index: int | None,
+    ) -> dict[str, Any]:
+        return {
+            "kind": kind,
+            "index": index,
+            "label": label,
+            "name": self._safe_plugin_attr(plugin, "name", type(plugin).__name__),
+            "descriptive_name": self._safe_plugin_attr(plugin, "descriptive_name"),
+            "vendor": self._safe_plugin_attr(plugin, "manufacturer_name"),
+            "category": self._safe_plugin_attr(plugin, "category"),
+            "version": self._safe_plugin_attr(plugin, "version"),
+            "identifier": self._safe_plugin_attr(plugin, "identifier"),
+            "type": self._safe_plugin_attr(plugin, "info_type", "Unknown"),
+            "latency_samples": self._safe_plugin_attr(plugin, "reported_latency_samples", 0),
+            "parameters": {"count": self._safe_parameter_count(plugin)},
+            "rendered": self._render_plugin_info(plugin, label),
+        }
+
+    @staticmethod
+    def _safe_plugin_attr(plugin: object, attr: str, default: Any = None) -> Any:
+        try:
+            value = getattr(plugin, attr, None)
+        except Exception:
+            return default
+        if value is None:
+            return default
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        return str(value)
+
+    @staticmethod
+    def _safe_parameter_count(plugin: object) -> int | None:
+        try:
+            parameters = getattr(plugin, "parameters", None)
+        except Exception:
+            return None
+        if not parameters:
+            return 0
+        try:
+            return len(parameters)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _render_plugin_info(plugin: object, label: str) -> str:
+        try:
+            return render_plugin_info(plugin, label)
+        except Exception:
+            logger.debug("plugin info render failed", exc_info=True)
+            return ""
 
     def _status_payload(self) -> dict[str, Any]:
         routing = {str(ch + 1): slot_idx + 1 for ch, slot_idx in sorted(self.host.channel_map.items())}

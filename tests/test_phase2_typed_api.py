@@ -235,6 +235,70 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertIn("Dexed -> Room", result["flow"])
         self.assertIn("Master", result["flow"])
 
+    def test_json_slot_info_returns_loaded_slot_plugin_metadata(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        slot = host.engine.slots[0]
+        if slot is None:
+            self.fail("FakeHost slot 1 should be loaded")
+        plugin = slot.plugin
+        plugin.manufacturer_name = "Digital Suburban"
+        plugin.category = "Instrument|Synth"
+        plugin.version = "0.9.6"
+        plugin.identifier = "com.example.dexed"
+        plugin.info_type = "Instrument"
+        plugin.reported_latency_samples = 0
+        plugin.parameters = {"cutoff": object(), "resonance": object()}
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("slot.info", {"slot": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["slot"]["loaded"])
+        self.assertEqual(result["slot"]["slot"], 1)
+        self.assertEqual(result["slot"]["midi_channels"], [1, 10])
+        self.assertIn("Slot 1: Dexed", result["rendered"])
+        self.assertIn("Vendor", result["rendered"])
+        self.assertEqual(result["instrument"]["name"], "Dexed")
+        self.assertEqual(result["instrument"]["vendor"], "Digital Suburban")
+        self.assertEqual(result["instrument"]["parameters"], {"count": 2})
+        self.assertEqual(result["effects"][0]["name"], "Room")
+
+    def test_json_slot_info_empty_slot_returns_read_only_empty_state(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        result = daemon._handle_json_operation("slot.info", {"slot": 2})
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["slot"]["loaded"])
+        self.assertEqual(result["slot"]["slot"], 2)
+        self.assertEqual(result["message"], "Slot 2 is empty")
+        self.assertIsNone(result["instrument"])
+        self.assertEqual(result["effects"], [])
+        self.assertEqual(result["rendered"], "")
+
+    def test_json_slot_info_rejects_invalid_slot_payloads(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        for payload in ({"slot": 9}, {"slot": "1"}, {"slot": True}, {}):
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "slot.info", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+
     def test_json_slot_mutations_validate_gain_and_toggle(self) -> None:
         if server is None:
             self.skipTest("core.server import needs optional native dependencies in this checkout")
@@ -735,6 +799,48 @@ class WebSafetyTests(unittest.TestCase):
             daemon_timeout=1.0,
         )
         send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_slot_info_route_maps_to_read_only_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/info"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {
+            "ok": True,
+            "slot": {"slot": 1, "loaded": True},
+            "instrument": {"name": "Dexed"},
+            "effects": [],
+            "rendered": "Slot 1: Dexed",
+        }
+
+        with mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_GET()
+
+        execute_json_operation.assert_called_once_with(
+            "slot.info",
+            {"slot": 1},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_slot_info_route_rejects_invalid_slot(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/9/info"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+        with mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+            web,
+            "_send_json",
+        ) as send_json:
+            handler.do_GET()
+
+        execute_json_operation.assert_not_called()
+        self.assertEqual(send_json.call_args.args[0], handler)
+        self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
 
     def test_typed_web_audio_start_accepts_selected_picker_device(self) -> None:
         handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
