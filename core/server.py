@@ -45,6 +45,10 @@ JSON_REQUEST_PREFIX = "__vcpi_json__ "
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MIN_BPM = 20.0
 MAX_BPM = 300.0
+DEFAULT_NOTE_VELOCITY = 100
+DEFAULT_NOTE_DURATION_MS = 300
+MIN_NOTE_DURATION_MS = 1
+MAX_NOTE_DURATION_MS = 5000
 
 
 logger = logging.getLogger(__name__)
@@ -381,6 +385,22 @@ class VcpiServer:
                 slot = self._loaded_slot(idx)
                 slot.gain = gain
                 return {"ok": True, "slot": self._slot_payload(idx, slot)}
+            case "slot.note":
+                idx = self._slot_index_from_payload(payload)
+                slot = self._loaded_slot(idx)
+                note = self._midi_note_from_payload(payload)
+                velocity = self._midi_velocity_from_payload(payload)
+                duration_ms = self._note_duration_ms_from_payload(payload)
+                self.host.send_note(idx, note, velocity, duration_ms / 1000.0)
+                return {
+                    "ok": True,
+                    "slot": self._slot_payload(idx, slot),
+                    "note": {
+                        "note": note,
+                        "velocity": velocity,
+                        "duration_ms": duration_ms,
+                    },
+                }
             case "master.gain":
                 gain = self._gain_from_payload(payload)
                 self.host.engine.master_gain = gain
@@ -445,6 +465,50 @@ class VcpiServer:
         if not 0.0 <= gain <= 1.0:
             raise _JsonOperationError("gain must be between 0.0 and 1.0")
         return gain
+
+    @staticmethod
+    def _int_range_from_payload(
+        payload: dict[str, Any],
+        key: str,
+        minimum: int,
+        maximum: int,
+        *,
+        default: int | None = None,
+    ) -> int:
+        if key not in payload:
+            if default is None:
+                raise _JsonOperationError(f"{key} must be an integer {minimum}-{maximum}")
+            return default
+        value = payload[key]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise _JsonOperationError(f"{key} must be an integer {minimum}-{maximum}")
+        if not minimum <= value <= maximum:
+            raise _JsonOperationError(f"{key} must be {minimum}-{maximum}")
+        return value
+
+    @classmethod
+    def _midi_note_from_payload(cls, payload: dict[str, Any]) -> int:
+        return cls._int_range_from_payload(payload, "note", 0, 127)
+
+    @classmethod
+    def _midi_velocity_from_payload(cls, payload: dict[str, Any]) -> int:
+        return cls._int_range_from_payload(
+            payload,
+            "velocity",
+            0,
+            127,
+            default=DEFAULT_NOTE_VELOCITY,
+        )
+
+    @classmethod
+    def _note_duration_ms_from_payload(cls, payload: dict[str, Any]) -> int:
+        return cls._int_range_from_payload(
+            payload,
+            "duration_ms",
+            MIN_NOTE_DURATION_MS,
+            MAX_NOTE_DURATION_MS,
+            default=DEFAULT_NOTE_DURATION_MS,
+        )
 
     @staticmethod
     def _bpm_from_payload(payload: dict[str, Any]) -> float:

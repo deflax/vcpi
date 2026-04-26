@@ -85,6 +85,7 @@ class FakeHost:
         self.removed_slots: list[int] = []
         self.start_link_calls: list[float | None] = []
         self.stop_link_calls: int = 0
+        self.sent_notes: list[tuple[int, int, int, float]] = []
 
     def start_audio(self, output_device: object | None = None) -> None:
         self.started_with = output_device
@@ -119,6 +120,9 @@ class FakeHost:
     def stop_link(self) -> None:
         self.stop_link_calls += 1
         self.link.enabled = False
+
+    def send_note(self, slot_index: int, note: int, velocity: int = 100, duration: float = 0.3) -> None:
+        self.sent_notes.append((slot_index, note, velocity, duration))
 
     def route(self, midi_channel: int, slot_index: int) -> None:
         previous = self.channel_map.get(midi_channel)
@@ -589,6 +593,73 @@ class TypedDaemonApiContractTests(unittest.TestCase):
                 self.assertFalse(response["ok"])
                 self.assertEqual(response["status"], 400)
 
+    def test_json_slot_note_triggers_loaded_slot_with_defaults(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation("slot.note", {"slot": 1, "note": 64})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.sent_notes, [(0, 64, 100, 0.3)])
+        self.assertEqual(result["slot"]["slot"], 1)
+        self.assertEqual(result["note"], {"note": 64, "velocity": 100, "duration_ms": 300})
+
+    def test_json_slot_note_rejects_empty_slot(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        response = json.loads(daemon._run_json_request('{"op":"slot.note","payload":{"slot":2,"note":60}}', "test"))
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["status"], 400)
+        self.assertIn("slot 2 is empty", response["error"])
+        self.assertEqual(host.sent_notes, [])
+
+    def test_json_slot_note_rejects_invalid_payloads_before_send_note(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        cases = [
+            {"slot": 0, "note": 60},
+            {"slot": 9, "note": 60},
+            {"slot": "1", "note": 60},
+            {"slot": True, "note": 60},
+            {"slot": 1},
+            {"slot": 1, "note": -1},
+            {"slot": 1, "note": 128},
+            {"slot": 1, "note": "60"},
+            {"slot": 1, "note": False},
+            {"slot": 1, "note": 60, "velocity": -1},
+            {"slot": 1, "note": 60, "velocity": 128},
+            {"slot": 1, "note": 60, "velocity": "100"},
+            {"slot": 1, "note": 60, "velocity": True},
+            {"slot": 1, "note": 60, "duration_ms": 0},
+            {"slot": 1, "note": 60, "duration_ms": 5001},
+            {"slot": 1, "note": 60, "duration_ms": 10.5},
+            {"slot": 1, "note": 60, "duration_ms": "300"},
+            {"slot": 1, "note": 60, "duration_ms": False},
+        ]
+
+        for payload in cases:
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "slot.note", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertEqual(host.sent_notes, [])
+
     def test_json_session_save_with_name_updates_loaded_session(self) -> None:
         if server is None:
             self.skipTest("core.server import needs optional native dependencies in this checkout")
@@ -746,6 +817,7 @@ class WebSafetyTests(unittest.TestCase):
     def test_typed_web_slot_route_validation_accepts_clear_and_unload(self) -> None:
         clear_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/1/clear")
         unload_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/8/unload")
+        note_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/4/note")
         bad_slot_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/9/clear")
 
         self.assertIsNotNone(clear_match)
@@ -754,8 +826,38 @@ class WebSafetyTests(unittest.TestCase):
         self.assertIsNotNone(unload_match)
         self.assertEqual(unload_match.group(1), "8")
         self.assertEqual(unload_match.group(2), "unload")
+        self.assertIsNotNone(note_match)
+        self.assertEqual(note_match.group(1), "4")
+        self.assertEqual(note_match.group(2), "note")
         with self.assertRaises(ValueError):
             web.VcpiWebHandler._validate_slot_number(bad_slot_match.group(1))
+
+    def test_typed_web_note_validation_applies_defaults_and_ranges(self) -> None:
+        payload: dict[str, object] = {"note": 60}
+
+        web.VcpiWebHandler._validate_note_payload(payload)
+
+        self.assertEqual(payload, {"note": 60, "velocity": 100, "duration_ms": 300})
+        invalid_payloads = [
+            {},
+            {"note": -1},
+            {"note": 128},
+            {"note": "60"},
+            {"note": False},
+            {"note": 60, "velocity": -1},
+            {"note": 60, "velocity": 128},
+            {"note": 60, "velocity": "100"},
+            {"note": 60, "velocity": True},
+            {"note": 60, "duration_ms": 0},
+            {"note": 60, "duration_ms": 5001},
+            {"note": 60, "duration_ms": 10.5},
+            {"note": 60, "duration_ms": "300"},
+            {"note": 60, "duration_ms": False},
+        ]
+        for value in invalid_payloads:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    web.VcpiWebHandler._validate_note_payload(value)
 
     def test_typed_web_bpm_validation_accepts_numeric_range(self) -> None:
         web.VcpiWebHandler._validate_bpm_payload({"bpm": 20.0}, required=True)
@@ -914,6 +1016,74 @@ class WebSafetyTests(unittest.TestCase):
             ("/api/midi/cut", {"channel": 17}),
             ("/api/midi/cut", {"channel": "1"}),
             ("/api/midi/cut", {"channel": True}),
+        ]
+
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_slot_note_route_maps_to_note_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/note"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "note": {"note": 60}}
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"note": 60},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "slot.note",
+            {"note": 60, "slot": 1, "velocity": 100, "duration_ms": 300},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_slot_note_rejects_invalid_payload_before_daemon(self) -> None:
+        cases = [
+            ("/api/slots/9/note", {"note": 60}),
+            ("/api/slots/1/note", {}),
+            ("/api/slots/1/note", {"note": -1}),
+            ("/api/slots/1/note", {"note": 128}),
+            ("/api/slots/1/note", {"note": "60"}),
+            ("/api/slots/1/note", {"note": True}),
+            ("/api/slots/1/note", {"note": 60, "velocity": -1}),
+            ("/api/slots/1/note", {"note": 60, "velocity": 128}),
+            ("/api/slots/1/note", {"note": 60, "velocity": "100"}),
+            ("/api/slots/1/note", {"note": 60, "velocity": False}),
+            ("/api/slots/1/note", {"note": 60, "duration_ms": 0}),
+            ("/api/slots/1/note", {"note": 60, "duration_ms": 5001}),
+            ("/api/slots/1/note", {"note": 60, "duration_ms": 10.5}),
+            ("/api/slots/1/note", {"note": 60, "duration_ms": "300"}),
+            ("/api/slots/1/note", {"note": 60, "duration_ms": True}),
         ]
 
         for path, body in cases:

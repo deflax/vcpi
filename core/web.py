@@ -35,10 +35,14 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLOT_INFO_RE = re.compile(r"^/api/slots/([^/]+)/info$")
-SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload)$")
+SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload|note)$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 MIN_BPM = 20.0
 MAX_BPM = 300.0
+DEFAULT_NOTE_VELOCITY = 100
+DEFAULT_NOTE_DURATION_MS = 300
+MIN_NOTE_DURATION_MS = 1
+MAX_NOTE_DURATION_MS = 5000
 
 logger = logging.getLogger(__name__)
 
@@ -782,7 +786,7 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
     def _handle_slot_action(self, path: str) -> None:
         match = SLOT_ACTION_RE.fullmatch(path)
         if match is None:
-            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot route must be /api/slots/{1-8}/{gain|mute|solo|clear|unload}"})
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot route must be /api/slots/{1-8}/{gain|mute|solo|clear|unload|note}"})
             return
 
         try:
@@ -802,6 +806,9 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             elif action == "solo":
                 self._validate_optional_bool_payload(payload, "solo")
                 operation = "slot.solo"
+            elif action == "note":
+                self._validate_note_payload(payload)
+                operation = "slot.note"
             else:
                 operation = f"slot.{action}"
         except json.JSONDecodeError as exc:
@@ -965,6 +972,45 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
         toggle = payload.get("toggle")
         if "toggle" in payload and not isinstance(toggle, bool):
             raise ValueError("toggle must be a boolean")
+
+    @staticmethod
+    def _int_range_from_payload(
+        payload: dict[str, object],
+        key: str,
+        minimum: int,
+        maximum: int,
+        *,
+        default: int | None = None,
+    ) -> int:
+        if key not in payload:
+            if default is None:
+                raise ValueError(f"{key} must be an integer {minimum}-{maximum}")
+            payload[key] = default
+            return default
+        value = payload[key]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{key} must be an integer {minimum}-{maximum}")
+        if not minimum <= value <= maximum:
+            raise ValueError(f"{key} must be {minimum}-{maximum}")
+        return value
+
+    @classmethod
+    def _validate_note_payload(cls, payload: dict[str, object]) -> None:
+        cls._int_range_from_payload(payload, "note", 0, 127)
+        cls._int_range_from_payload(
+            payload,
+            "velocity",
+            0,
+            127,
+            default=DEFAULT_NOTE_VELOCITY,
+        )
+        cls._int_range_from_payload(
+            payload,
+            "duration_ms",
+            MIN_NOTE_DURATION_MS,
+            MAX_NOTE_DURATION_MS,
+            default=DEFAULT_NOTE_DURATION_MS,
+        )
 
 
 def run_web(
