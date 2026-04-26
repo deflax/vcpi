@@ -369,7 +369,8 @@ parameter inspector backed by `/api/slots/<slot>/params`, and an Audition
 control that sends one short test note to that loaded slot. The Params panel
 can also select Master FX params from loaded master effects. It shows inline
 Apply controls only for supported numeric instrument, slot FX, and master FX
-parameters.
+parameters, plus Remove controls for visible slot FX groups and the selected
+master FX.
 The signal-flow panel displays the current ASCII mixer diagram from the read-only
 flow endpoint. The session field can suggest saved sessions from the picker,
 while manual safe-name entry remains supported. The audio-device picker uses the
@@ -392,8 +393,10 @@ Expected typed endpoints:
 | `GET` | `/api/slots/<slot>/info` | Return read-only diagnostics for one slot as `{"ok": true, "slot": {...}, "instrument": {...}, "effects": [...], "rendered": "..."}`. Empty slots return `instrument: null`, an empty effects list, and a `message`. |
 | `GET` | `/api/slots/<slot>/params` | Return read-only instrument and slot insert FX parameter groups for a loaded slot as `{"ok": true, "slot": {...}, "parameters": [...], "effects": [...], "count": 3}`. Empty slots and invalid slot numbers are rejected. |
 | `POST` | `/api/slots/<slot>/params` | Set one supported numeric instrument parameter on a loaded slot with JSON `{"name": "cutoff", "value": 0.42}` or one slot insert FX parameter with JSON `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}`. Requires CSRF. |
+| `POST` | `/api/slots/<slot>/fx/<fx>/clear` | Remove one already-loaded slot insert FX with empty JSON `{}`. `<slot>` is 1-8, `<fx>` is a 1-based effect index, and the request requires CSRF. |
 | `GET` | `/api/master/fx/<fx>/params` | Return read-only parameter metadata for one loaded master FX, where `<fx>` is a 1-based effect index. Unloaded or invalid master FX indexes are rejected. |
 | `POST` | `/api/master/fx/<fx>/params` | Set one supported numeric parameter on a loaded master FX with JSON `{"name": "mix", "value": 0.5}`. Requires CSRF. |
+| `POST` | `/api/master/fx/<fx>/clear` | Remove one already-loaded master FX with empty JSON `{}`. `<fx>` is a 1-based effect index, and the request requires CSRF. |
 | `GET` | `/api/sessions` | Return saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `GET` | `/api/audio/devices` | Return output-capable audio devices as `{"ok": true, "available": true, "current": "Built-in Output", "default_device": 1, "devices": [{"id": 1, "name": "Built-in Output", "output_channels": 2, "default": true, "selected": true}]}` for the browser picker |
 | `GET` | `/api/flow` | Return the current ASCII signal-flow diagram as `{"ok": true, "flow": "..."}` for the browser diagnostics panel |
@@ -443,15 +446,23 @@ for example `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}`.
 Payload names must exactly match supported parameter names, and values must be
 finite JSON numbers. Boolean, string, and enum parameters are not supported.
 When metadata provides numeric minimum or maximum values, the range is enforced.
+`POST /api/slots/<slot>/fx/<fx>/clear` is also state-changing and requires the
+CSRF token. It removes one already-loaded slot insert FX, where `<slot>` is 1-8
+and `<fx>` is a 1-based effect index. Send an empty JSON body `{}`. Slot FX load
+and reorder actions remain CLI-only and out of scope for the typed browser API;
+remove is available only for already-loaded slot FX.
 
 `POST /api/master/fx/<fx>/params` is state-changing and requires the CSRF token.
 It edits one parameter on an already-loaded master FX, where `<fx>` is a 1-based
 effect index, with JSON such as `{"name": "mix", "value": 0.5}`. Payload names
 must exactly match supported parameter names, and values must be finite JSON
 numbers. Boolean, string, and enum parameters are not supported. When metadata
-provides numeric minimum or maximum values, the range is enforced. Master FX
-load, unload, and reorder actions remain CLI-only and out of scope for the typed
-browser API.
+provides numeric minimum or maximum values, the range is enforced.
+`POST /api/master/fx/<fx>/clear` is also state-changing and requires the CSRF
+token. It removes one already-loaded master FX, where `<fx>` is a 1-based effect
+index. Send an empty JSON body `{}`. Master FX load and reorder actions remain
+CLI-only and out of scope for the typed browser API; remove is available only
+for already-loaded master FX.
 
 Tempo and Link BPM payloads must be numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected before reaching the daemon.
@@ -508,10 +519,20 @@ curl -X POST http://127.0.0.1:8765/api/slots/1/params \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}'
 
+curl -X POST http://127.0.0.1:8765/api/slots/1/fx/1/clear \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{}'
+
 curl -X POST http://127.0.0.1:8765/api/master/fx/1/params \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"name": "mix", "value": 0.5}'
+
+curl -X POST http://127.0.0.1:8765/api/master/fx/1/clear \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{}'
 
 curl -X POST http://127.0.0.1:8765/api/tempo \
   -H "Content-Type: application/json" \
