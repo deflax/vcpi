@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  __VCPI_CSRF_META__
+  <title>vcpi command console</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="shell" aria-labelledby="app-title">
+    <section class="hero" aria-describedby="app-summary">
+      <div>
+        <p class="eyebrow">Phase 1 web client</p>
+        <h1 id="app-title">vcpi command console</h1>
+        <p id="app-summary" class="summary">
+          Send local daemon commands through the stdlib HTTP bridge and keep a readable transcript.
+        </p>
+      </div>
+      <div class="health-card" aria-live="polite">
+        <span id="health-dot" class="health-dot health-dot--checking" aria-hidden="true"></span>
+        <div>
+          <p class="health-label">Daemon health</p>
+          <p id="health-text" class="health-text">Checking connection…</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="console" aria-label="Command console">
+      <div id="error-panel" class="error-panel" role="alert" hidden></div>
+
+      <form id="command-form" class="command-form" autocomplete="off">
+        <label for="command-input">Command</label>
+        <div class="command-row">
+          <input
+            id="command-input"
+            name="command"
+            type="text"
+            inputmode="text"
+            spellcheck="false"
+            placeholder="status"
+            aria-describedby="command-help"
+          >
+          <button id="send-button" type="submit">Send</button>
+        </div>
+        <p id="command-help" class="form-hint">
+          Try <kbd>status</kbd>, <kbd>flow</kbd>, or <kbd>help</kbd>. Press Enter to run the command.
+        </p>
+      </form>
+
+      <div class="toolbar" aria-label="Command shortcuts">
+        <button type="button" class="shortcut" data-command="help">Help</button>
+        <button type="button" class="shortcut" data-command="status">Status</button>
+        <button type="button" class="shortcut" data-command="flow">Flow</button>
+        <button type="button" id="clear-button" class="clear-button">Clear transcript</button>
+      </div>
+
+      <details class="commands-panel">
+        <summary>Available commands</summary>
+        <div id="commands-list" class="commands-list" aria-live="polite">
+          Loading command names…
+        </div>
+      </details>
+
+      <section class="transcript-card" aria-labelledby="transcript-title">
+        <div class="transcript-header">
+          <h2 id="transcript-title">Transcript</h2>
+          <span id="transcript-count" class="transcript-count">0 entries</span>
+        </div>
+        <div id="transcript" class="transcript" role="log" aria-live="polite" aria-relevant="additions text">
+          <p class="empty-state">No commands sent yet.</p>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
