@@ -85,6 +85,34 @@
         </label>
       </div>
 
+      <div class="link-tempo-card" aria-labelledby="link-tempo-title">
+        <div>
+          <h2 id="link-tempo-title">Tempo and Link</h2>
+          <p id="link-tempo-status" class="typed-refresh-status" aria-live="polite">Waiting for Link status…</p>
+        </div>
+        <div class="link-tempo-controls">
+          <label class="tempo-control" for="tempo-bpm-input">
+            <span>BPM</span>
+            <input
+              id="tempo-bpm-input"
+              type="number"
+              min="20"
+              max="300"
+              step="0.1"
+              inputmode="decimal"
+              placeholder="120.0"
+              data-typed-action="true"
+              aria-label="Set tempo in beats per minute"
+            >
+          </label>
+          <div class="link-tempo-actions" aria-label="Tempo and Ableton Link actions">
+            <button id="tempo-set-button" type="button" class="typed-button" data-typed-action="true">Set tempo</button>
+            <button id="link-start-button" type="button" class="typed-button typed-button--ghost" data-typed-action="true">Start Link</button>
+            <button id="link-stop-button" type="button" class="typed-button typed-button--ghost" data-typed-action="true">Stop Link</button>
+          </div>
+        </div>
+      </div>
+
       <div class="session-card" aria-labelledby="session-control-title">
         <div>
           <h2 id="session-control-title">Session</h2>

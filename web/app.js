@@ -18,6 +18,11 @@
   const typedError = document.getElementById('typed-error');
   const masterGainInput = document.getElementById('master-gain-input');
   const masterGainValue = document.getElementById('master-gain-value');
+  const tempoBpmInput = document.getElementById('tempo-bpm-input');
+  const tempoSetButton = document.getElementById('tempo-set-button');
+  const linkStartButton = document.getElementById('link-start-button');
+  const linkStopButton = document.getElementById('link-stop-button');
+  const linkTempoStatus = document.getElementById('link-tempo-status');
   const sessionNameInput = document.getElementById('session-name-input');
   const sessionSaveButton = document.getElementById('session-save-button');
   const sessionLoadButton = document.getElementById('session-load-button');
@@ -41,6 +46,7 @@
   let typedRefreshInFlight = false;
   let typedRefreshPromise = null;
   let typedRefreshTimer = 0;
+  let tempoBpmDirty = false;
   let sessionNameDirty = false;
 
   const typedRefreshVisibleIntervalMs = 10000;
@@ -100,6 +106,10 @@
 
   function setSessionControlStatus(message) {
     sessionControlStatus.textContent = message;
+  }
+
+  function setLinkTempoStatus(message) {
+    linkTempoStatus.textContent = message;
   }
 
   function typedRefreshIntervalLabel() {
@@ -306,6 +316,33 @@
     masterGainInput.value = normalizedGain.toFixed(2);
   }
 
+  function normalizeBpm(value, fallback) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      return fallback;
+    }
+    return Math.min(300, Math.max(20, number));
+  }
+
+  function renderLinkTempo(link, status) {
+    const enabled = firstPresent(link, ['enabled', 'active', 'running'], firstPresent(status, ['link_enabled'], undefined));
+    const bpm = firstPresent(link, ['bpm', 'tempo'], firstPresent(status, ['bpm', 'tempo'], undefined));
+    const normalizedBpm = normalizeBpm(bpm, undefined);
+    const linkState = formatValue(enabled, 'Unknown');
+    const bpmText = normalizedBpm == null ? 'BPM not reported' : `${normalizedBpm.toFixed(1)} BPM`;
+
+    setLinkTempoStatus(`Link ${linkState} · ${bpmText}`);
+    linkStartButton.setAttribute('aria-pressed', enabled === true ? 'true' : 'false');
+    linkStopButton.setAttribute('aria-pressed', enabled === false ? 'true' : 'false');
+    linkStartButton.classList.toggle('typed-button--active', enabled === true);
+    linkStopButton.classList.toggle('typed-button--active', enabled === false);
+
+    if (normalizedBpm == null || document.activeElement === tempoBpmInput || tempoBpmDirty) {
+      return;
+    }
+    tempoBpmInput.value = normalizedBpm.toFixed(1);
+  }
+
   function currentSessionName(session, status) {
     const value = firstPresent(
       session,
@@ -395,6 +432,7 @@
       formatValue(firstPresent(midi, ['ports', 'output_count', 'outputs'], ''), ''),
     );
     renderMasterGain(audio);
+    renderLinkTempo(link, status);
   }
 
   function normalizeSlots(data) {
@@ -647,6 +685,66 @@
     return isSafeSessionName(name) ? '' : 'Start with a letter or number and use only letters, numbers, dots, dashes, or underscores.';
   }
 
+  function validateTempoBpm() {
+    const rawBpm = tempoBpmInput.value.trim();
+    const bpm = Number(rawBpm);
+    if (!rawBpm || !Number.isFinite(bpm)) {
+      return {message: 'Enter a BPM between 20 and 300.'};
+    }
+    if (bpm < 20 || bpm > 300) {
+      return {message: 'Tempo must be between 20 and 300 BPM.'};
+    }
+    return {bpm: Math.round(bpm * 10) / 10, message: ''};
+  }
+
+  function optionalTempoPayload() {
+    if (!tempoBpmInput.value.trim()) {
+      return {payload: {}, message: ''};
+    }
+    const validation = validateTempoBpm();
+    if (validation.message) {
+      return {payload: null, message: validation.message};
+    }
+    return {payload: {bpm: validation.bpm}, message: ''};
+  }
+
+  async function setTempo() {
+    const validation = validateTempoBpm();
+    if (validation.message) {
+      setLinkTempoStatus(validation.message);
+      showTypedError(validation.message);
+      tempoBpmInput.focus();
+      return;
+    }
+    setLinkTempoStatus(`Setting tempo to ${validation.bpm.toFixed(1)} BPM…`);
+    const ok = await mutateTyped('/api/tempo', {bpm: validation.bpm});
+    if (ok) {
+      tempoBpmDirty = false;
+      setLinkTempoStatus(`Tempo set to ${validation.bpm.toFixed(1)} BPM. Status refreshed.`);
+    } else {
+      setLinkTempoStatus('Tempo update failed. See typed API status above.');
+    }
+  }
+
+  async function startLink() {
+    const tempo = optionalTempoPayload();
+    if (tempo.message) {
+      setLinkTempoStatus(tempo.message);
+      showTypedError(tempo.message);
+      tempoBpmInput.focus();
+      return;
+    }
+    setLinkTempoStatus('Starting Ableton Link…');
+    const ok = await mutateTyped('/api/link/start', tempo.payload || {});
+    setLinkTempoStatus(ok ? 'Ableton Link started. Status refreshed.' : 'Ableton Link start failed. See typed API status above.');
+  }
+
+  async function stopLink() {
+    setLinkTempoStatus('Stopping Ableton Link…');
+    const ok = await mutateTyped('/api/link/stop', {});
+    setLinkTempoStatus(ok ? 'Ableton Link stopped. Status refreshed.' : 'Ableton Link stop failed. See typed API status above.');
+  }
+
   async function saveSession() {
     const name = sessionNameInput.value.trim();
     const validationMessage = validateSessionName(name, false);
@@ -761,6 +859,12 @@
   masterGainInput.addEventListener('change', () => {
     mutateTyped('/api/master/gain', {gain: Number(masterGainInput.value)});
   });
+  tempoBpmInput.addEventListener('input', () => {
+    tempoBpmDirty = tempoBpmInput.value.trim() !== '';
+  });
+  tempoSetButton.addEventListener('click', setTempo);
+  linkStartButton.addEventListener('click', startLink);
+  linkStopButton.addEventListener('click', stopLink);
   sessionNameInput.addEventListener('input', () => {
     sessionNameDirty = sessionNameInput.value.trim() !== '';
   });
