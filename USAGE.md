@@ -135,7 +135,8 @@ The browser dashboard automatically refreshes `/api/status`, `/api/slots`,
 client-side interval. It slows while the tab is hidden, skips polling during
 typed control updates, and keeps the Refresh button available for an immediate
 manual read. Loaded slot cards include an Unload action that calls the typed
-slot clear endpoint. The signal-flow panel displays the current ASCII mixer
+slot clear endpoint and an Info action that opens a read-only details panel from
+`/api/slots/<slot>/info`. The signal-flow panel displays the current ASCII mixer
 diagram returned by the read-only flow endpoint. The session field can suggest
 saved sessions from the picker, while manual safe-name entry remains supported.
 The audio-device picker uses the read-only device list and sends the selected
@@ -155,6 +156,7 @@ requirements.
 |---|---|---|---|
 | `GET` | `/api/status` | none | Structured status: audio running state, sample rate, buffer size, tempo, Link state, selected output name when known |
 | `GET` | `/api/slots` | none | All 8 slots with slot number, loaded name, source type, routed MIDI channels, gain, mute, solo, and effect count |
+| `GET` | `/api/slots/<slot>/info` | none | Read-only slot diagnostics and plugin metadata for `<slot>` 1-8, returned as `{"ok": true, "slot": {...}, "instrument": {...}, "effects": [...], "rendered": "..."}`. Empty slots return `instrument: null`, an empty effects list, and a `message`. |
 | `GET` | `/api/sessions` | none | Saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `GET` | `/api/audio/devices` | none | Output-capable audio devices for the browser picker, returned as `{"ok": true, "available": true, "current": "Built-in Output", "default_device": 1, "devices": [{"id": 1, "name": "Built-in Output", "output_channels": 2, "default": true, "selected": true}]}` |
 | `GET` | `/api/flow` | none | Current ASCII signal-flow diagram for the browser diagnostics panel, returned as `{"ok": true, "flow": "..."}` |
@@ -183,14 +185,16 @@ not supported.
 Tempo and Link BPM payloads must be JSON numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected.
 
-`GET /api/audio/devices` and `GET /api/flow` are read-only and do not need a
-CSRF token. The audio-device endpoint lists only devices with output channels.
-If `sounddevice` is unavailable or device querying fails in the daemon, the
-endpoint returns `{"ok": true, "available": false, "devices": []}` so the
-browser can keep the system-default option available. `GET /api/flow` returns
-the same current ASCII signal-flow diagram shown by the CLI `flow` command.
-Starting audio still uses a state-changing POST and must include the CSRF token,
-even when the device value came from the picker.
+`GET /api/audio/devices`, `GET /api/flow`, and `GET /api/slots/<slot>/info` are
+read-only and do not need a CSRF token. The audio-device endpoint lists only
+devices with output channels. If `sounddevice` is unavailable or device querying
+fails in the daemon, the endpoint returns `{"ok": true, "available": false,
+"devices": []}` so the browser can keep the system-default option available.
+`GET /api/flow` returns the same current ASCII signal-flow diagram shown by the
+CLI `flow` command. `GET /api/slots/<slot>/info` is diagnostics only for the
+browser Info panel and does not edit parameters, load plugins, or change slot
+state. Starting audio still uses a state-changing POST and must include the CSRF
+token, even when the device value came from the picker.
 
 Read-only requests can be called directly:
 
@@ -200,6 +204,7 @@ curl http://127.0.0.1:8765/api/slots
 curl http://127.0.0.1:8765/api/sessions
 curl http://127.0.0.1:8765/api/audio/devices
 curl http://127.0.0.1:8765/api/flow
+curl http://127.0.0.1:8765/api/slots/1/info
 ```
 
 For `POST` requests, read the CSRF token from `/` and send it as
