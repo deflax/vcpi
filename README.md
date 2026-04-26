@@ -38,8 +38,8 @@ python main.py web
 vcpi runs with a separate server (`serve`) and multiple clients. Use `cli`
 for the terminal client or `web` for the local browser command console. The
 typed JSON API covers status, slots, signal-flow diagnostics, read-only slot
-plugin info, audio transport, audio-device listing, and slot mixer controls while
-keeping the command console available.
+plugin info, audio transport, audio-device listing, MIDI channel routing, and
+slot mixer controls while keeping the command console available.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcli` with `audio start [device]`.
@@ -369,7 +369,10 @@ session field can suggest saved sessions from the picker, while manual safe-name
 entry remains supported. The audio-device picker uses the read-only device list
 and sends the selected value to `/api/audio/start` as `{"device": "name or index"}`.
 Tempo and Link controls use typed POST routes so browser controls can set BPM,
-enable Link, and disable Link without sending free-form CLI commands.
+enable Link, and disable Link without sending free-form CLI commands. MIDI
+routing controls can map 1-based MIDI channels to 1-based slots and cut channel
+routes. This phase does not add MIDI port selection, open, or close controls to
+the typed browser API.
 
 Expected typed endpoints:
 
@@ -388,6 +391,8 @@ Expected typed endpoints:
 | `POST` | `/api/tempo` | Set tempo with JSON `{"bpm": 128}` where BPM is 20.0 to 300.0 |
 | `POST` | `/api/link/start` | Enable Ableton Link, optionally with JSON `{"bpm": 128}` where BPM is 20.0 to 300.0 |
 | `POST` | `/api/link/stop` | Disable Ableton Link |
+| `POST` | `/api/midi/link` | Route a MIDI channel to a slot with JSON `{"channel": 1, "slot": 1}` where both values are 1-based. Empty target slots are accepted. |
+| `POST` | `/api/midi/cut` | Remove a MIDI channel route with JSON `{"channel": 1}` where channel is 1-based. Unrouted channels are accepted as a no-op. |
 | `POST` | `/api/master/gain` | Set master gain with JSON `{"gain": 0.75}` where gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/gain` | Set slot gain with JSON `{"gain": 0.75}` where `<slot>` is 1-8 |
 | `POST` | `/api/slots/<slot>/mute` | Set or toggle slot mute with JSON `{"muted": true}` or `{"toggle": true}` |
@@ -414,6 +419,10 @@ when the device value came from the picker.
 
 Tempo and Link BPM payloads must be numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected before reaching the daemon.
+MIDI route payloads use 1-based numbers: `channel` must be an integer from 1 to
+16, and `slot` must be an integer from 1 to 8. State-changing MIDI route POSTs
+require the CSRF token. The typed MIDI routes only edit the daemon channel map;
+MIDI port listing, selection, opening, and closing remain CLI-only in this phase.
 
 Example:
 
@@ -456,6 +465,16 @@ curl -X POST http://127.0.0.1:8765/api/link/stop \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{}'
+
+curl -X POST http://127.0.0.1:8765/api/midi/link \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"channel": 10, "slot": 3}'
+
+curl -X POST http://127.0.0.1:8765/api/midi/cut \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"channel": 10}'
 
 curl -X POST http://127.0.0.1:8765/api/session/save \
   -H "Content-Type: application/json" \

@@ -142,7 +142,9 @@ saved sessions from the picker, while manual safe-name entry remains supported.
 The audio-device picker uses the read-only device list and sends the selected
 value to `/api/audio/start` as `{"device": "name or index"}`. Tempo and Link
 browser controls call typed POST routes for BPM, Link start, and Link stop
-actions.
+actions. MIDI browser controls call typed POST routes to map 1-based channels to
+1-based slots and to cut channel routes. This phase does not add typed MIDI port
+listing, selection, open, or close controls.
 
 ### Typed HTTP API
 
@@ -167,6 +169,8 @@ requirements.
 | `POST` | `/api/tempo` | `{"bpm": 128}` | Set tempo, where BPM is 20.0 to 300.0 |
 | `POST` | `/api/link/start` | optional `{"bpm": 128}` | Enable Ableton Link, optionally setting BPM first. BPM is 20.0 to 300.0. |
 | `POST` | `/api/link/stop` | `{}` | Disable Ableton Link |
+| `POST` | `/api/midi/link` | `{"channel": 1, "slot": 1}` | Route a 1-based MIDI channel to a 1-based slot. Empty target slots are accepted. |
+| `POST` | `/api/midi/cut` | `{"channel": 1}` | Remove a 1-based MIDI channel route. Unrouted channels are accepted as a no-op. |
 | `POST` | `/api/master/gain` | `{"gain": 0.75}` | Set master gain, where gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/gain` | `{"gain": 0.75}` | Set slot gain, where `<slot>` is 1-8 and gain is 0.0-1.0 |
 | `POST` | `/api/slots/<slot>/mute` | `{"muted": true}` or `{"toggle": true}` | Set or toggle slot mute. Omit the body or send `{"toggle": true}` to toggle. |
@@ -184,6 +188,10 @@ not supported.
 
 Tempo and Link BPM payloads must be JSON numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected.
+
+MIDI route payloads use 1-based JSON integers. `channel` must be 1-16 and
+`slot` must be 1-8. The typed MIDI endpoints only edit channel routing. MIDI
+port listing, selection, opening, and closing stay in the CLI for this phase.
 
 `GET /api/audio/devices`, `GET /api/flow`, and `GET /api/slots/<slot>/info` are
 read-only and do not need a CSRF token. The audio-device endpoint lists only
@@ -242,6 +250,16 @@ curl -X POST http://127.0.0.1:8765/api/link/stop \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{}'
+
+curl -X POST http://127.0.0.1:8765/api/midi/link \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"channel": 10, "slot": 3}'
+
+curl -X POST http://127.0.0.1:8765/api/midi/cut \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"channel": 10}'
 
 curl -X POST http://127.0.0.1:8765/api/session/save \
   -H "Content-Type: application/json" \
