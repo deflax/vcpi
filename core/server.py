@@ -30,7 +30,7 @@ import socket
 import sys
 import threading
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Iterator, NamedTuple
 
 from core import deps
 from core.host import VcpiCore
@@ -49,6 +49,8 @@ DEFAULT_NOTE_VELOCITY = 100
 DEFAULT_NOTE_DURATION_MS = 300
 MIN_NOTE_DURATION_MS = 1
 MAX_NOTE_DURATION_MS = 5000
+MAX_SLOT_PARAMETERS = 512
+MAX_PARAMETER_STRING_LENGTH = 256
 
 
 logger = logging.getLogger(__name__)
@@ -342,6 +344,9 @@ class VcpiServer:
             case "slot.info":
                 idx = self._slot_index_from_payload(payload)
                 return self._slot_info_payload(idx)
+            case "slot.params":
+                idx = self._slot_index_from_payload(payload)
+                return self._slot_params_payload(idx)
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -742,6 +747,24 @@ class VcpiServer:
             "rendered": instrument["rendered"],
         }
 
+    def _slot_params_payload(self, idx: int) -> dict[str, Any]:
+        slot = self._loaded_slot(idx)
+        parameters, total_count = self._plugin_parameters_payload(slot.plugin)
+        truncated = total_count > len(parameters)
+        label = f"Slot {idx + 1}: {slot.name}"
+        payload: dict[str, Any] = {
+            "ok": True,
+            "slot": self._slot_payload(idx, slot),
+            "parameters": parameters,
+            "count": total_count,
+            "rendered": self._render_parameters(label, parameters, truncated, total_count),
+        }
+        if truncated:
+            payload["truncated"] = True
+            payload["limit"] = MAX_SLOT_PARAMETERS
+            payload["count"] = total_count
+        return payload
+
     def _plugin_info_payload(
         self,
         plugin: object,
@@ -765,6 +788,201 @@ class VcpiServer:
             "parameters": {"count": self._safe_parameter_count(plugin)},
             "rendered": self._render_plugin_info(plugin, label),
         }
+
+    def _plugin_parameters_payload(self, plugin: object) -> tuple[list[dict[str, Any]], int]:
+        try:
+            raw_parameters = getattr(plugin, "parameters", None)
+        except Exception:
+            return [], 0
+        if not raw_parameters:
+            return [], 0
+
+        parameters: list[dict[str, Any]] = []
+        total_count = 0
+        declared_count = self._safe_collection_len(raw_parameters)
+        for index, name, param_obj in self._iter_parameter_objects(raw_parameters):
+            if len(parameters) >= MAX_SLOT_PARAMETERS:
+                total_count = declared_count if declared_count is not None else index + 1
+                break
+            total_count = index + 1
+            parameters.append(self._parameter_payload(plugin, name, index, param_obj))
+        else:
+            if declared_count is not None:
+                total_count = max(total_count, declared_count)
+        return parameters, total_count
+
+    @staticmethod
+    def _safe_collection_len(value: Any) -> int | None:
+        try:
+            length = len(value)
+        except Exception:
+            return None
+        return length if length >= 0 else None
+
+    def _iter_parameter_objects(self, raw_parameters: Any) -> Iterator[tuple[int, str, object]]:
+        try:
+            items_attr = getattr(raw_parameters, "items", None)
+        except Exception:
+            items_attr = None
+        if callable(items_attr):
+            try:
+                iterable: Any = items_attr()
+            except Exception:
+                return
+            for index, item in enumerate(iterable):
+                try:
+                    key, param_obj = item
+                except Exception:
+                    key, param_obj = index, item
+                yield index, self._parameter_name(key, param_obj, index), param_obj
+            return
+
+        try:
+            iterator = iter(raw_parameters)
+        except (TypeError, ValueError):
+            return
+        except Exception:
+            return
+
+        for index, item in enumerate(iterator):
+            yield index, self._parameter_name(None, item, index), item
+
+    def _parameter_payload(
+        self,
+        plugin: object,
+        name: str,
+        index: int,
+        param_obj: object,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"name": name, "index": index}
+        self._copy_optional_parameter_field(payload, param_obj, "id", ("id", "identifier"))
+        self._copy_current_parameter_value(payload, plugin, name, param_obj)
+        self._copy_optional_parameter_field(
+            payload,
+            param_obj,
+            "default",
+            ("default", "default_value", "default_raw_value"),
+        )
+        self._copy_parameter_range(payload, param_obj)
+        self._copy_optional_parameter_field(payload, param_obj, "unit", ("unit", "units"))
+        self._copy_optional_parameter_field(payload, param_obj, "label", ("label",))
+        return payload
+
+    @classmethod
+    def _parameter_name(cls, key: object, param_obj: object, index: int) -> str:
+        for candidate in (key, cls._parameter_object_value(param_obj, ("name", "id", "identifier"))):
+            value = cls._safe_scalar(candidate)
+            if isinstance(value, str) and value:
+                return value
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return str(value)
+        return f"param_{index + 1}"
+
+    @classmethod
+    def _copy_current_parameter_value(
+        cls,
+        payload: dict[str, Any],
+        plugin: object,
+        name: str,
+        param_obj: object,
+    ) -> None:
+        value: Any = None
+        value_found = False
+        if name:
+            try:
+                value = getattr(plugin, name)
+                value_found = True
+            except Exception:
+                value_found = False
+        if not value_found:
+            value = cls._parameter_object_value(param_obj, ("value", "current_value", "raw_value"))
+        scalar = cls._safe_scalar(value)
+        if scalar is not None:
+            payload["value"] = scalar
+
+    @classmethod
+    def _copy_optional_parameter_field(
+        cls,
+        payload: dict[str, Any],
+        param_obj: object,
+        output_key: str,
+        source_keys: tuple[str, ...],
+    ) -> None:
+        scalar = cls._safe_scalar(cls._parameter_object_value(param_obj, source_keys))
+        if scalar is not None:
+            payload[output_key] = scalar
+
+    @classmethod
+    def _copy_parameter_range(cls, payload: dict[str, Any], param_obj: object) -> None:
+        range_value = cls._parameter_object_value(param_obj, ("range",))
+        minimum: Any = None
+        maximum: Any = None
+        if isinstance(range_value, (list, tuple)) and len(range_value) >= 2:
+            minimum, maximum = range_value[0], range_value[1]
+        else:
+            minimum = cls._parameter_object_value(param_obj, ("min", "minimum", "min_value"))
+            maximum = cls._parameter_object_value(param_obj, ("max", "maximum", "max_value"))
+
+        min_scalar = cls._safe_scalar(minimum)
+        max_scalar = cls._safe_scalar(maximum)
+        if min_scalar is not None:
+            payload["minimum"] = min_scalar
+        if max_scalar is not None:
+            payload["maximum"] = max_scalar
+
+    @staticmethod
+    def _parameter_object_value(param_obj: object, keys: tuple[str, ...]) -> Any:
+        for key in keys:
+            if isinstance(param_obj, dict) and key in param_obj:
+                value = param_obj[key]
+                if value is not None:
+                    return value
+                continue
+            try:
+                value = getattr(param_obj, key)
+            except Exception:
+                continue
+            if value is not None:
+                return value
+        return None
+
+    @staticmethod
+    def _safe_scalar(value: object) -> str | int | float | bool | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            if len(value) > MAX_PARAMETER_STRING_LENGTH:
+                return value[:MAX_PARAMETER_STRING_LENGTH] + "..."
+            return value
+        return None
+
+    @staticmethod
+    def _render_parameters(
+        label: str,
+        parameters: list[dict[str, Any]],
+        truncated: bool,
+        total_count: int,
+    ) -> str:
+        lines = [label or "Parameters"]
+        if not parameters:
+            lines.append("  (no parameters)")
+        for parameter in parameters:
+            name = str(parameter.get("name", "?"))
+            value = parameter.get("value", "?")
+            unit = parameter.get("unit", "")
+            line = f"  {name} = {value}"
+            if unit:
+                line += f" {unit}"
+            if "minimum" in parameter or "maximum" in parameter:
+                line += f"  ({parameter.get('minimum', '?')} .. {parameter.get('maximum', '?')})"
+            lines.append(line)
+        if truncated:
+            lines.append(f"  ... capped at {MAX_SLOT_PARAMETERS} of {total_count} parameters")
+        return "\n".join(lines)
 
     @staticmethod
     def _safe_plugin_attr(plugin: object, attr: str, default: Any = None) -> Any:

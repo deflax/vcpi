@@ -34,7 +34,7 @@ JSON_REQUEST_PREFIX = "__vcpi_json__ "
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-SLOT_INFO_RE = re.compile(r"^/api/slots/([^/]+)/info$")
+SLOT_READ_RE = re.compile(r"^/api/slots/([^/]+)/(info|params)$")
 SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload|note)$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 MIN_BPM = 20.0
@@ -486,7 +486,7 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
         elif path == "/api/flow":
             self._handle_json_get("flow")
         elif path.startswith("/api/slots/"):
-            self._handle_slot_info_get(path)
+            self._handle_slot_read_get(path)
         else:
             _send_json(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
 
@@ -634,10 +634,10 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
 
         _send_json(self, _http_status_from_payload(result.payload), result.payload)
 
-    def _handle_slot_info_get(self, path: str) -> None:
-        match = SLOT_INFO_RE.fullmatch(path)
+    def _handle_slot_read_get(self, path: str) -> None:
+        match = SLOT_READ_RE.fullmatch(path)
         if match is None:
-            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot info route must be /api/slots/{1-8}/info"})
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot read route must be /api/slots/{1-8}/info or /api/slots/{1-8}/params"})
             return
 
         try:
@@ -646,7 +646,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
             return
 
-        self._handle_json_get("slot.info", {"slot": slot})
+        operation = "slot.info" if match.group(2) == "info" else "slot.params"
+        self._handle_json_get(operation, {"slot": slot})
 
     def _handle_json_post(self, operation: str, payload: dict[str, object] | None = None) -> None:
         try:

@@ -32,7 +32,16 @@ class FakeSlot:
     def __init__(self, name: str = "Dexed", source_type: str = "vst") -> None:
         self.name: str = name
         self.path: str = "/plugins/Dexed.vst3"
-        self.plugin: SimpleNamespace = SimpleNamespace(name=name)
+        self.plugin: SimpleNamespace = SimpleNamespace(
+            name=name,
+            cutoff=0.42,
+            resonance=0.2,
+            parameters={
+                "cutoff": SimpleNamespace(value=0.42, range=(0.0, 1.0), unit="Hz", label="Cutoff"),
+                "resonance": {"value": 0.2, "min": 0.0, "max": 1.0, "unit": "Q", "label": "Resonance"},
+                "shape": SimpleNamespace(range=("sine", "saw")),
+            },
+        )
         self.display_label: str = name
         self.source_type: str = source_type
         self.vcv_patch_path: str | None = None
@@ -317,6 +326,74 @@ class TypedDaemonApiContractTests(unittest.TestCase):
                 response = json.loads(
                     daemon._run_json_request(
                         json.dumps({"op": "slot.info", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+
+    def test_json_slot_params_returns_loaded_slot_parameter_metadata(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        result = daemon._handle_json_operation("slot.params", {"slot": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["slot"]["slot"], 1)
+        self.assertTrue(result["slot"]["loaded"])
+        self.assertEqual(result["count"], 3)
+        self.assertEqual(
+            result["parameters"][:2],
+            [
+                {
+                    "index": 0,
+                    "name": "cutoff",
+                    "label": "Cutoff",
+                    "value": 0.42,
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "unit": "Hz",
+                },
+                {
+                    "index": 1,
+                    "name": "resonance",
+                    "label": "Resonance",
+                    "value": 0.2,
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "unit": "Q",
+                },
+            ],
+        )
+        self.assertEqual(result["parameters"][2]["name"], "shape")
+        self.assertEqual(result["parameters"][2]["minimum"], "sine")
+        self.assertEqual(result["parameters"][2]["maximum"], "saw")
+
+    def test_json_slot_params_rejects_empty_slot(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        response = json.loads(daemon._run_json_request('{"op":"slot.params","payload":{"slot":2}}', "test"))
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["status"], 400)
+        self.assertIn("slot 2 is empty", response["error"])
+
+    def test_json_slot_params_rejects_invalid_slot_payloads(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+
+        for payload in ({"slot": 0}, {"slot": 9}, {"slot": "1"}, {"slot": True}, {}):
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "slot.params", "payload": payload}),
                         "test",
                     )
                 )
@@ -1196,9 +1273,50 @@ class WebSafetyTests(unittest.TestCase):
         )
         send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
 
+    def test_typed_web_slot_params_route_maps_to_read_only_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/params"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {
+            "ok": True,
+            "slot": {"slot": 1, "loaded": True},
+            "parameters": [{"name": "cutoff", "value": 0.42}],
+            "count": 1,
+        }
+
+        with mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_GET()
+
+        execute_json_operation.assert_called_once_with(
+            "slot.params",
+            {"slot": 1},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
     def test_typed_web_slot_info_route_rejects_invalid_slot(self) -> None:
         handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
         handler.path = "/api/slots/9/info"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+        with mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+            web,
+            "_send_json",
+        ) as send_json:
+            handler.do_GET()
+
+        execute_json_operation.assert_not_called()
+        self.assertEqual(send_json.call_args.args[0], handler)
+        self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_slot_params_route_rejects_invalid_slot(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/9/params"
         handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
 
         with mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
