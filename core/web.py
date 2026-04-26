@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import secrets
 import socket
@@ -35,7 +36,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLOT_READ_RE = re.compile(r"^/api/slots/([^/]+)/(info|params)$")
-SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload|note)$")
+SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload|note|params)$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 MIN_BPM = 20.0
 MAX_BPM = 300.0
@@ -43,6 +44,7 @@ DEFAULT_NOTE_VELOCITY = 100
 DEFAULT_NOTE_DURATION_MS = 300
 MIN_NOTE_DURATION_MS = 1
 MAX_NOTE_DURATION_MS = 5000
+MAX_PARAMETER_NAME_LENGTH = 256
 
 logger = logging.getLogger(__name__)
 
@@ -787,7 +789,7 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
     def _handle_slot_action(self, path: str) -> None:
         match = SLOT_ACTION_RE.fullmatch(path)
         if match is None:
-            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot route must be /api/slots/{1-8}/{gain|mute|solo|clear|unload|note}"})
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot route must be /api/slots/{1-8}/{gain|mute|solo|clear|unload|note|params}"})
             return
 
         try:
@@ -798,7 +800,10 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             action = match.group(2)
             payload = dict(body)
             payload["slot"] = slot
-            if action == "gain":
+            if action == "params":
+                self._validate_slot_param_payload(payload)
+                operation = "slot.param.set"
+            elif action == "gain":
                 self._validate_gain_payload(payload)
                 operation = "slot.gain"
             elif action == "mute":
@@ -1012,6 +1017,26 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             MAX_NOTE_DURATION_MS,
             default=DEFAULT_NOTE_DURATION_MS,
         )
+
+    @staticmethod
+    def _validate_slot_param_payload(payload: dict[str, object]) -> None:
+        raw_name = payload.get("name")
+        if not isinstance(raw_name, str):
+            raise ValueError("name must be a string")
+        name = raw_name.strip()
+        if not name:
+            raise ValueError("name must not be empty")
+        if len(name) > MAX_PARAMETER_NAME_LENGTH:
+            raise ValueError(f"name must be at most {MAX_PARAMETER_NAME_LENGTH} characters")
+        payload["name"] = name
+
+        if "value" not in payload:
+            raise ValueError("value must be a finite number")
+        value = payload["value"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("value must be a finite number")
+        if not math.isfinite(float(value)):
+            raise ValueError("value must be a finite number")
 
 
 def run_web(

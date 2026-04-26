@@ -61,6 +61,7 @@ class FakeEngine:
         self.master_effects: list[object] = []
         self.routes: dict[int, int] = {1: 0, 10: 0}
         self.output_device: object | None = None
+        self.param_changes: list[tuple[int, str, float]] = []
 
     def start(self, output_device: object | None = None) -> None:
         self.running = True
@@ -68,6 +69,9 @@ class FakeEngine:
 
     def stop(self) -> None:
         self.running = False
+
+    def enqueue_param_change(self, slot_index: int, param_name: str, value: float) -> None:
+        self.param_changes.append((slot_index, param_name, value))
 
     def any_solo(self) -> bool:
         return any(slot.solo for slot in self.slots if slot is not None)
@@ -399,6 +403,135 @@ class TypedDaemonApiContractTests(unittest.TestCase):
                 )
                 self.assertFalse(response["ok"])
                 self.assertEqual(response["status"], 400)
+
+    def test_json_slot_param_set_updates_loaded_slot_numeric_parameter(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        slot = host.engine.slots[0]
+        if slot is None:
+            self.fail("FakeHost slot 1 should be loaded")
+        daemon = server.VcpiServer(host)
+
+        result = daemon._handle_json_operation(
+            "slot.param.set",
+            {"slot": 1, "name": "cutoff", "value": 0.75},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.engine.param_changes, [(0, "cutoff", 0.75)])
+        self.assertEqual(slot.plugin.cutoff, 0.75)
+        self.assertEqual(result["slot"]["slot"], 1)
+        self.assertTrue(result["slot"]["loaded"])
+        self.assertEqual(result["parameter"]["name"], "cutoff")
+        self.assertEqual(result["parameter"]["value"], 0.75)
+        self.assertEqual(result["count"], 3)
+        self.assertIn("cutoff = 0.75", result["rendered"])
+        self.assertEqual(result["parameters"][0]["value"], 0.75)
+
+    def test_json_slot_param_set_rejects_empty_slot(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+
+        response = json.loads(
+            daemon._run_json_request(
+                '{"op":"slot.param.set","payload":{"slot":2,"name":"cutoff","value":0.5}}',
+                "test",
+            )
+        )
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["status"], 400)
+        self.assertIn("slot 2 is empty", response["error"])
+        self.assertEqual(host.engine.param_changes, [])
+
+    def test_json_slot_param_set_rejects_invalid_name_payloads(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        cases = [
+            {"slot": 1, "value": 0.5},
+            {"slot": 1, "name": "", "value": 0.5},
+            {"slot": 1, "name": "   ", "value": 0.5},
+            {"slot": 1, "name": 123, "value": 0.5},
+        ]
+
+        for payload in cases:
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "slot.param.set", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertEqual(host.engine.param_changes, [])
+
+    def test_json_slot_param_set_rejects_invalid_value_payloads(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        cases = [
+            {"slot": 1, "name": "cutoff"},
+            {"slot": 1, "name": "cutoff", "value": "0.5"},
+            {"slot": 1, "name": "cutoff", "value": True},
+            {"slot": 1, "name": "cutoff", "value": None},
+            {"slot": 1, "name": "cutoff", "value": [0.5]},
+            {"slot": 1, "name": "cutoff", "value": {"amount": 0.5}},
+            {"slot": 1, "name": "cutoff", "value": float("nan")},
+            {"slot": 1, "name": "cutoff", "value": float("inf")},
+        ]
+
+        for payload in cases:
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "slot.param.set", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertEqual(host.engine.param_changes, [])
+
+    def test_json_slot_param_set_rejects_unknown_nonnumeric_and_out_of_range_params(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        slot = host.engine.slots[0]
+        if slot is None:
+            self.fail("FakeHost slot 1 should be loaded")
+        daemon = server.VcpiServer(host)
+        cases = [
+            ({"slot": 1, "name": "missing", "value": 0.5}, "unknown parameter"),
+            ({"slot": 1, "name": "shape", "value": 0.5}, "non-numeric range"),
+            ({"slot": 1, "name": "cutoff", "value": -0.01}, "value must be >= 0"),
+            ({"slot": 1, "name": "cutoff", "value": 1.01}, "value must be <= 1"),
+        ]
+
+        for payload, message in cases:
+            with self.subTest(payload=payload):
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "slot.param.set", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertIn(message, response["error"])
+                self.assertEqual(slot.plugin.cutoff, 0.42)
+                self.assertEqual(host.engine.param_changes, [])
 
     def test_json_slot_mutations_validate_gain_and_toggle(self) -> None:
         if server is None:
@@ -895,6 +1028,7 @@ class WebSafetyTests(unittest.TestCase):
         clear_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/1/clear")
         unload_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/8/unload")
         note_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/4/note")
+        params_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/3/params")
         bad_slot_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/9/clear")
 
         self.assertIsNotNone(clear_match)
@@ -906,6 +1040,9 @@ class WebSafetyTests(unittest.TestCase):
         self.assertIsNotNone(note_match)
         self.assertEqual(note_match.group(1), "4")
         self.assertEqual(note_match.group(2), "note")
+        self.assertIsNotNone(params_match)
+        self.assertEqual(params_match.group(1), "3")
+        self.assertEqual(params_match.group(2), "params")
         with self.assertRaises(ValueError):
             web.VcpiWebHandler._validate_slot_number(bad_slot_match.group(1))
 
@@ -935,6 +1072,34 @@ class WebSafetyTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     web.VcpiWebHandler._validate_note_payload(value)
+
+    def test_typed_web_slot_param_validation_accepts_numeric_payload(self) -> None:
+        payload: dict[str, object] = {"name": " cutoff ", "value": 0.75}
+
+        web.VcpiWebHandler._validate_slot_param_payload(payload)
+
+        self.assertEqual(payload, {"name": "cutoff", "value": 0.75})
+
+    def test_typed_web_slot_param_validation_rejects_invalid_payloads(self) -> None:
+        invalid_payloads = [
+            {},
+            {"name": "", "value": 0.5},
+            {"name": "   ", "value": 0.5},
+            {"name": 123, "value": 0.5},
+            {"name": "x" * (web.MAX_PARAMETER_NAME_LENGTH + 1), "value": 0.5},
+            {"name": "cutoff"},
+            {"name": "cutoff", "value": "0.5"},
+            {"name": "cutoff", "value": True},
+            {"name": "cutoff", "value": None},
+            {"name": "cutoff", "value": [0.5]},
+            {"name": "cutoff", "value": {"amount": 0.5}},
+            {"name": "cutoff", "value": float("nan")},
+            {"name": "cutoff", "value": float("inf")},
+        ]
+        for value in invalid_payloads:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    web.VcpiWebHandler._validate_slot_param_payload(value)
 
     def test_typed_web_bpm_validation_accepts_numeric_range(self) -> None:
         web.VcpiWebHandler._validate_bpm_payload({"bpm": 20.0}, required=True)
@@ -1298,6 +1463,101 @@ class WebSafetyTests(unittest.TestCase):
             daemon_timeout=1.0,
         )
         send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_slot_param_post_route_maps_to_set_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/params"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {
+            "ok": True,
+            "slot": {"slot": 1, "loaded": True},
+            "parameter": {"name": "cutoff", "value": 0.75},
+            "parameters": [{"name": "cutoff", "value": 0.75}],
+            "count": 1,
+        }
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"name": " cutoff ", "value": 0.75},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "slot.param.set",
+            {"name": "cutoff", "value": 0.75, "slot": 1},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_slot_param_post_rejects_invalid_payload_before_daemon(self) -> None:
+        cases = [
+            ("/api/slots/9/params", {"name": "cutoff", "value": 0.5}),
+            ("/api/slots/1/params", {}),
+            ("/api/slots/1/params", {"name": "", "value": 0.5}),
+            ("/api/slots/1/params", {"name": "   ", "value": 0.5}),
+            ("/api/slots/1/params", {"name": 123, "value": 0.5}),
+            ("/api/slots/1/params", {"name": "x" * (web.MAX_PARAMETER_NAME_LENGTH + 1), "value": 0.5}),
+            ("/api/slots/1/params", {"name": "cutoff"}),
+            ("/api/slots/1/params", {"name": "cutoff", "value": "0.5"}),
+            ("/api/slots/1/params", {"name": "cutoff", "value": True}),
+            ("/api/slots/1/params", {"name": "cutoff", "value": None}),
+            ("/api/slots/1/params", {"name": "cutoff", "value": [0.5]}),
+            ("/api/slots/1/params", {"name": "cutoff", "value": {"amount": 0.5}}),
+            ("/api/slots/1/params", {"name": "cutoff", "value": float("nan")}),
+            ("/api/slots/1/params", {"name": "cutoff", "value": float("inf")}),
+        ]
+
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_slot_param_post_requires_csrf(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/params"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            side_effect=PermissionError("missing or invalid CSRF token"),
+        ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+            web,
+            "_send_json",
+        ) as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_not_called()
+        send_json.assert_called_once_with(
+            handler,
+            web.HTTPStatus.FORBIDDEN,
+            {"ok": False, "error": "missing or invalid CSRF token"},
+        )
 
     def test_typed_web_slot_info_route_rejects_invalid_slot(self) -> None:
         handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)

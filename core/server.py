@@ -22,6 +22,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -347,6 +348,12 @@ class VcpiServer:
             case "slot.params":
                 idx = self._slot_index_from_payload(payload)
                 return self._slot_params_payload(idx)
+            case "slot.param.set":
+                idx = self._slot_index_from_payload(payload)
+                slot = self._loaded_slot(idx)
+                name = self._parameter_name_from_payload(payload)
+                value = self._parameter_value_from_payload(payload)
+                return self._slot_param_set_payload(idx, slot, name, value)
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -561,6 +568,28 @@ class VcpiServer:
         return value
 
     @staticmethod
+    def _parameter_name_from_payload(payload: dict[str, Any]) -> str:
+        value = payload.get("name")
+        if not isinstance(value, str):
+            raise _JsonOperationError("name must be a string")
+        name = value.strip()
+        if not name:
+            raise _JsonOperationError("name must not be empty")
+        return name
+
+    @staticmethod
+    def _parameter_value_from_payload(payload: dict[str, Any]) -> float:
+        if "value" not in payload:
+            raise _JsonOperationError("value must be a finite number")
+        value = payload["value"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise _JsonOperationError("value must be a finite number")
+        numeric_value = float(value)
+        if not math.isfinite(numeric_value):
+            raise _JsonOperationError("value must be a finite number")
+        return numeric_value
+
+    @staticmethod
     def _normalize_session_name(raw_name: object, *, required: bool) -> str | None:
         if raw_name is None:
             if required:
@@ -764,6 +793,86 @@ class VcpiServer:
             payload["limit"] = MAX_SLOT_PARAMETERS
             payload["count"] = total_count
         return payload
+
+    def _slot_param_set_payload(
+        self,
+        idx: int,
+        slot: InstrumentSlot,
+        name: str,
+        value: float,
+    ) -> dict[str, Any]:
+        current = self._slot_params_payload(idx)
+        parameter = self._find_parameter_payload(current["parameters"], name)
+        if parameter is None:
+            raise _JsonOperationError(f"unknown parameter: {name}")
+        self._validate_numeric_parameter(parameter, name, value)
+
+        enqueue_param_change = getattr(self.host.engine, "enqueue_param_change", None)
+        if callable(enqueue_param_change):
+            enqueue_param_change(idx, name, value)
+        setattr(slot.plugin, name, value)
+
+        refreshed = self._slot_params_payload(idx)
+        refreshed_parameter = self._find_parameter_payload(refreshed["parameters"], name)
+        if refreshed_parameter is None:
+            refreshed_parameter = dict(parameter)
+            refreshed_parameter["value"] = value
+        refreshed["parameter"] = refreshed_parameter
+        return refreshed
+
+    @staticmethod
+    def _find_parameter_payload(parameters: object, name: str) -> dict[str, Any] | None:
+        if not isinstance(parameters, list):
+            return None
+        for parameter in parameters:
+            if isinstance(parameter, dict) and parameter.get("name") == name:
+                return parameter
+        return None
+
+    @classmethod
+    def _validate_numeric_parameter(cls, parameter: dict[str, Any], name: str, value: float) -> None:
+        numeric_metadata_found = False
+
+        if "value" in parameter:
+            current_value = parameter["value"]
+            if not cls._is_finite_number(current_value):
+                raise _JsonOperationError(f"parameter is not numeric: {name}")
+            numeric_metadata_found = True
+
+        if "default" in parameter:
+            default_value = parameter["default"]
+            if not cls._is_finite_number(default_value):
+                raise _JsonOperationError(f"parameter is not numeric: {name}")
+            numeric_metadata_found = True
+
+        minimum = cls._optional_numeric_bound(parameter, "minimum", name)
+        maximum = cls._optional_numeric_bound(parameter, "maximum", name)
+        if minimum is not None:
+            numeric_metadata_found = True
+            if value < minimum:
+                raise _JsonOperationError(f"value must be >= {minimum:g} for parameter: {name}")
+        if maximum is not None:
+            numeric_metadata_found = True
+            if value > maximum:
+                raise _JsonOperationError(f"value must be <= {maximum:g} for parameter: {name}")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise _JsonOperationError(f"parameter has invalid numeric range: {name}")
+
+        if not numeric_metadata_found:
+            raise _JsonOperationError(f"parameter is not numeric: {name}")
+
+    @classmethod
+    def _optional_numeric_bound(cls, parameter: dict[str, Any], key: str, name: str) -> float | None:
+        if key not in parameter:
+            return None
+        value = parameter[key]
+        if not cls._is_finite_number(value):
+            raise _JsonOperationError(f"parameter has non-numeric range: {name}")
+        return float(value)
+
+    @staticmethod
+    def _is_finite_number(value: object) -> bool:
+        return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value))
 
     def _plugin_info_payload(
         self,
