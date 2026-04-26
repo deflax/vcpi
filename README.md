@@ -38,9 +38,9 @@ python main.py web
 vcpi runs with a separate server (`serve`) and multiple clients. Use `cli`
 for the terminal client or `web` for the local browser command console. The
 typed JSON API covers status, slots, signal-flow diagnostics, slot plugin info,
-instrument parameter controls, audio transport, audio-device listing, MIDI
-channel routing, slot mixer controls, and loaded-slot audition notes while
-keeping the command console available.
+instrument, slot FX, and master FX parameter controls, audio transport,
+audio-device listing, MIDI channel routing, slot mixer controls, and loaded-slot
+audition notes while keeping the command console available.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcli` with `audio start [device]`.
@@ -367,7 +367,8 @@ action that calls the typed slot clear endpoint, an Info action that opens a
 read-only panel backed by `/api/slots/<slot>/info`, a Params action that opens a
 parameter inspector backed by `/api/slots/<slot>/params`, and an Audition
 control that sends one short test note to that loaded slot. The Params panel
-shows inline Apply controls only for supported numeric instrument and slot FX
+can also select Master FX params from loaded master effects. It shows inline
+Apply controls only for supported numeric instrument, slot FX, and master FX
 parameters.
 The signal-flow panel displays the current ASCII mixer diagram from the read-only
 flow endpoint. The session field can suggest saved sessions from the picker,
@@ -391,6 +392,8 @@ Expected typed endpoints:
 | `GET` | `/api/slots/<slot>/info` | Return read-only diagnostics for one slot as `{"ok": true, "slot": {...}, "instrument": {...}, "effects": [...], "rendered": "..."}`. Empty slots return `instrument: null`, an empty effects list, and a `message`. |
 | `GET` | `/api/slots/<slot>/params` | Return read-only instrument and slot insert FX parameter groups for a loaded slot as `{"ok": true, "slot": {...}, "parameters": [...], "effects": [...], "count": 3}`. Empty slots and invalid slot numbers are rejected. |
 | `POST` | `/api/slots/<slot>/params` | Set one supported numeric instrument parameter on a loaded slot with JSON `{"name": "cutoff", "value": 0.42}` or one slot insert FX parameter with JSON `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}`. Requires CSRF. |
+| `GET` | `/api/master/fx/<fx>/params` | Return read-only parameter metadata for one loaded master FX, where `<fx>` is a 1-based effect index. Unloaded or invalid master FX indexes are rejected. |
+| `POST` | `/api/master/fx/<fx>/params` | Set one supported numeric parameter on a loaded master FX with JSON `{"name": "mix", "value": 0.5}`. Requires CSRF. |
 | `GET` | `/api/sessions` | Return saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `GET` | `/api/audio/devices` | Return output-capable audio devices as `{"ok": true, "available": true, "current": "Built-in Output", "default_device": 1, "devices": [{"id": 1, "name": "Built-in Output", "output_channels": 2, "default": true, "selected": true}]}` for the browser picker |
 | `GET` | `/api/flow` | Return the current ASCII signal-flow diagram as `{"ok": true, "flow": "..."}` for the browser diagnostics panel |
@@ -417,8 +420,9 @@ Session save and load only accept a safe session `name`, for example `demo` or
 the browser picker. Arbitrary paths, absolute paths, nested paths, dotfiles, and
 spaces are still not supported.
 
-`GET /api/audio/devices`, `GET /api/flow`, `GET /api/slots/<slot>/info`, and
-`GET /api/slots/<slot>/params` are read-only and do not need a CSRF token. The
+`GET /api/audio/devices`, `GET /api/flow`, `GET /api/slots/<slot>/info`, `GET
+/api/slots/<slot>/params`, and `GET /api/master/fx/<fx>/params` are read-only
+and do not need a CSRF token. The
 audio-device endpoint lists only devices with output channels. If `sounddevice`
 is unavailable or device querying fails in the daemon, the endpoint returns
 `{"ok": true, "available": false, "devices": []}` so the browser can keep the
@@ -427,9 +431,10 @@ signal-flow diagram shown by the CLI `flow` command. `GET /api/slots/<slot>/info
 returns diagnostics and plugin metadata for display only. `GET
 /api/slots/<slot>/params` powers the Params UI with names, values, units, and
 safe range metadata for the already-loaded slot instrument and slot insert FX
-chain. It remains read-only and does not change slot state. Starting audio still
-uses a state-changing POST and must include the CSRF token, even when the device
-value came from the picker.
+chain. `GET /api/master/fx/<fx>/params` does the same for one loaded master FX,
+where `<fx>` is a 1-based effect index. These GET routes remain read-only and do
+not change slot or master state. Starting audio still uses a state-changing POST
+and must include the CSRF token, even when the device value came from the picker.
 
 `POST /api/slots/<slot>/params` is state-changing and requires the CSRF token.
 It edits instrument parameters on an already-loaded slot by default. To edit a
@@ -438,7 +443,15 @@ for example `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}`.
 Payload names must exactly match supported parameter names, and values must be
 finite JSON numbers. Boolean, string, and enum parameters are not supported.
 When metadata provides numeric minimum or maximum values, the range is enforced.
-Master FX parameters remain CLI-only for this phase.
+
+`POST /api/master/fx/<fx>/params` is state-changing and requires the CSRF token.
+It edits one parameter on an already-loaded master FX, where `<fx>` is a 1-based
+effect index, with JSON such as `{"name": "mix", "value": 0.5}`. Payload names
+must exactly match supported parameter names, and values must be finite JSON
+numbers. Boolean, string, and enum parameters are not supported. When metadata
+provides numeric minimum or maximum values, the range is enforced. Master FX
+load, unload, and reorder actions remain CLI-only and out of scope for the typed
+browser API.
 
 Tempo and Link BPM payloads must be numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected before reaching the daemon.
@@ -473,6 +486,7 @@ curl http://127.0.0.1:8765/api/audio/devices
 curl http://127.0.0.1:8765/api/flow
 curl http://127.0.0.1:8765/api/slots/1/info
 curl http://127.0.0.1:8765/api/slots/1/params
+curl http://127.0.0.1:8765/api/master/fx/1/params
 
 curl -X POST http://127.0.0.1:8765/api/audio/start \
   -H "Content-Type: application/json" \
@@ -493,6 +507,11 @@ curl -X POST http://127.0.0.1:8765/api/slots/1/params \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}'
+
+curl -X POST http://127.0.0.1:8765/api/master/fx/1/params \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"name": "mix", "value": 0.5}'
 
 curl -X POST http://127.0.0.1:8765/api/tempo \
   -H "Content-Type: application/json" \

@@ -138,8 +138,9 @@ manual read. Loaded slot cards include an Unload action that calls the typed
 slot clear endpoint, an Info action that opens a read-only details panel from
 `/api/slots/<slot>/info`, a Params action that opens a parameter inspector from
 `/api/slots/<slot>/params`, and an Audition control that sends one short test
-note to that loaded slot. The Params panel shows inline Apply controls only for
-supported numeric instrument and slot FX parameters. The signal-flow panel
+note to that loaded slot. The Params panel can also select Master FX params from
+loaded master effects. It shows inline Apply controls only for supported numeric
+instrument, slot FX, and master FX parameters. The signal-flow panel
 displays the current ASCII mixer diagram returned by the read-only flow endpoint. The session
 field can suggest saved sessions from the picker, while manual safe-name entry
 remains supported. The audio-device picker uses the read-only device list and
@@ -167,6 +168,8 @@ requirements.
 | `GET` | `/api/slots/<slot>/info` | none | Read-only slot diagnostics and plugin metadata for `<slot>` 1-8, returned as `{"ok": true, "slot": {...}, "instrument": {...}, "effects": [...], "rendered": "..."}`. Empty slots return `instrument: null`, an empty effects list, and a `message`. |
 | `GET` | `/api/slots/<slot>/params` | none | Read-only instrument and slot insert FX parameter groups for a loaded slot, returned as `{"ok": true, "slot": {...}, "parameters": [...], "effects": [...], "count": 3}`. Empty slots and invalid slot numbers are rejected. |
 | `POST` | `/api/slots/<slot>/params` | `{"name": "cutoff", "value": 0.42}` or `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}` | Set one supported numeric instrument or slot insert FX parameter on a loaded slot. Requires CSRF. |
+| `GET` | `/api/master/fx/<fx>/params` | none | Read-only parameter metadata for one loaded master FX, where `<fx>` is a 1-based effect index. Unloaded or invalid master FX indexes are rejected. |
+| `POST` | `/api/master/fx/<fx>/params` | `{"name": "mix", "value": 0.5}` | Set one supported numeric parameter on a loaded master FX. Requires CSRF. |
 | `GET` | `/api/sessions` | none | Saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
 | `GET` | `/api/audio/devices` | none | Output-capable audio devices for the browser picker, returned as `{"ok": true, "available": true, "current": "Built-in Output", "default_device": 1, "devices": [{"id": 1, "name": "Built-in Output", "output_channels": 2, "default": true, "selected": true}]}` |
 | `GET` | `/api/flow` | none | Current ASCII signal-flow diagram for the browser diagnostics panel, returned as `{"ok": true, "flow": "..."}` |
@@ -211,8 +214,9 @@ routing. The route accepts `<slot>` from 1 to 8 and requires integer `note` from
 `duration_ms` defaults to 300 and must be an integer from 1 to 5000. Empty slots
 and invalid payloads are rejected before a note is sent.
 
-`GET /api/audio/devices`, `GET /api/flow`, `GET /api/slots/<slot>/info`, and
-`GET /api/slots/<slot>/params` are read-only and do not need a CSRF token. The
+`GET /api/audio/devices`, `GET /api/flow`, `GET /api/slots/<slot>/info`, `GET
+/api/slots/<slot>/params`, and `GET /api/master/fx/<fx>/params` are read-only
+and do not need a CSRF token. The
 audio-device endpoint lists only devices with output channels. If `sounddevice`
 is unavailable or device querying fails in the daemon, the endpoint returns
 `{"ok": true, "available": false, "devices": []}` so the browser can keep the
@@ -220,9 +224,11 @@ system-default option available. `GET /api/flow` returns the same current ASCII
 signal-flow diagram shown by the CLI `flow` command. `GET /api/slots/<slot>/info`
 is diagnostics only for the browser Info panel. `GET /api/slots/<slot>/params`
 powers the Params UI with names, values, units, and safe range metadata for an
-already-loaded slot instrument and slot insert FX chain. It remains read-only
-and does not change slot state. Starting audio still uses a state-changing POST
-and must include the CSRF token, even when the device value came from the picker.
+already-loaded slot instrument and slot insert FX chain. `GET
+/api/master/fx/<fx>/params` does the same for one loaded master FX, where `<fx>`
+is a 1-based effect index. These GET routes remain read-only and do not change
+slot or master state. Starting audio still uses a state-changing POST and must
+include the CSRF token, even when the device value came from the picker.
 
 `POST /api/slots/<slot>/params` is state-changing and requires the CSRF token.
 It edits instrument parameters on an already-loaded slot by default. To edit a
@@ -231,7 +237,15 @@ for example `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}`.
 Payload names must exactly match supported parameter names, and values must be
 finite JSON numbers. Boolean, string, and enum parameters are not supported.
 When metadata provides numeric minimum or maximum values, the range is enforced.
-Master FX parameters remain CLI-only for this phase.
+
+`POST /api/master/fx/<fx>/params` is state-changing and requires the CSRF token.
+It edits one parameter on an already-loaded master FX, where `<fx>` is a 1-based
+effect index, with JSON such as `{"name": "mix", "value": 0.5}`. Payload names
+must exactly match supported parameter names, and values must be finite JSON
+numbers. Boolean, string, and enum parameters are not supported. When metadata
+provides numeric minimum or maximum values, the range is enforced. Master FX
+load, unload, and reorder actions remain CLI-only and out of scope for the typed
+browser API.
 
 Read-only requests can be called directly:
 
@@ -243,6 +257,7 @@ curl http://127.0.0.1:8765/api/audio/devices
 curl http://127.0.0.1:8765/api/flow
 curl http://127.0.0.1:8765/api/slots/1/info
 curl http://127.0.0.1:8765/api/slots/1/params
+curl http://127.0.0.1:8765/api/master/fx/1/params
 ```
 
 For `POST` requests, read the CSRF token from `/` and send it as
@@ -275,6 +290,11 @@ curl -X POST http://127.0.0.1:8765/api/slots/1/params \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}'
+
+curl -X POST http://127.0.0.1:8765/api/master/fx/1/params \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"name": "mix", "value": 0.5}'
 
 curl -X POST http://127.0.0.1:8765/api/tempo \
   -H "Content-Type: application/json" \
