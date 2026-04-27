@@ -8,6 +8,7 @@ and CI with just Python.
 from __future__ import annotations
 
 import importlib
+import io
 import json
 import sys
 import tempfile
@@ -125,6 +126,7 @@ class FakeHost:
         self.stop_link_calls: int = 0
         self.sent_notes: list[tuple[int, int, int, float]] = []
         self.loaded_wavs: list[tuple[int, str, str | None]] = []
+        self.loaded_effects: list[tuple[str, int | None, str | None]] = []
 
     def start_audio(self, output_device: object | None = None) -> None:
         self.started_with = output_device
@@ -169,6 +171,17 @@ class FakeHost:
         )
         self.engine.slots[slot_index] = slot
         return slot
+
+    def load_effect(self, path: str, slot_index: int | None = None, name: str | None = None) -> None:
+        self.loaded_effects.append((path, slot_index, name))
+        effect = SimpleNamespace(name=name or Path(path).stem, parameters={})
+        if slot_index is None:
+            self.engine.master_effects.append(effect)
+            return
+        slot = self.engine.slots[slot_index]
+        if slot is None:
+            raise ValueError(f"Slot {slot_index + 1} is empty")
+        slot.effects.append(effect)
 
     def start_link(self, bpm: float | None = None) -> None:
         self.start_link_calls.append(bpm)
@@ -406,6 +419,148 @@ class TypedDaemonApiContractTests(unittest.TestCase):
                     self.assertIn(message, response["error"])
                     self.assertEqual(host.loaded_wavs, [])
                     self.assertIsNone(host.engine.slots[1])
+
+    def test_json_fx_plugins_lists_safe_top_level_bundled_vst3_catalog(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        daemon = server.VcpiServer(FakeHost())
+        with tempfile.TemporaryDirectory() as tmp:
+            fx_root = Path(tmp) / "vst3"
+            fx_root.mkdir()
+            (fx_root / "DragonflyRoomReverb.vst3").mkdir()
+            _ = (fx_root / "Firefly Synth 2.vst3").write_text("bundle marker")
+            _ = (fx_root / "notes.txt").write_text("not vst3")
+            (fx_root / ".Hidden.vst3").mkdir()
+            nested = fx_root / "nested"
+            nested.mkdir()
+            (nested / "Nested.vst3").mkdir()
+            daemon._fx_root = lambda: fx_root
+
+            result = daemon._handle_json_operation("fx.plugins", {})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["plugins"],
+            [
+                {"name": "DragonflyRoomReverb", "filename": "DragonflyRoomReverb.vst3"},
+                {"name": "Firefly Synth 2", "filename": "Firefly Synth 2.vst3"},
+            ],
+        )
+
+    def test_json_slot_fx_load_loads_catalog_effect_into_loaded_slot(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        with tempfile.TemporaryDirectory() as tmp:
+            fx_root = Path(tmp) / "vst3"
+            fx_root.mkdir()
+            plugin_path = fx_root / "DragonflyRoomReverb.vst3"
+            plugin_path.mkdir()
+            daemon._fx_root = lambda: fx_root
+
+            result = daemon._handle_json_operation(
+                "slot.fx.load",
+                {"slot": 1, "plugin": " DragonflyRoomReverb.vst3 ", "name": " Room "},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.loaded_effects, [(str(plugin_path.resolve()), 0, "Room")])
+        self.assertEqual(result["effect"]["kind"], "effect")
+        self.assertEqual(result["effect"]["slot"], 1)
+        self.assertEqual(result["effect"]["effect"], 2)
+        self.assertEqual(result["effect"]["plugin"], "DragonflyRoomReverb")
+        self.assertEqual(result["slot"]["effects"], 2)
+        self.assertEqual(result["slots"][0]["effects"], 2)
+
+    def test_json_master_fx_load_loads_catalog_effect_into_master_chain(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        daemon = server.VcpiServer(host)
+        with tempfile.TemporaryDirectory() as tmp:
+            fx_root = Path(tmp) / "vst3"
+            fx_root.mkdir()
+            plugin_path = fx_root / "DragonflyRoomReverb.vst3"
+            plugin_path.mkdir()
+            daemon._fx_root = lambda: fx_root
+
+            result = daemon._handle_json_operation(
+                "master.fx.load",
+                {"plugin": "DragonflyRoomReverb", "name": "Master Room"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.loaded_effects, [(str(plugin_path.resolve()), None, "Master Room")])
+        self.assertEqual(result["effect"]["kind"], "master_effect")
+        self.assertEqual(result["effect"]["effect"], 2)
+        self.assertEqual(result["effect"]["plugin"], "DragonflyRoomReverb")
+        self.assertEqual(result["status"]["audio"]["master_effects"], 2)
+
+    def test_json_fx_load_rejects_invalid_payloads_before_mutation(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        cases = [
+            ("slot.fx.load", {"slot": 1, "plugin": "Room", "extra": True}, 400, "only slot"),
+            ("slot.fx.load", {"slot": 2, "plugin": "Room"}, 400, "slot 2 is empty"),
+            ("slot.fx.load", {"slot": 1, "plugin": ""}, 400, "plugin must not be empty"),
+            ("slot.fx.load", {"slot": 1, "plugin": 123}, 400, "plugin must be a string"),
+            ("slot.fx.load", {"slot": 1, "plugin": "../Room"}, 400, "plugin must not contain '..'"),
+            ("slot.fx.load", {"slot": 1, "plugin": "Folder/Room"}, 400, "plugin must not contain path separators"),
+            ("slot.fx.load", {"slot": 1, "plugin": ".Hidden"}, 400, "plugin must not be a dotfile"),
+            ("slot.fx.load", {"slot": 1, "plugin": "Missing"}, 404, "FX plugin not found"),
+            ("slot.fx.load", {"slot": 1, "plugin": "Room", "name": "Bad/Name"}, 400, "name must not contain path separators"),
+            ("slot.fx.load", {"slot": 1, "plugin": "Room", "name": "x" * (server.MAX_FX_DISPLAY_NAME_LENGTH + 1)}, 400, "name must be at most"),
+            ("master.fx.load", {"plugin": "Room", "slot": 1}, 400, "only plugin"),
+            ("master.fx.load", {"plugin": ".Hidden"}, 400, "plugin must not be a dotfile"),
+            ("master.fx.load", {"plugin": "Missing"}, 404, "FX plugin not found"),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fx_root = Path(tmp) / "vst3"
+            fx_root.mkdir()
+            (fx_root / "Room.vst3").mkdir()
+
+            for operation, payload, status, message in cases:
+                with self.subTest(operation=operation, payload=payload):
+                    host = FakeHost()
+                    daemon = server.VcpiServer(host)
+                    daemon._fx_root = lambda: fx_root
+                    response = json.loads(
+                        daemon._run_json_request(
+                            json.dumps({"op": operation, "payload": payload}),
+                            "test",
+                        )
+                    )
+                    self.assertFalse(response["ok"])
+                    self.assertEqual(response["status"], status)
+                    self.assertIn(message, response["error"])
+                    self.assertEqual(host.loaded_effects, [])
+                    self.assertEqual(len(host.engine.master_effects), 1)
+                    slot = host.engine.slots[0]
+                    if slot is None:
+                        self.fail("FakeHost slot 1 should remain loaded")
+                    self.assertEqual(len(slot.effects), 1)
+
+    def test_host_load_effect_rejects_instrument_plugins_before_append(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        core = server.VcpiCore.__new__(server.VcpiCore)
+        slot = FakeSlot()
+        core.engine = SimpleNamespace(slots=[slot, None, None, None, None, None, None, None], master_effects=[])
+        plugin = SimpleNamespace(is_instrument=True, category="Instrument|Synth")
+
+        with mock.patch.object(server.deps, "HAS_PEDALBOARD", True), mock.patch.object(server.deps, "load_plugin", return_value=plugin):
+            with self.assertRaises(ValueError):
+                core.load_effect("/tmp/Synth.vst3", 0, "Synth")
+
+        self.assertEqual(len(slot.effects), 1)
+        self.assertEqual(core.engine.master_effects, [])
 
     def test_json_flow_returns_current_ascii_signal_flow(self) -> None:
         if server is None:
@@ -1462,6 +1617,7 @@ class WebSafetyTests(unittest.TestCase):
         note_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/4/note")
         params_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/3/params")
         wav_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/2/wav")
+        fx_load_match = web.SLOT_FX_LOAD_RE.fullmatch("/api/slots/1/fx")
         fx_clear_match = web.SLOT_FX_CLEAR_RE.fullmatch("/api/slots/1/fx/2/clear")
         bad_slot_match = web.SLOT_ACTION_RE.fullmatch("/api/slots/9/clear")
 
@@ -1480,6 +1636,8 @@ class WebSafetyTests(unittest.TestCase):
         self.assertIsNotNone(wav_match)
         self.assertEqual(wav_match.group(1), "2")
         self.assertEqual(wav_match.group(2), "wav")
+        self.assertIsNotNone(fx_load_match)
+        self.assertEqual(fx_load_match.group(1), "1")
         self.assertIsNotNone(fx_clear_match)
         self.assertEqual(fx_clear_match.group(1), "1")
         self.assertEqual(fx_clear_match.group(2), "2")
@@ -1540,6 +1698,41 @@ class WebSafetyTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     web.VcpiWebHandler._validate_wav_load_payload(value)
+
+    def test_typed_web_fx_load_validation_accepts_safe_catalog_payload(self) -> None:
+        slot_payload: dict[str, object] = {"slot": 1, "plugin": " Room.vst3 ", "name": " Small Room "}
+        master_payload: dict[str, object] = {"plugin": " Room ", "name": " Master Room "}
+
+        web.VcpiWebHandler._validate_fx_load_payload(slot_payload, allow_slot=True)
+        web.VcpiWebHandler._validate_fx_load_payload(master_payload)
+
+        self.assertEqual(slot_payload, {"slot": 1, "plugin": "Room", "name": "Small Room"})
+        self.assertEqual(master_payload, {"plugin": "Room", "name": "Master Room"})
+
+    def test_typed_web_fx_load_validation_rejects_invalid_payloads(self) -> None:
+        invalid_payloads = [
+            ({"slot": 1, "plugin": "Room", "extra": True}, True),
+            ({"slot": 1, "plugin": ""}, True),
+            ({"slot": 1, "plugin": 123}, True),
+            ({"slot": 1, "plugin": "../Room"}, True),
+            ({"slot": 1, "plugin": "/tmp/Room"}, True),
+            ({"slot": 1, "plugin": "Folder/Room"}, True),
+            ({"slot": 1, "plugin": ".Hidden"}, True),
+            ({"slot": 0, "plugin": "Room"}, True),
+            ({"slot": 9, "plugin": "Room"}, True),
+            ({"slot": "1", "plugin": "Room"}, True),
+            ({"slot": 1, "plugin": "Room", "name": ""}, True),
+            ({"slot": 1, "plugin": "Room", "name": 123}, True),
+            ({"slot": 1, "plugin": "Room", "name": "Bad/Name"}, True),
+            ({"slot": 1, "plugin": "Room", "name": "x" * (web.MAX_FX_DISPLAY_NAME_LENGTH + 1)}, True),
+            ({"plugin": "Room", "slot": 1}, False),
+            ({"plugin": ".Hidden"}, False),
+            ({"plugin": "Room", "name": "Bad/Name"}, False),
+        ]
+        for value, allow_slot in invalid_payloads:
+            with self.subTest(value=value, allow_slot=allow_slot):
+                with self.assertRaises(ValueError):
+                    web.VcpiWebHandler._validate_fx_load_payload(value, allow_slot=allow_slot)
 
     def test_typed_web_slot_param_validation_accepts_numeric_payload(self) -> None:
         payload: dict[str, object] = {"name": " cutoff ", "value": 0.75}
@@ -1872,6 +2065,145 @@ class WebSafetyTests(unittest.TestCase):
             {"ok": False, "error": "missing or invalid CSRF token"},
         )
 
+    def test_typed_web_slot_fx_load_route_maps_to_load_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/fx"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "slot": {"slot": 1, "effects": 2}}
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"plugin": " Room.vst3 ", "name": " Small Room "},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "slot.fx.load",
+            {"plugin": "Room", "name": "Small Room", "slot": 1},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_master_fx_load_route_maps_to_load_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/master/fx"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "status": {"audio": {"master_effects": 2}}}
+
+        with mock.patch.object(
+            web.VcpiWebHandler,
+            "_read_secure_optional_json_body",
+            return_value={"plugin": " Room.vst3 ", "name": " Master Room "},
+        ), mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+            return_value=None,
+        ), mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_called_once_with(
+            "master.fx.load",
+            {"plugin": "Room", "name": "Master Room"},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_fx_load_rejects_invalid_payload_before_daemon(self) -> None:
+        cases = [
+            ("/api/slots/9/fx", {"plugin": "Room"}),
+            ("/api/slots/1/fx", {"slot": 1, "plugin": "Room"}),
+            ("/api/slots/1/fx", {"plugin": "Room", "extra": True}),
+            ("/api/slots/1/fx", {"plugin": ""}),
+            ("/api/slots/1/fx", {"plugin": "../Room"}),
+            ("/api/slots/1/fx", {"plugin": "Folder/Room"}),
+            ("/api/slots/1/fx", {"plugin": ".Hidden"}),
+            ("/api/slots/1/fx", {"plugin": "Room", "name": "Bad/Name"}),
+            ("/api/master/fx", {"plugin": "Room", "slot": 1}),
+            ("/api/master/fx", {"plugin": ".Hidden"}),
+            ("/api/master/fx", {"plugin": "Room", "name": "Bad/Name"}),
+        ]
+
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_fx_load_requires_csrf(self) -> None:
+        cases = ["/api/slots/1/fx", "/api/master/fx"]
+        for path in cases:
+            with self.subTest(path=path):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_validate_post_security",
+                    side_effect=PermissionError("missing or invalid CSRF token"),
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                send_json.assert_called_once_with(
+                    handler,
+                    web.HTTPStatus.FORBIDDEN,
+                    {"ok": False, "error": "missing or invalid CSRF token"},
+                )
+
+    def test_typed_web_invalid_json_body_is_rejected_before_daemon_call(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/slots/1/fx"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0, csrf_token="token")
+        handler.headers = {
+            "Content-Type": "application/json",
+            "X-VCPI-CSRF": "token",
+            "Content-Length": "1",
+        }
+        handler.rfile = io.BytesIO(b"[")
+
+        with mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+            web,
+            "_send_json",
+        ) as send_json:
+            handler.do_POST()
+
+        execute_json_operation.assert_not_called()
+        self.assertEqual(send_json.call_args.args[0], handler)
+        self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
     def test_typed_web_slot_note_rejects_invalid_payload_before_daemon(self) -> None:
         cases = [
             ("/api/slots/9/note", {"note": 60}),
@@ -1989,6 +2321,31 @@ class WebSafetyTests(unittest.TestCase):
 
         execute_json_operation.assert_called_once_with(
             "samples",
+            {},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_fx_plugins_route_maps_to_read_only_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/fx/plugins"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "plugins": []}
+
+        with mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json, mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+        ) as validate_post_security:
+            handler.do_GET()
+
+        validate_post_security.assert_not_called()
+        execute_json_operation.assert_called_once_with(
+            "fx.plugins",
             {},
             Path("/tmp/vcpi.sock"),
             daemon_timeout=1.0,

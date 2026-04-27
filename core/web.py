@@ -37,6 +37,7 @@ HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLOT_READ_RE = re.compile(r"^/api/slots/([^/]+)/(info|params)$")
 SLOT_ACTION_RE = re.compile(r"^/api/slots/([^/]+)/(gain|mute|solo|clear|unload|note|params|wav)$")
+SLOT_FX_LOAD_RE = re.compile(r"^/api/slots/([^/]+)/fx$")
 SLOT_FX_CLEAR_RE = re.compile(r"^/api/slots/([^/]+)/fx/([^/]+)/clear$")
 MASTER_FX_PARAMS_RE = re.compile(r"^/api/master/fx/([^/]+)/params$")
 MASTER_FX_CLEAR_RE = re.compile(r"^/api/master/fx/([^/]+)/clear$")
@@ -49,6 +50,7 @@ MIN_NOTE_DURATION_MS = 1
 MAX_NOTE_DURATION_MS = 5000
 MAX_PARAMETER_NAME_LENGTH = 256
 MAX_SAMPLE_DISPLAY_NAME_LENGTH = 128
+MAX_FX_DISPLAY_NAME_LENGTH = 128
 
 logger = logging.getLogger(__name__)
 
@@ -487,6 +489,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_json_get("slots")
         elif path == "/api/samples":
             self._handle_json_get("samples")
+        elif path == "/api/fx/plugins":
+            self._handle_json_get("fx.plugins")
         elif path == "/api/sessions":
             self._handle_json_get("sessions")
         elif path == "/api/audio/devices":
@@ -520,6 +524,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_midi_cut()
         elif path == "/api/master/gain":
             self._handle_master_gain()
+        elif path == "/api/master/fx":
+            self._handle_master_fx_load_post()
         elif path.startswith("/api/master/fx/"):
             self._handle_master_fx_post(path)
         elif path == "/api/session/save":
@@ -528,6 +534,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_session_load()
         elif path.startswith("/api/slots/") and "/fx/" in path:
             self._handle_slot_fx_clear_post(path)
+        elif path.startswith("/api/slots/") and path.endswith("/fx"):
+            self._handle_slot_fx_load_post(path)
         elif path.startswith("/api/slots/"):
             self._handle_slot_action(path)
         else:
@@ -783,6 +791,18 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
 
         self._handle_json_post("master.gain", payload)
 
+    def _handle_master_fx_load_post(self) -> None:
+        try:
+            payload = self._read_secure_optional_json_body()
+            if payload is None:
+                return
+            self._validate_fx_load_payload(payload)
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("master.fx.load", payload)
+
     def _handle_master_fx_params_post(self, path: str) -> None:
         match = MASTER_FX_PARAMS_RE.fullmatch(path)
         if match is None:
@@ -918,6 +938,34 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             return
 
         self._handle_json_post(operation, payload)
+
+    def _handle_slot_fx_load_post(self, path: str) -> None:
+        match = SLOT_FX_LOAD_RE.fullmatch(path)
+        if match is None:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "slot FX load route must be /api/slots/{1-8}/fx"})
+            return
+
+        try:
+            slot = self._validate_slot_number(match.group(1))
+            body = self._read_secure_optional_json_body()
+            if body is None:
+                return
+            if "slot" in body:
+                raise ValueError("slot FX load payload must contain only plugin and optional name")
+            payload = dict(body)
+            payload["slot"] = slot
+            self._validate_fx_load_payload(payload, allow_slot=True)
+        except json.JSONDecodeError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        except PermissionError as exc:
+            _send_json(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("slot.fx.load", payload)
 
     def _handle_slot_fx_clear_post(self, path: str) -> None:
         match = SLOT_FX_CLEAR_RE.fullmatch(path)
@@ -1164,6 +1212,29 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             raise ValueError(f"{key} must not be an absolute path")
         return value
 
+    @staticmethod
+    def _safe_fx_segment(raw_value: object, key: str) -> str:
+        if not isinstance(raw_value, str):
+            raise ValueError(f"{key} must be a string")
+        value = raw_value.strip()
+        if not value:
+            raise ValueError(f"{key} must not be empty")
+        if ".." in value:
+            raise ValueError(f"{key} must not contain '..'")
+        if any(separator in value for separator in ("/", "\\")):
+            raise ValueError(f"{key} must not contain path separators")
+        if Path(value).is_absolute():
+            raise ValueError(f"{key} must not be an absolute path")
+        if value.startswith("."):
+            raise ValueError(f"{key} must not be a dotfile")
+        if value.lower().endswith(".vst3"):
+            value = value[:-5].strip()
+            if not value:
+                raise ValueError(f"{key} must not be empty")
+            if value.startswith("."):
+                raise ValueError(f"{key} must not be a dotfile")
+        return value
+
     @classmethod
     def _validate_wav_load_payload(cls, payload: dict[str, object]) -> None:
         body_keys = set(payload) - {"slot"}
@@ -1184,6 +1255,32 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             name = cls._safe_sample_segment(payload.get("name"), "name")
             if len(name) > MAX_SAMPLE_DISPLAY_NAME_LENGTH:
                 raise ValueError(f"name must be at most {MAX_SAMPLE_DISPLAY_NAME_LENGTH} characters")
+            payload["name"] = name
+
+    @classmethod
+    def _validate_fx_load_payload(cls, payload: dict[str, object], *, allow_slot: bool = False) -> None:
+        allowed = {"plugin", "name"}
+        if allow_slot:
+            allowed.add("slot")
+        if not set(payload).issubset(allowed):
+            if allow_slot:
+                raise ValueError("slot FX load payload must contain only slot, plugin, and optional name")
+            raise ValueError("master FX load payload must contain only plugin and optional name")
+
+        plugin = cls._safe_fx_segment(payload.get("plugin"), "plugin")
+        payload["plugin"] = plugin
+
+        if allow_slot:
+            slot = payload.get("slot")
+            if isinstance(slot, bool) or not isinstance(slot, int):
+                raise ValueError("slot must be an integer 1-8")
+            if not 1 <= slot <= 8:
+                raise ValueError("slot must be 1-8")
+
+        if "name" in payload:
+            name = cls._safe_fx_segment(payload.get("name"), "name")
+            if len(name) > MAX_FX_DISPLAY_NAME_LENGTH:
+                raise ValueError(f"name must be at most {MAX_FX_DISPLAY_NAME_LENGTH} characters")
             payload["name"] = name
 
     @staticmethod

@@ -53,7 +53,9 @@ MAX_NOTE_DURATION_MS = 5000
 MAX_SLOT_PARAMETERS = 512
 MAX_PARAMETER_STRING_LENGTH = 256
 MAX_SAMPLE_DISPLAY_NAME_LENGTH = 128
+MAX_FX_DISPLAY_NAME_LENGTH = 128
 SAMPLES_ROOT = Path(__file__).resolve().parent.parent / "sampler" / "samples"
+VST3_ROOT = Path(__file__).resolve().parent.parent / "vst3"
 
 
 logger = logging.getLogger(__name__)
@@ -340,6 +342,8 @@ class VcpiServer:
                 return {"ok": True, "slots": self._slots_payload()}
             case "samples":
                 return self._samples_payload()
+            case "fx.plugins":
+                return self._fx_plugins_payload()
             case "sessions":
                 return self._sessions_payload()
             case "audio.devices":
@@ -364,6 +368,17 @@ class VcpiServer:
                 slot = self._loaded_slot(idx)
                 effect_idx = self._slot_effect_index_from_payload(payload, slot)
                 return self._slot_fx_clear_payload(idx, slot, effect_idx)
+            case "slot.fx.load":
+                self._require_payload_keys(
+                    payload,
+                    {"slot", "plugin", "name"},
+                    "slot FX load payload must contain only slot, plugin, and optional name",
+                )
+                idx = self._slot_index_from_payload(payload)
+                _ = self._loaded_slot(idx)
+                plugin_path, plugin_name = self._fx_plugin_path_from_payload(payload)
+                name = self._optional_fx_display_name_from_payload(payload)
+                return self._slot_fx_load_payload(idx, plugin_path, plugin_name, name)
             case "master.fx.params":
                 effect_idx = self._master_effect_index_from_payload(payload)
                 return self._master_fx_params_payload(effect_idx)
@@ -375,6 +390,15 @@ class VcpiServer:
             case "master.fx.clear":
                 effect_idx = self._master_effect_index_from_payload(payload)
                 return self._master_fx_clear_payload(effect_idx)
+            case "master.fx.load":
+                self._require_payload_keys(
+                    payload,
+                    {"plugin", "name"},
+                    "master FX load payload must contain only plugin and optional name",
+                )
+                plugin_path, plugin_name = self._fx_plugin_path_from_payload(payload)
+                name = self._optional_fx_display_name_from_payload(payload)
+                return self._master_fx_load_payload(plugin_path, plugin_name, name)
             case "audio.start":
                 device = self._optional_audio_device(payload)
                 self.host.start_audio(device)
@@ -645,6 +669,38 @@ class VcpiServer:
     def _sample_catalog_segment_from_payload(cls, payload: dict[str, Any], key: str) -> str:
         return cls._safe_catalog_segment(payload.get(key), key)
 
+    @staticmethod
+    def _safe_fx_catalog_token(raw_value: object, key: str) -> str:
+        if not isinstance(raw_value, str):
+            raise _JsonOperationError(f"{key} must be a string")
+        value = raw_value.strip()
+        if not value:
+            raise _JsonOperationError(f"{key} must not be empty")
+        if ".." in value:
+            raise _JsonOperationError(f"{key} must not contain '..'")
+        if any(separator in value for separator in ("/", "\\")):
+            raise _JsonOperationError(f"{key} must not contain path separators")
+        if Path(value).is_absolute():
+            raise _JsonOperationError(f"{key} must not be an absolute path")
+        if value.startswith("."):
+            raise _JsonOperationError(f"{key} must not be a dotfile")
+        if value.lower().endswith(".vst3"):
+            value = value[:-5].strip()
+            if not value:
+                raise _JsonOperationError(f"{key} must not be empty")
+            if value.startswith("."):
+                raise _JsonOperationError(f"{key} must not be a dotfile")
+        return value
+
+    @classmethod
+    def _optional_fx_display_name_from_payload(cls, payload: dict[str, Any]) -> str | None:
+        if "name" not in payload:
+            return None
+        name = cls._safe_fx_catalog_token(payload.get("name"), "name")
+        if len(name) > MAX_FX_DISPLAY_NAME_LENGTH:
+            raise _JsonOperationError(f"name must be at most {MAX_FX_DISPLAY_NAME_LENGTH} characters")
+        return name
+
     @classmethod
     def _sample_name_from_payload(cls, payload: dict[str, Any]) -> str:
         sample = cls._sample_catalog_segment_from_payload(payload, "sample")
@@ -733,6 +789,9 @@ class VcpiServer:
 
     def _samples_root(self) -> Path:
         return SAMPLES_ROOT.resolve()
+
+    def _fx_root(self) -> Path:
+        return VST3_ROOT.resolve()
 
     def _sessions_root(self) -> Path:
         root = self._session_cli()._sessions_root().expanduser().resolve()
@@ -1129,6 +1188,91 @@ class VcpiServer:
             "ok": True,
             "slot": self._slot_payload(idx, self.host.engine.slots[idx]),
             "slots": self._slots_payload(),
+            "status": status,
+        }
+
+    def _fx_catalog_entries(self) -> list[tuple[str, Path]]:
+        root = self._fx_root().resolve()
+        entries: list[tuple[str, Path]] = []
+        if not root.exists() or not root.is_dir():
+            return entries
+
+        for path in sorted(root.glob("*.vst3"), key=lambda item: item.name.lower()):
+            if path.name.startswith(".") or not (path.is_dir() or path.is_file()):
+                continue
+            try:
+                resolved = path.resolve()
+                if resolved.parent != root:
+                    continue
+                name = self._safe_fx_catalog_token(resolved.stem, "plugin")
+            except _JsonOperationError:
+                continue
+            entries.append((name, resolved))
+        return entries
+
+    def _fx_plugins_payload(self) -> dict[str, Any]:
+        plugins = [
+            {"name": name, "filename": path.name}
+            for name, path in self._fx_catalog_entries()
+        ]
+        return {"ok": True, "plugins": plugins}
+
+    def _fx_plugin_path_from_payload(self, payload: dict[str, Any]) -> tuple[Path, str]:
+        plugin_name = self._safe_fx_catalog_token(payload.get("plugin"), "plugin")
+        catalog = dict(self._fx_catalog_entries())
+        plugin_path = catalog.get(plugin_name)
+        if plugin_path is None:
+            raise _JsonOperationError(f"FX plugin not found: {plugin_name}", status=404)
+        return plugin_path, plugin_name
+
+    def _slot_fx_load_payload(
+        self,
+        idx: int,
+        plugin_path: Path,
+        plugin_name: str,
+        name: str | None,
+    ) -> dict[str, Any]:
+        self.host.load_effect(str(plugin_path), idx, name)
+        slot = self._loaded_slot(idx)
+        effect_index = len(slot.effects)
+        effect = slot.effects[effect_index - 1]
+        status = self._status_payload()
+        return {
+            "ok": True,
+            "effect": {
+                "kind": "effect",
+                "slot": idx + 1,
+                "effect": effect_index,
+                "name": self._safe_plugin_attr(effect, "name", name or plugin_name),
+                "display_name": name,
+                "plugin": plugin_name,
+                "path": str(plugin_path),
+            },
+            "slot": self._slot_payload(idx, slot),
+            "slots": self._slots_payload(),
+            "status": status,
+        }
+
+    def _master_fx_load_payload(
+        self,
+        plugin_path: Path,
+        plugin_name: str,
+        name: str | None,
+    ) -> dict[str, Any]:
+        self.host.load_effect(str(plugin_path), None, name)
+        effect_index = len(self.host.engine.master_effects)
+        effect = self.host.engine.master_effects[effect_index - 1]
+        status = self._status_payload()
+        return {
+            "ok": True,
+            "effect": {
+                "kind": "master_effect",
+                "effect": effect_index,
+                "name": self._safe_plugin_attr(effect, "name", name or plugin_name),
+                "display_name": name,
+                "plugin": plugin_name,
+                "path": str(plugin_path),
+            },
             "status": status,
         }
 

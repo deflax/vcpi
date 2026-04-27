@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import importlib
 import os
 import re
 import threading
@@ -10,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core import deps, session
+from core import deps
 from controllers.akai_midimix import MidiMixController
 from controllers.midi_input import MidiInputController
 from core.engine import AudioEngine
@@ -18,7 +19,6 @@ from core.link import LinkSync
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import InstrumentSlot, NUM_SLOTS
 from sampler import WavSamplerPlugin
-from core.sequencer import Sequencer
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,8 @@ class VcpiCore:
                  session_path: Optional[str] = None):
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
-        self.session_path = Path(session_path) if session_path else session.DEFAULT_SESSION_PATH
+        session_module = importlib.import_module("core.session")
+        self.session_path = Path(session_path) if session_path else session_module.DEFAULT_SESSION_PATH
         self.loaded_session_name: Optional[str] = None
         self.loaded_session_path: Optional[Path] = None
 
@@ -51,7 +52,8 @@ class VcpiCore:
 
         self.midi_inputs: list[MidiInputController] = []
         self.midimix = MidiMixController(self.engine)
-        self.sequencer = Sequencer(self)
+        sequencer_module = importlib.import_module("core.sequencer")
+        self.sequencer = sequencer_module.Sequencer(self)
 
         # Remember the most recently selected/active audio output device name.
         self._audio_output_name: Optional[str] = None
@@ -350,7 +352,7 @@ class VcpiCore:
         buf = self.engine.buffer_size
         channels = self.engine.output_channels
         duration = buf / sr
-        silence_midi: list = []
+        silence_midi: list[object] = []
         for _ in range(num_blocks):
             try:
                 plugin.process(
@@ -474,14 +476,23 @@ class VcpiCore:
             raise RuntimeError("pedalboard not installed")
         if deps.load_plugin is None:
             raise RuntimeError("pedalboard loader unavailable")
-        plugin = deps.load_plugin(path, initialization_timeout=0)
-        plugin._vcpi_path = path  # stash load path for session save
-        self._set_plugin_info_type(plugin, "Effect")
-        label = name or Path(path).stem
+        slot: InstrumentSlot | None = None
         if slot_index is not None:
+            if not 0 <= slot_index < NUM_SLOTS:
+                raise ValueError(f"slot must be 1-{NUM_SLOTS}")
             slot = self.engine.slots[slot_index]
             if slot is None:
                 raise ValueError(f"Slot {slot_index + 1} is empty")
+
+        plugin = deps.load_plugin(path, initialization_timeout=0)
+        if self._plugin_is_instrument(plugin):
+            raise ValueError(f"{path} is an instrument, not an effect")
+        plugin._vcpi_path = path  # stash load path for session save
+        self._set_plugin_info_type(plugin, "Effect")
+        label = name or Path(path).stem
+        if slot is not None:
+            if slot_index is None:
+                raise RuntimeError("slot index missing for slot effect")
             slot.effects.append(plugin)
             slot._effects_board = None  # invalidate cached Pedalboard
             logger.info("[FX] '%s' -> slot %d (%s)", label, slot_index + 1, slot.name)
@@ -489,6 +500,26 @@ class VcpiCore:
             self.engine.master_effects.append(plugin)
             self.engine._master_board = None  # invalidate cached Pedalboard
             logger.info("[FX] '%s' -> master bus", label)
+
+    @staticmethod
+    def _plugin_is_instrument(plugin: object) -> bool:
+        try:
+            is_instrument = getattr(plugin, "is_instrument", None)
+        except Exception:
+            is_instrument = None
+        if is_instrument is True:
+            return True
+
+        try:
+            category = getattr(plugin, "category", None)
+        except Exception:
+            category = None
+        if isinstance(category, str):
+            tokens = {token.strip().lower() for token in re.split(r"[|,;/]", category)}
+            if "instrument" in tokens:
+                return True
+
+        return False
 
     def remove_effect(self, slot_index: Optional[int], effect_index: int):
         if slot_index is not None:
@@ -660,13 +691,15 @@ class VcpiCore:
 
     def save_session(self, path: Optional[str] = None):
         """Save current state to a JSON session file."""
+        session_module = importlib.import_module("core.session")
         p = Path(path) if path else self.session_path
-        session.save(self, p)
+        session_module.save(self, p)
 
     def restore_session(self, path: Optional[str] = None):
         """Restore state from a JSON session file."""
+        session_module = importlib.import_module("core.session")
         p = Path(path) if path else self.session_path
-        session.restore(self, p)
+        session_module.restore(self, p)
 
     # -- shutdown ------------------------------------------------------------
 
