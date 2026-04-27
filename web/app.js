@@ -39,6 +39,13 @@
   const midiCutButton = document.getElementById('midi-cut-button');
   const midiRoutingStatus = document.getElementById('midi-routing-status');
   const midiRoutingList = document.getElementById('midi-routing-list');
+  const midiInputPortSelect = document.getElementById('midi-input-port-select');
+  const midiInputOpenButton = document.getElementById('midi-input-open-button');
+  const midiPortsStatus = document.getElementById('midi-ports-status');
+  const midiInputPortsList = document.getElementById('midi-input-ports-list');
+  const midiOpenInputsList = document.getElementById('midi-open-inputs-list');
+  const midiOutputPortsSection = document.getElementById('midi-output-ports-section');
+  const midiOutputPortsList = document.getElementById('midi-output-ports-list');
   const sessionNameInput = document.getElementById('session-name-input');
   const sessionSaveButton = document.getElementById('session-save-button');
   const sessionLoadButton = document.getElementById('session-load-button');
@@ -79,6 +86,7 @@
   let currentInfoMode = '';
   let latestTypedStatusData = {};
   let latestTypedSlotsData = {};
+  let latestMidiPortsData = {available: false, inputPorts: [], outputPorts: [], openInputs: [], message: 'MIDI input ports have not loaded yet.'};
   let latestSampleCatalogData = {available: false, packs: [], message: 'Sample catalog has not loaded yet.'};
   let latestFxCatalogData = {available: false, plugins: [], items: [], message: 'FX catalog has not loaded yet.'};
   let masterFxAvailableCount = 0;
@@ -123,6 +131,8 @@
     masterFxCatalogSelect.disabled = masterFxCatalogUnavailable;
     masterFxNameInput.disabled = disabled || !latestFxCatalogData.available || latestFxCatalogData.items.length === 0;
     masterFxCatalogLoadButton.disabled = masterFxCatalogUnavailable;
+    midiInputPortSelect.disabled = disabled || !latestMidiPortsData.available || latestMidiPortsData.inputPorts.length === 0;
+    midiInputOpenButton.disabled = disabled || !latestMidiPortsData.available || latestMidiPortsData.inputPorts.length === 0 || !midiInputPortSelect.value;
   }
 
   function updateSlotInfoControlsDisabled() {
@@ -192,6 +202,10 @@
 
   function setMidiRoutingStatus(message) {
     midiRoutingStatus.textContent = message;
+  }
+
+  function setMidiPortsStatus(message) {
+    midiPortsStatus.textContent = message;
   }
 
   function setMasterFxStatus(message) {
@@ -625,6 +639,14 @@
     return number;
   }
 
+  function normalizeMidiPortIndex(value) {
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 0) {
+      return null;
+    }
+    return number;
+  }
+
   function appendSelectOption(select, value, label) {
     const option = document.createElement('option');
     option.value = value;
@@ -901,6 +923,159 @@
     setFlowStatus('Signal-flow endpoint unavailable.');
   }
 
+  function midiPortName(entry, fallback) {
+    if (typeof entry === 'string') {
+      return entry.trim();
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return fallback;
+    }
+    const value = firstPresent(entry, ['name', 'port', 'label', 'device', 'client'], fallback);
+    return typeof value === 'string' && value.trim() ? value.trim() : String(value || fallback).trim();
+  }
+
+  function midiPortIndex(entry, fallbackIndex) {
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const value = firstPresent(entry, ['index', 'id', 'port_index', 'port'], fallbackIndex);
+      const index = normalizeMidiPortIndex(value);
+      if (index != null) {
+        return index;
+      }
+    }
+    return normalizeMidiPortIndex(fallbackIndex);
+  }
+
+  function normalizeMidiPortEntries(source) {
+    const rawEntries = Array.isArray(source)
+      ? source.map((entry, index) => ({entry, fallbackIndex: index}))
+      : source && typeof source === 'object'
+        ? Object.keys(source).map((key) => ({entry: source[key], fallbackIndex: key}))
+        : [];
+    const seen = new Set();
+    const entries = [];
+    rawEntries.forEach(({entry, fallbackIndex}) => {
+      const index = midiPortIndex(entry, fallbackIndex);
+      if (index == null || seen.has(index)) {
+        return;
+      }
+      seen.add(index);
+      entries.push({index, name: midiPortName(entry, `Port ${index}`)});
+    });
+    return entries.sort((left, right) => left.index - right.index);
+  }
+
+  function normalizeOpenMidiInputs(source, inputPorts) {
+    const rawInputs = Array.isArray(source)
+      ? source.map((entry, index) => ({entry, fallbackInputIndex: index}))
+      : source && typeof source === 'object'
+        ? Object.keys(source).map((key) => ({entry: source[key], fallbackInputIndex: key}))
+        : [];
+    const inputNameByPort = new Map(inputPorts.map((port) => [port.index, port.name]));
+    const seen = new Set();
+    const inputs = [];
+    rawInputs.forEach(({entry, fallbackInputIndex}) => {
+      const inputObject = asObject(entry);
+      const index = normalizeMidiPortIndex(firstPresent(inputObject, ['index', 'input_index', 'id'], fallbackInputIndex));
+      if (index == null || seen.has(index)) {
+        return;
+      }
+      const port = normalizeMidiPortIndex(firstPresent(inputObject, ['port', 'port_index', 'source'], null));
+      const fallbackName = port != null && inputNameByPort.has(port) ? inputNameByPort.get(port) : `Input ${index}`;
+      seen.add(index);
+      inputs.push({index, port, name: midiPortName(entry, fallbackName)});
+    });
+    return inputs.sort((left, right) => left.index - right.index);
+  }
+
+  function normalizeMidiPorts(data) {
+    const source = asObject(data);
+    const inputPorts = normalizeMidiPortEntries(firstPresent(source, ['inputs', 'input_ports', 'in_ports'], []));
+    const outputPorts = normalizeMidiPortEntries(firstPresent(source, ['outputs', 'output_ports', 'out_ports'], []));
+    const openInputs = normalizeOpenMidiInputs(firstPresent(source, ['open_inputs', 'inputs_open', 'open', 'active_inputs'], []), inputPorts);
+    const message = formatValue(firstPresent(source, ['message', 'error'], ''), '');
+    return {available: true, inputPorts, outputPorts, openInputs, message};
+  }
+
+  function makeMidiPortRow(label, detail, action) {
+    const item = document.createElement('div');
+    item.className = 'midi-port-item';
+    const text = document.createElement('div');
+    const strong = document.createElement('strong');
+    strong.textContent = label;
+    const span = document.createElement('span');
+    span.textContent = detail;
+    text.append(strong, span);
+    item.append(text);
+    if (action) {
+      item.append(action);
+    }
+    return item;
+  }
+
+  function renderMidiPorts(data) {
+    latestMidiPortsData = normalizeMidiPorts(data);
+    const previousValue = midiInputPortSelect.value;
+    midiInputPortSelect.textContent = '';
+    if (latestMidiPortsData.inputPorts.length === 0) {
+      appendSelectOption(midiInputPortSelect, '', 'No inputs reported');
+    } else {
+      latestMidiPortsData.inputPorts.forEach((port) => appendSelectOption(midiInputPortSelect, String(port.index), `[${port.index}] ${port.name}`));
+      if (latestMidiPortsData.inputPorts.some((port) => String(port.index) === previousValue)) {
+        midiInputPortSelect.value = previousValue;
+      }
+    }
+
+    midiInputPortsList.textContent = '';
+    if (latestMidiPortsData.inputPorts.length === 0) {
+      midiInputPortsList.append(makeEmptyState('No generic MIDI input ports reported.'));
+    } else {
+      latestMidiPortsData.inputPorts.forEach((port) => {
+        midiInputPortsList.append(makeMidiPortRow(`[${port.index}]`, port.name));
+      });
+    }
+
+    midiOpenInputsList.textContent = '';
+    if (latestMidiPortsData.openInputs.length === 0) {
+      midiOpenInputsList.append(makeEmptyState('No generic MIDI inputs are open.'));
+    } else {
+      latestMidiPortsData.openInputs.forEach((inputEntry) => {
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.className = 'typed-button typed-button--ghost typed-button--danger midi-port-close-button';
+        closeButton.textContent = 'Close';
+        closeButton.dataset.typedAction = 'true';
+        closeButton.addEventListener('click', () => closeMidiInput(inputEntry.index));
+        const detail = inputEntry.port == null ? inputEntry.name : `[${inputEntry.port}] ${inputEntry.name}`;
+        midiOpenInputsList.append(makeMidiPortRow(`Input ${inputEntry.index}`, detail, closeButton));
+      });
+    }
+
+    midiOutputPortsList.textContent = '';
+    midiOutputPortsSection.hidden = latestMidiPortsData.outputPorts.length === 0;
+    latestMidiPortsData.outputPorts.forEach((port) => {
+      midiOutputPortsList.append(makeMidiPortRow(`[${port.index}]`, port.name));
+    });
+
+    const inputText = latestMidiPortsData.inputPorts.length === 1 ? '1 input port' : `${latestMidiPortsData.inputPorts.length} input ports`;
+    const openText = latestMidiPortsData.openInputs.length === 1 ? '1 open generic input' : `${latestMidiPortsData.openInputs.length} open generic inputs`;
+    setMidiPortsStatus(latestMidiPortsData.message || `${inputText} · ${openText}`);
+    updateTypedControlsDisabled();
+  }
+
+  function renderMidiPortsUnavailable(message) {
+    latestMidiPortsData = {available: false, inputPorts: [], outputPorts: [], openInputs: [], message: message || 'MIDI port inventory is unavailable.'};
+    midiInputPortSelect.textContent = '';
+    appendSelectOption(midiInputPortSelect, '', 'Ports unavailable');
+    midiInputPortsList.textContent = '';
+    midiInputPortsList.append(makeEmptyState('MIDI input inventory is unavailable.'));
+    midiOpenInputsList.textContent = '';
+    midiOpenInputsList.append(makeEmptyState('Open generic MIDI inputs are unavailable.'));
+    midiOutputPortsList.textContent = '';
+    midiOutputPortsSection.hidden = true;
+    setMidiPortsStatus(latestMidiPortsData.message);
+    updateTypedControlsDisabled();
+  }
+
   function midiSlotLabel(slotNumber, slots) {
     const match = slots.find((slot) => normalizeMidiNumber(firstPresent(slot, ['slot', 'index', 'number', 'id'], null), 1, 8) === slotNumber);
     if (!match) {
@@ -1056,6 +1231,31 @@
     setMidiRoutingStatus(`Cutting MIDI channel ${channel}…`);
     const ok = await mutateTyped('/api/midi/cut', {channel});
     setMidiRoutingStatus(ok ? `Channel ${channel} cut. Status refreshed.` : 'MIDI cut failed. See typed API status above.');
+  }
+
+  async function openMidiInput() {
+    const port = normalizeMidiPortIndex(midiInputPortSelect.value);
+    if (port == null) {
+      setMidiPortsStatus('Choose a generic MIDI input port before opening.');
+      showTypedError('Choose a generic MIDI input port before opening.');
+      midiInputPortSelect.focus();
+      return;
+    }
+    setMidiPortsStatus(`Opening generic MIDI input port ${port}…`);
+    const ok = await mutateTyped('/api/midi/inputs', {port});
+    setMidiPortsStatus(ok ? `Generic MIDI input port ${port} opened. Port inventory refreshed.` : 'MIDI input open failed. See typed API status above.');
+  }
+
+  async function closeMidiInput(index) {
+    const inputIndex = normalizeMidiPortIndex(index);
+    if (inputIndex == null) {
+      setMidiPortsStatus('Choose a valid open MIDI input before closing.');
+      showTypedError('Choose a valid open MIDI input before closing.');
+      return;
+    }
+    setMidiPortsStatus(`Closing generic MIDI input ${inputIndex}…`);
+    const ok = await mutateTyped(`/api/midi/inputs/${encodeURIComponent(inputIndex)}/close`, {});
+    setMidiPortsStatus(ok ? `Generic MIDI input ${inputIndex} closed. Port inventory refreshed.` : 'MIDI input close failed. See typed API status above.');
   }
 
   function slotInfoText(data) {
@@ -2132,7 +2332,7 @@
     typedRefreshInFlight = true;
     updateTypedControlsDisabled();
     showTypedError('');
-    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, samples, FX catalog, sessions, audio devices, and signal flow…' : 'Refreshing status, slots, samples, FX catalog, sessions, audio devices, and signal flow…');
+    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, samples, FX catalog, sessions, audio devices, MIDI ports, and signal flow…' : 'Refreshing status, slots, samples, FX catalog, sessions, audio devices, MIDI ports, and signal flow…');
     if (source !== 'auto') {
       typedRefreshButton.textContent = 'Refreshing…';
     }
@@ -2146,6 +2346,7 @@
         fetchJson('/api/audio/devices', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/flow', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/fx/plugins', {headers: {'Accept': 'application/json'}}),
+        fetchJson('/api/midi/ports', {headers: {'Accept': 'application/json'}}),
       ]);
 
       const messages = [];
@@ -2170,6 +2371,12 @@
         renderFxCatalog(results[6].value);
       } else {
         renderFxCatalogUnavailable('Safe FX catalog is unavailable; FX load controls are disabled right now.');
+      }
+
+      if (results[7].status === 'fulfilled') {
+        renderMidiPorts(results[7].value);
+      } else {
+        renderMidiPortsUnavailable('MIDI port inventory is unavailable; generic input open and close controls are disabled right now.');
       }
 
       if (results[1].status === 'fulfilled') {
@@ -2512,6 +2719,8 @@
   linkStopButton.addEventListener('click', stopLink);
   midiLinkButton.addEventListener('click', linkMidiRoute);
   midiCutButton.addEventListener('click', cutMidiRoute);
+  midiInputPortSelect.addEventListener('change', updateTypedControlsDisabled);
+  midiInputOpenButton.addEventListener('click', openMidiInput);
   sessionNameInput.addEventListener('input', () => {
     sessionNameDirty = sessionNameInput.value.trim() !== '';
   });

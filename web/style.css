@@ -427,6 +427,94 @@ h2 {
   width: 100%;
 }
 
+.midi-ports-panel {
+  display: grid;
+  gap: var(--space-3);
+  width: 100%;
+  border-top: 1px solid var(--color-line);
+  padding-top: var(--space-4);
+}
+
+.midi-ports-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.midi-ports-header h3 {
+  margin: 0;
+  font-size: 0.96rem;
+  letter-spacing: 0.02em;
+}
+
+.midi-port-controls,
+.midi-port-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.midi-port-controls {
+  justify-content: flex-end;
+}
+
+.midi-port-control {
+  min-width: min(100%, 18rem);
+}
+
+.midi-port-section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.midi-port-label {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.76rem;
+  font-weight: 850;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.midi-port-list {
+  width: 100%;
+}
+
+.midi-port-item {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  min-width: min(100%, 18rem);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-panel-strong);
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+}
+
+.midi-port-item strong,
+.midi-port-item span {
+  display: block;
+}
+
+.midi-port-item strong {
+  color: var(--color-accent-strong);
+}
+
+.midi-port-item span {
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+}
+
+.midi-port-close-button {
+  padding: var(--space-2) var(--space-3);
+}
+
 .midi-routing-item {
   display: flex;
   gap: var(--space-2);
@@ -1031,6 +1119,11 @@ pre {
     .midi-routing-controls,
     .midi-routing-control,
     .midi-routing-list,
+    .midi-ports-header,
+    .midi-port-controls,
+    .midi-port-control,
+    .midi-port-list,
+    .midi-port-item,
     .master-fx-controls,
     .master-fx-control,
     .session-actions,

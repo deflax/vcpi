@@ -163,6 +163,39 @@
         <div id="midi-routing-list" class="midi-routing-list" aria-live="polite">
           <p class="empty-state">MIDI routing has not loaded yet.</p>
         </div>
+        <div class="midi-ports-panel" aria-labelledby="midi-ports-title">
+          <div class="midi-ports-header">
+            <div>
+              <h3 id="midi-ports-title">Generic MIDI inputs</h3>
+              <p id="midi-ports-status" class="typed-refresh-status" aria-live="polite">MIDI input ports have not loaded yet.</p>
+            </div>
+            <div class="midi-port-controls">
+              <label class="midi-routing-control midi-port-control" for="midi-input-port-select">
+                <span>Input</span>
+                <select id="midi-input-port-select" data-typed-action="true" aria-label="Select generic MIDI input port">
+                  <option value="">Ports loading…</option>
+                </select>
+              </label>
+              <button id="midi-input-open-button" type="button" class="typed-button" data-typed-action="true">Open</button>
+            </div>
+          </div>
+          <div class="midi-port-section" aria-labelledby="midi-input-ports-label">
+            <p id="midi-input-ports-label" class="midi-port-label">Available inputs</p>
+            <div id="midi-input-ports-list" class="midi-port-list" aria-live="polite">
+              <p class="empty-state">Input inventory has not loaded yet.</p>
+            </div>
+          </div>
+          <div class="midi-port-section" aria-labelledby="midi-open-inputs-label">
+            <p id="midi-open-inputs-label" class="midi-port-label">Open generic inputs</p>
+            <div id="midi-open-inputs-list" class="midi-port-list" aria-live="polite">
+              <p class="empty-state">Open input state has not loaded yet.</p>
+            </div>
+          </div>
+          <div id="midi-output-ports-section" class="midi-port-section" aria-labelledby="midi-output-ports-label" hidden>
+            <p id="midi-output-ports-label" class="midi-port-label">Output ports</p>
+            <div id="midi-output-ports-list" class="midi-port-list" aria-live="polite"></div>
+          </div>
+        </div>
       </div>
 
       <div class="session-card" aria-labelledby="session-control-title">
