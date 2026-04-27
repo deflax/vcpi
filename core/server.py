@@ -36,6 +36,7 @@ from typing import Any, Iterator, NamedTuple
 from core import deps
 from core.host import VcpiCore
 from core.cli import HostCLI
+from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import NUM_SLOTS, InstrumentSlot
 from core.paths import DEFAULT_SOCK_PATH
 from graph.plugin_info import render_plugin_info
@@ -436,6 +437,23 @@ class VcpiServer:
                     "status": self._status_payload(),
                     "slots": self._slots_payload(),
                 }
+            case "midi.ports":
+                return self._midi_ports_payload()
+            case "midi.input.open":
+                ports = list_midi_input_ports()
+                port = self._midi_input_port_from_payload(payload, ports)
+                self.host.open_midi_input(port)
+                result = self._midi_ports_payload(ports)
+                result["opened"] = {"port": port, "name": ports[port]}
+                return result
+            case "midi.input.close":
+                open_inputs = self._open_midi_inputs_payload()
+                index = self._midi_input_close_index_from_payload(payload, open_inputs)
+                closed = dict(open_inputs[index - 1])
+                self.host.close_midi_input(index - 1)
+                result = self._midi_ports_payload()
+                result["closed"] = closed
+                return result
             case "slot.gain":
                 idx = self._slot_index_from_payload(payload)
                 gain = self._gain_from_payload(payload)
@@ -522,6 +540,28 @@ class VcpiServer:
             raise _JsonOperationError("channel must be an integer 1-16")
         if not 1 <= value <= 16:
             raise _JsonOperationError("channel must be 1-16")
+        return value
+
+    @staticmethod
+    def _midi_input_port_from_payload(payload: dict[str, Any], ports: list[str]) -> int:
+        if set(payload) != {"port"}:
+            raise _JsonOperationError("MIDI input open payload must contain only port")
+        value = payload.get("port")
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise _JsonOperationError("port must be an integer 0-N")
+        if not 0 <= value < len(ports):
+            raise _JsonOperationError("port index is out of range")
+        return value
+
+    @staticmethod
+    def _midi_input_close_index_from_payload(payload: dict[str, Any], open_inputs: list[dict[str, Any]]) -> int:
+        if set(payload) != {"index"}:
+            raise _JsonOperationError("MIDI input close payload must contain only index")
+        value = payload.get("index")
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise _JsonOperationError("index must be an integer 1-N")
+        if not 1 <= value <= len(open_inputs):
+            raise _JsonOperationError("MIDI input index is out of range")
         return value
 
     @staticmethod
@@ -1688,6 +1728,35 @@ class VcpiServer:
             "current": current,
             "default_device": default_device,
             "devices": devices,
+        }
+
+    def _open_midi_inputs_payload(self) -> list[dict[str, Any]]:
+        names = self.host.midi_input_names
+        return [
+            {"index": index, "name": name}
+            for index, name in enumerate(names, start=1)
+        ]
+
+    def _midi_ports_payload(self, input_ports: list[str] | None = None) -> dict[str, Any]:
+        if input_ports is None:
+            input_ports = list_midi_input_ports()
+        output_ports = list_midi_output_ports()
+        status = self._status_payload()
+        return {
+            "ok": True,
+            "inputs": [
+                {"id": index, "name": name}
+                for index, name in enumerate(input_ports)
+            ],
+            "outputs": [
+                {"id": index, "name": name}
+                for index, name in enumerate(output_ports)
+            ],
+            "open_inputs": self._open_midi_inputs_payload(),
+            "mixer_input": self.host.mixer_midi_name,
+            "mixer_output": self.host.mixer_midi_out_name,
+            "routing": status["midi"]["routing"],
+            "status": status,
         }
 
     @staticmethod

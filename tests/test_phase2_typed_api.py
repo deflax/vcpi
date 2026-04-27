@@ -16,7 +16,7 @@ import threading
 import unittest
 from unittest import mock
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -25,8 +25,22 @@ if str(ROOT) not in sys.path:
 web = importlib.import_module("core.web")
 try:
     server = importlib.import_module("core.server")
-except ModuleNotFoundError:
-    server = None
+except ModuleNotFoundError as exc:
+    if exc.name == "numpy":
+        fake_numpy = ModuleType("numpy")
+        for name, value in {
+            "ndarray": object,
+            "float32": float,
+            "float64": float,
+            "int32": int,
+            "int64": int,
+            "uint8": int,
+        }.items():
+            setattr(fake_numpy, name, value)
+        sys.modules["numpy"] = fake_numpy
+        server = importlib.import_module("core.server")
+    else:
+        server = None
 
 
 class FakeSlot:
@@ -116,6 +130,9 @@ class FakeHost:
         self.mixer_midi_name: str | None = "MIDI Mix"
         self.mixer_midi_out_name: str | None = "MIDI Mix Out"
         self.audio_output_name: str = "Built-in Output"
+        self.available_midi_input_ports: list[str] = []
+        self.opened_midi_ports: list[int] = []
+        self.closed_midi_indices: list[int] = []
         self.started_with: object | None = None
         self.refreshed_slots: list[list[int] | None] = []
         self.save_calls: list[str | None] = []
@@ -215,6 +232,19 @@ class FakeHost:
             previous_slot = self.engine.slots[previous]
             if previous_slot is not None:
                 previous_slot.midi_channels.discard(midi_channel)
+
+    def open_midi_input(self, port_index: int) -> SimpleNamespace:
+        self.opened_midi_ports.append(port_index)
+        if 0 <= port_index < len(self.available_midi_input_ports):
+            name = self.available_midi_input_ports[port_index]
+        else:
+            name = f"MIDI In {port_index}"
+        self.midi_input_names.append(name)
+        return SimpleNamespace(port_name=name)
+
+    def close_midi_input(self, index: int) -> None:
+        self.closed_midi_indices.append(index)
+        del self.midi_input_names[index]
 
 
 class TypedDaemonApiContractTests(unittest.TestCase):
@@ -1359,6 +1389,139 @@ class TypedDaemonApiContractTests(unittest.TestCase):
         self.assertEqual(result["route"], {"channel": 16, "slot": None})
         self.assertEqual(result["status"]["midi"]["routing"], {"1": 1, "10": 1})
 
+    def test_json_midi_ports_lists_available_and_open_input_state(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        host.midi_input_names = ["BeatStep", "Keyboard"]
+        daemon = server.VcpiServer(host)
+
+        with mock.patch.object(server, "list_midi_input_ports", return_value=["BeatStep", "Keyboard", "MIDI Mix"]), mock.patch.object(
+            server,
+            "list_midi_output_ports",
+            return_value=["MIDI Mix Out"],
+        ):
+            result = daemon._handle_json_operation("midi.ports", {})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["inputs"],
+            [
+                {"id": 0, "name": "BeatStep"},
+                {"id": 1, "name": "Keyboard"},
+                {"id": 2, "name": "MIDI Mix"},
+            ],
+        )
+        self.assertEqual(result["outputs"], [{"id": 0, "name": "MIDI Mix Out"}])
+        self.assertEqual(result["open_inputs"], [{"index": 1, "name": "BeatStep"}, {"index": 2, "name": "Keyboard"}])
+        self.assertEqual(result["mixer_input"], "MIDI Mix")
+        self.assertEqual(result["mixer_output"], "MIDI Mix Out")
+        self.assertEqual(result["routing"], {"1": 1, "10": 1})
+        self.assertEqual(result["status"]["midi"]["inputs"], ["BeatStep", "Keyboard"])
+
+    def test_json_midi_input_open_validates_port_and_returns_updated_inventory(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        host.midi_input_names = []
+        host.available_midi_input_ports = ["BeatStep", "Keyboard"]
+        daemon = server.VcpiServer(host)
+
+        with mock.patch.object(server, "list_midi_input_ports", return_value=["BeatStep", "Keyboard"]), mock.patch.object(
+            server,
+            "list_midi_output_ports",
+            return_value=[],
+        ):
+            result = daemon._handle_json_operation("midi.input.open", {"port": 1})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.opened_midi_ports, [1])
+        self.assertEqual(result["opened"], {"port": 1, "name": "Keyboard"})
+        self.assertEqual(result["open_inputs"], [{"index": 1, "name": "Keyboard"}])
+        self.assertEqual(result["status"]["midi"]["inputs"], ["Keyboard"])
+
+    def test_json_midi_input_open_rejects_invalid_payloads_before_core_call(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        cases = [
+            ({}, "only port"),
+            ({"port": 0, "name": "Keyboard"}, "only port"),
+            ({"port": -1}, "out of range"),
+            ({"port": 1}, "out of range"),
+            ({"port": "0"}, "port must be an integer"),
+            ({"port": True}, "port must be an integer"),
+        ]
+
+        for payload, message in cases:
+            with self.subTest(payload=payload):
+                host = FakeHost()
+                daemon = server.VcpiServer(host)
+                with mock.patch.object(server, "list_midi_input_ports", return_value=["BeatStep"]):
+                    response = json.loads(
+                        daemon._run_json_request(
+                            json.dumps({"op": "midi.input.open", "payload": payload}),
+                            "test",
+                        )
+                    )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertIn(message, response["error"])
+                self.assertEqual(host.opened_midi_ports, [])
+                self.assertEqual(host.midi_input_names, ["BeatStep"])
+
+    def test_json_midi_input_close_validates_index_and_returns_updated_inventory(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        host = FakeHost()
+        host.midi_input_names = ["BeatStep", "Keyboard"]
+        daemon = server.VcpiServer(host)
+
+        with mock.patch.object(server, "list_midi_input_ports", return_value=["BeatStep", "Keyboard"]), mock.patch.object(
+            server,
+            "list_midi_output_ports",
+            return_value=[],
+        ):
+            result = daemon._handle_json_operation("midi.input.close", {"index": 2})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(host.closed_midi_indices, [1])
+        self.assertEqual(result["closed"], {"index": 2, "name": "Keyboard"})
+        self.assertEqual(result["open_inputs"], [{"index": 1, "name": "BeatStep"}])
+        self.assertEqual(result["status"]["midi"]["inputs"], ["BeatStep"])
+
+    def test_json_midi_input_close_rejects_invalid_payloads_before_core_call(self) -> None:
+        if server is None:
+            self.skipTest("core.server import needs optional native dependencies in this checkout")
+
+        cases = [
+            ({}, "only index"),
+            ({"index": 1, "extra": True}, "only index"),
+            ({"index": 0}, "out of range"),
+            ({"index": 2}, "out of range"),
+            ({"index": "1"}, "index must be an integer"),
+            ({"index": False}, "index must be an integer"),
+        ]
+
+        for payload, message in cases:
+            with self.subTest(payload=payload):
+                host = FakeHost()
+                daemon = server.VcpiServer(host)
+                response = json.loads(
+                    daemon._run_json_request(
+                        json.dumps({"op": "midi.input.close", "payload": payload}),
+                        "test",
+                    )
+                )
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["status"], 400)
+                self.assertIn(message, response["error"])
+                self.assertEqual(host.closed_midi_indices, [])
+                self.assertEqual(host.midi_input_names, ["BeatStep"])
+
     def test_json_midi_link_and_cut_reject_invalid_channel_and_slot_payloads(self) -> None:
         if server is None:
             self.skipTest("core.server import needs optional native dependencies in this checkout")
@@ -1917,6 +2080,126 @@ class WebSafetyTests(unittest.TestCase):
                     daemon_timeout=1.0,
                 )
                 send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_midi_ports_route_maps_to_read_only_operation(self) -> None:
+        handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+        handler.path = "/api/midi/ports"
+        handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+        payload: dict[str, object] = {"ok": True, "inputs": [], "outputs": [], "open_inputs": []}
+
+        with mock.patch.object(
+            web,
+            "execute_json_operation",
+            return_value=SimpleNamespace(payload=payload),
+        ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json, mock.patch.object(
+            web.VcpiWebHandler,
+            "_validate_post_security",
+        ) as validate_post_security:
+            handler.do_GET()
+
+        validate_post_security.assert_not_called()
+        execute_json_operation.assert_called_once_with(
+            "midi.ports",
+            {},
+            Path("/tmp/vcpi.sock"),
+            daemon_timeout=1.0,
+        )
+        send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_midi_input_routes_map_to_open_and_close_operations(self) -> None:
+        cases = [
+            ("/api/midi/inputs", {"port": 0}, "midi.input.open", {"port": 0}),
+            ("/api/midi/inputs/2/close", {}, "midi.input.close", {"index": 2}),
+        ]
+
+        for path, body, operation, expected_payload in cases:
+            with self.subTest(path=path):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+                payload: dict[str, object] = {"ok": True, "open_inputs": []}
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_validate_post_security",
+                    return_value=None,
+                ), mock.patch.object(
+                    web,
+                    "execute_json_operation",
+                    return_value=SimpleNamespace(payload=payload),
+                ) as execute_json_operation, mock.patch.object(web, "_send_json") as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_called_once_with(
+                    operation,
+                    expected_payload,
+                    Path("/tmp/vcpi.sock"),
+                    daemon_timeout=1.0,
+                )
+                send_json.assert_called_once_with(handler, web.HTTPStatus.OK, payload)
+
+    def test_typed_web_midi_input_routes_reject_invalid_payload_before_daemon(self) -> None:
+        cases = [
+            ("/api/midi/inputs", {}),
+            ("/api/midi/inputs", {"port": -1}),
+            ("/api/midi/inputs", {"port": "0"}),
+            ("/api/midi/inputs", {"port": True}),
+            ("/api/midi/inputs", {"port": 0, "name": "Keyboard"}),
+            ("/api/midi/inputs/0/close", {}),
+            ("/api/midi/inputs/nope/close", {}),
+            ("/api/midi/inputs/1/open", {}),
+            ("/api/midi/inputs/1/close", {"unexpected": True}),
+        ]
+
+        for path, body in cases:
+            with self.subTest(path=path, body=body):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_read_secure_optional_json_body",
+                    return_value=body,
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                self.assertEqual(send_json.call_args.args[0], handler)
+                self.assertEqual(send_json.call_args.args[1], web.HTTPStatus.BAD_REQUEST)
+
+    def test_typed_web_midi_input_routes_require_csrf(self) -> None:
+        cases = ["/api/midi/inputs", "/api/midi/inputs/1/close"]
+
+        for path in cases:
+            with self.subTest(path=path):
+                handler = web.VcpiWebHandler.__new__(web.VcpiWebHandler)
+                handler.path = path
+                handler.server = SimpleNamespace(sock_path=Path("/tmp/vcpi.sock"), daemon_timeout=1.0)
+
+                with mock.patch.object(
+                    web.VcpiWebHandler,
+                    "_validate_post_security",
+                    side_effect=PermissionError("missing or invalid CSRF token"),
+                ), mock.patch.object(web, "execute_json_operation") as execute_json_operation, mock.patch.object(
+                    web,
+                    "_send_json",
+                ) as send_json:
+                    handler.do_POST()
+
+                execute_json_operation.assert_not_called()
+                send_json.assert_called_once_with(
+                    handler,
+                    web.HTTPStatus.FORBIDDEN,
+                    {"ok": False, "error": "missing or invalid CSRF token"},
+                )
 
     def test_typed_web_midi_routes_reject_invalid_payload_before_daemon(self) -> None:
         cases = [

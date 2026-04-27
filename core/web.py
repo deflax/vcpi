@@ -41,6 +41,7 @@ SLOT_FX_LOAD_RE = re.compile(r"^/api/slots/([^/]+)/fx$")
 SLOT_FX_CLEAR_RE = re.compile(r"^/api/slots/([^/]+)/fx/([^/]+)/clear$")
 MASTER_FX_PARAMS_RE = re.compile(r"^/api/master/fx/([^/]+)/params$")
 MASTER_FX_CLEAR_RE = re.compile(r"^/api/master/fx/([^/]+)/clear$")
+MIDI_INPUT_CLOSE_RE = re.compile(r"^/api/midi/inputs/([^/]+)/close$")
 CSRF_META_TAG = "__VCPI_CSRF_META__"
 MIN_BPM = 20.0
 MAX_BPM = 300.0
@@ -495,6 +496,8 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_json_get("sessions")
         elif path == "/api/audio/devices":
             self._handle_json_get("audio.devices")
+        elif path == "/api/midi/ports":
+            self._handle_json_get("midi.ports")
         elif path == "/api/flow":
             self._handle_json_get("flow")
         elif path.startswith("/api/master/fx/"):
@@ -522,6 +525,10 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             self._handle_midi_link()
         elif path == "/api/midi/cut":
             self._handle_midi_cut()
+        elif path == "/api/midi/inputs":
+            self._handle_midi_input_open()
+        elif path.startswith("/api/midi/inputs/"):
+            self._handle_midi_input_close(path)
         elif path == "/api/master/gain":
             self._handle_master_gain()
         elif path == "/api/master/fx":
@@ -778,6 +785,43 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             return
 
         self._handle_json_post("midi.cut", payload)
+
+    def _handle_midi_input_open(self) -> None:
+        try:
+            payload = self._read_secure_optional_json_body()
+            if payload is None:
+                return
+            self._validate_midi_input_open_payload(payload)
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("midi.input.open", payload)
+
+    def _handle_midi_input_close(self, path: str) -> None:
+        match = MIDI_INPUT_CLOSE_RE.fullmatch(path)
+        if match is None:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": "MIDI input close route must be /api/midi/inputs/{1-N}/close"})
+            return
+
+        try:
+            index = self._validate_midi_input_close_index(match.group(1))
+            body = self._read_secure_optional_json_body()
+            if body is None:
+                return
+            self._validate_empty_payload(body, "MIDI input close payload must be empty")
+            payload: dict[str, object] = {"index": index}
+        except json.JSONDecodeError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+        except PermissionError as exc:
+            _send_json(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            _send_json(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return
+
+        self._handle_json_post("midi.input.close", payload)
 
     def _handle_master_gain(self) -> None:
         try:
@@ -1148,6 +1192,26 @@ class VcpiWebHandler(BaseHTTPRequestHandler):
             raise ValueError("slot must be an integer 1-8")
         if not 1 <= slot <= 8:
             raise ValueError("slot must be 1-8")
+
+    @staticmethod
+    def _validate_midi_input_open_payload(payload: dict[str, object]) -> None:
+        if set(payload) != {"port"}:
+            raise ValueError("MIDI input open payload must contain only port")
+        port = payload.get("port")
+        if isinstance(port, bool) or not isinstance(port, int):
+            raise ValueError("port must be an integer >= 0")
+        if port < 0:
+            raise ValueError("port must be >= 0")
+
+    @staticmethod
+    def _validate_midi_input_close_index(raw_index: str) -> int:
+        try:
+            index = int(raw_index)
+        except ValueError as exc:
+            raise ValueError("index must be an integer >= 1") from exc
+        if index < 1:
+            raise ValueError("index must be >= 1")
+        return index
 
     @staticmethod
     def _validate_optional_bool_payload(payload: dict[str, object], key: str) -> None:
