@@ -38,10 +38,10 @@ python main.py web
 vcpi runs with a separate server (`serve`) and multiple clients. Use `cli`
 for the terminal client or `web` for the local browser command console. The
 typed JSON API covers status, slots, built-in WAV sample catalog and loading,
-signal-flow diagnostics, slot plugin info, instrument, slot FX, and master FX
-parameter controls, audio transport, audio-device listing, MIDI channel routing,
-slot mixer controls, and loaded-slot audition notes while keeping the command
-console available.
+safe bundled FX catalog and loading, signal-flow diagnostics, slot plugin info,
+instrument, slot FX, and master FX parameter controls, audio transport,
+audio-device listing, MIDI channel routing, slot mixer controls, and loaded-slot
+audition notes while keeping the command console available.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcli` with `audio start [device]`.
@@ -366,14 +366,16 @@ the tab is hidden and waits for typed control updates to finish; the Refresh
 button still performs an immediate read. Empty slot cards expose built-in WAV
 sampler loading only: Pack and Sample selectors come from `/api/samples`, Name
 is optional display text, and Load calls `/api/slots/<slot>/wav`. Loaded slot
-cards include an Unload action that calls the typed slot clear endpoint, an Info
-action that opens a read-only panel backed by `/api/slots/<slot>/info`, a Params
-action that opens a parameter inspector backed by `/api/slots/<slot>/params`,
-and an Audition control that sends one short test note to that loaded slot. The
-Params panel can also select Master FX params from loaded master effects. It
-shows inline Apply controls only for supported numeric instrument, slot FX, and
-master FX parameters, plus Remove controls for visible slot FX groups and the
-selected master FX.
+cards include catalog-only Add FX controls backed by `/api/fx/plugins` and
+`/api/slots/<slot>/fx`, an Unload action that calls the typed slot clear
+endpoint, an Info action that opens a read-only panel backed by
+`/api/slots/<slot>/info`, a Params action that opens a parameter inspector backed
+by `/api/slots/<slot>/params`, and an Audition control that sends one short test
+note to that loaded slot. The Params panel can also select Master FX params from
+loaded master effects, and the master FX area has catalog-only Add FX controls
+backed by `/api/fx/plugins` and `/api/master/fx`. It shows inline Apply controls
+only for supported numeric instrument, slot FX, and master FX parameters, plus
+Remove controls for visible slot FX groups and the selected master FX.
 The signal-flow panel displays the current ASCII mixer diagram from the read-only
 flow endpoint. The session field can suggest saved sessions from the picker,
 while manual safe-name entry remains supported. The audio-device picker uses the
@@ -395,11 +397,14 @@ Expected typed endpoints:
 | `GET` | `/api/slots` | Return all 8 slots with name, source type, route channels, gain, mute, solo, and loaded effect count |
 | `GET` | `/api/samples` | Return the built-in WAV sample catalog grouped by safe pack and sample names for the dashboard Pack and Sample selectors |
 | `POST` | `/api/slots/<slot>/wav` | Load one built-in WAV sample into slot 1-8 with JSON `{"pack": "909", "sample": "bassdrum", "name": "Kick"}`. `name` is optional display text. Requires CSRF. |
+| `GET` | `/api/fx/plugins` | Return the read-only safe bundled FX catalog from top-level `vst3/*.vst3` entries for Add FX controls |
+| `POST` | `/api/slots/<slot>/fx` | Load one safe bundled effect into a loaded slot insert chain with JSON `{"plugin": "DragonflyRoomReverb", "name": "Room"}`. `name` is optional display text. Requires CSRF. |
 | `GET` | `/api/slots/<slot>/info` | Return read-only diagnostics for one slot as `{"ok": true, "slot": {...}, "instrument": {...}, "effects": [...], "rendered": "..."}`. Empty slots return `instrument: null`, an empty effects list, and a `message`. |
 | `GET` | `/api/slots/<slot>/params` | Return read-only instrument and slot insert FX parameter groups for a loaded slot as `{"ok": true, "slot": {...}, "parameters": [...], "effects": [...], "count": 3}`. Empty slots and invalid slot numbers are rejected. |
 | `POST` | `/api/slots/<slot>/params` | Set one supported numeric instrument parameter on a loaded slot with JSON `{"name": "cutoff", "value": 0.42}` or one slot insert FX parameter with JSON `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}`. Requires CSRF. |
 | `POST` | `/api/slots/<slot>/fx/<fx>/clear` | Remove one already-loaded slot insert FX with empty JSON `{}`. `<slot>` is 1-8, `<fx>` is a 1-based effect index, and the request requires CSRF. |
 | `GET` | `/api/master/fx/<fx>/params` | Return read-only parameter metadata for one loaded master FX, where `<fx>` is a 1-based effect index. Unloaded or invalid master FX indexes are rejected. |
+| `POST` | `/api/master/fx` | Load one safe bundled effect into the master FX chain with JSON `{"plugin": "DragonflyRoomReverb", "name": "Room"}`. `name` is optional display text. Requires CSRF. |
 | `POST` | `/api/master/fx/<fx>/params` | Set one supported numeric parameter on a loaded master FX with JSON `{"name": "mix", "value": 0.5}`. Requires CSRF. |
 | `POST` | `/api/master/fx/<fx>/clear` | Remove one already-loaded master FX with empty JSON `{}`. `<fx>` is a 1-based effect index, and the request requires CSRF. |
 | `GET` | `/api/sessions` | Return saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
@@ -426,8 +431,19 @@ Built-in WAV sampler loading is intentionally narrow. `GET /api/samples` only
 lists WAV files from bundled sample packs. `POST /api/slots/<slot>/wav` accepts
 safe `pack` and `sample` names from that catalog plus an optional display
 `name`; it does not accept arbitrary paths, absolute paths, nested paths, or
-dotfiles. VST and VCV instrument loading, slot FX loading, master FX loading,
-and FX reorder remain CLI-only and out of scope for these typed sampler routes.
+dotfiles. VST and VCV instrument loading remain CLI-only and out of scope for
+these typed sampler routes.
+
+Safe typed FX loading is also intentionally narrow. `GET /api/fx/plugins` is a
+read-only catalog of bundled effect plugins found only as top-level
+`vst3/*.vst3` entries. `POST /api/slots/<slot>/fx` and `POST /api/master/fx` are
+state-changing and require the CSRF token. They accept a safe catalog plugin
+name or stem, for example `{"plugin": "DragonflyRoomReverb", "name": "Room"}`;
+`name` is optional display text. They do not accept arbitrary paths, absolute
+paths, nested paths, dotfiles, environment or system plugin directories, VCV
+patches, instruments, or FX reorder requests. The backend checks the resolved
+plugin type and rejects non-effect plugins before mutating slot or master state.
+FX reorder remains CLI-only and out of scope for the typed browser API.
 
 Session save and load only accept a safe session `name`, for example `demo` or
 `demo.json`. The name is normalized to `sessions/<name>.json`. `GET
@@ -435,9 +451,9 @@ Session save and load only accept a safe session `name`, for example `demo` or
 the browser picker. Arbitrary paths, absolute paths, nested paths, dotfiles, and
 spaces are still not supported.
 
-`GET /api/samples`, `GET /api/audio/devices`, `GET /api/flow`, `GET
-/api/slots/<slot>/info`, `GET /api/slots/<slot>/params`, and `GET
-/api/master/fx/<fx>/params` are read-only and do not need a CSRF token. The
+`GET /api/samples`, `GET /api/fx/plugins`, `GET /api/audio/devices`, `GET
+/api/flow`, `GET /api/slots/<slot>/info`, `GET /api/slots/<slot>/params`, and
+`GET /api/master/fx/<fx>/params` are read-only and do not need a CSRF token. The
 audio-device endpoint lists only devices with output channels. If `sounddevice`
 is unavailable or device querying fails in the daemon, the endpoint returns
 `{"ok": true, "available": false, "devices": []}` so the browser can keep the
@@ -461,8 +477,9 @@ When metadata provides numeric minimum or maximum values, the range is enforced.
 `POST /api/slots/<slot>/fx/<fx>/clear` is also state-changing and requires the
 CSRF token. It removes one already-loaded slot insert FX, where `<slot>` is 1-8
 and `<fx>` is a 1-based effect index. Send an empty JSON body `{}`. Slot FX load
-and reorder actions remain CLI-only and out of scope for the typed browser API;
-remove is available only for already-loaded slot FX.
+uses `/api/slots/<slot>/fx` for safe bundled catalog effects only. Slot FX
+reorder remains CLI-only and out of scope for the typed browser API. Remove is
+available only for already-loaded slot FX.
 
 `POST /api/master/fx/<fx>/params` is state-changing and requires the CSRF token.
 It edits one parameter on an already-loaded master FX, where `<fx>` is a 1-based
@@ -472,9 +489,10 @@ numbers. Boolean, string, and enum parameters are not supported. When metadata
 provides numeric minimum or maximum values, the range is enforced.
 `POST /api/master/fx/<fx>/clear` is also state-changing and requires the CSRF
 token. It removes one already-loaded master FX, where `<fx>` is a 1-based effect
-index. Send an empty JSON body `{}`. Master FX load and reorder actions remain
-CLI-only and out of scope for the typed browser API; remove is available only
-for already-loaded master FX.
+index. Send an empty JSON body `{}`. Master FX load uses `/api/master/fx` for
+safe bundled catalog effects only. Master FX reorder remains CLI-only and out of
+scope for the typed browser API. Remove is available only for already-loaded
+master FX.
 
 Tempo and Link BPM payloads must be numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected before reaching the daemon.
@@ -497,6 +515,13 @@ loads only a built-in WAV sample into the selected slot. Send JSON with safe
 `pack` and `sample` names, and optionally `name` for the display label. The route
 does not load VST plugins, VCV patches, slot FX, or master FX.
 
+`POST /api/slots/<slot>/fx` and `POST /api/master/fx` are state-changing and
+require the CSRF token. They load only bundled top-level `vst3/*.vst3` catalog
+effects selected by safe plugin name or stem. Send JSON such as
+`{"plugin": "DragonflyRoomReverb", "name": "Room"}`. The optional `name` value
+sets the display label. These routes do not load arbitrary paths, environment or
+system plugins, VCV patches, instruments, nested paths, dotfiles, or reorder FX.
+
 Example:
 
 ```bash
@@ -510,6 +535,7 @@ TOKENPY
 curl http://127.0.0.1:8765/api/status
 curl http://127.0.0.1:8765/api/slots
 curl http://127.0.0.1:8765/api/samples
+curl http://127.0.0.1:8765/api/fx/plugins
 curl http://127.0.0.1:8765/api/sessions
 curl http://127.0.0.1:8765/api/audio/devices
 curl http://127.0.0.1:8765/api/flow
@@ -532,6 +558,11 @@ curl -X POST http://127.0.0.1:8765/api/slots/2/wav \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"pack": "909", "sample": "bassdrum", "name": "Kick"}'
 
+curl -X POST http://127.0.0.1:8765/api/slots/1/fx \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"plugin": "DragonflyRoomReverb", "name": "Room"}'
+
 curl -X POST http://127.0.0.1:8765/api/slots/1/params \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
@@ -551,6 +582,11 @@ curl -X POST http://127.0.0.1:8765/api/master/fx/1/params \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{"name": "mix", "value": 0.5}'
+
+curl -X POST http://127.0.0.1:8765/api/master/fx \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"plugin": "DragonflyRoomReverb", "name": "Room"}'
 
 curl -X POST http://127.0.0.1:8765/api/master/fx/1/clear \
   -H "Content-Type: application/json" \
