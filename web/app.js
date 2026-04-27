@@ -24,6 +24,10 @@
   const masterFxLoadButton = document.getElementById('master-fx-load-button');
   const masterFxRemoveButton = document.getElementById('master-fx-remove-button');
   const masterFxStatus = document.getElementById('master-fx-status');
+  const masterFxCatalogForm = document.createElement('form');
+  const masterFxCatalogSelect = document.createElement('select');
+  const masterFxNameInput = document.createElement('input');
+  const masterFxCatalogLoadButton = document.createElement('button');
   const tempoBpmInput = document.getElementById('tempo-bpm-input');
   const tempoSetButton = document.getElementById('tempo-set-button');
   const linkStartButton = document.getElementById('link-start-button');
@@ -76,6 +80,7 @@
   let latestTypedStatusData = {};
   let latestTypedSlotsData = {};
   let latestSampleCatalogData = {available: false, packs: [], message: 'Sample catalog has not loaded yet.'};
+  let latestFxCatalogData = {available: false, plugins: [], items: [], message: 'FX catalog has not loaded yet.'};
   let masterFxAvailableCount = 0;
 
   const typedRefreshVisibleIntervalMs = 10000;
@@ -100,9 +105,24 @@
         loadButton.disabled = disabled || noSampleSelected;
       }
     });
+    document.querySelectorAll('.slot-fx-load-form').forEach((fxForm) => {
+      const fxSelect = fxForm.querySelector('.slot-fx-select');
+      const loadButton = fxForm.querySelector('.slot-fx-load-button');
+      const noFxSelected = !fxSelect || !fxSelect.value;
+      if (fxSelect) {
+        fxSelect.disabled = disabled || noFxSelected;
+      }
+      if (loadButton) {
+        loadButton.disabled = disabled || noFxSelected;
+      }
+    });
     const masterFxUnavailable = disabled || masterFxAvailableCount === 0 || selectedMasterFx() == null;
     masterFxLoadButton.disabled = masterFxUnavailable;
     masterFxRemoveButton.disabled = masterFxUnavailable;
+    const masterFxCatalogUnavailable = disabled || !latestFxCatalogData.available || latestFxCatalogData.items.length === 0 || !masterFxCatalogSelect.value;
+    masterFxCatalogSelect.disabled = masterFxCatalogUnavailable;
+    masterFxNameInput.disabled = disabled || !latestFxCatalogData.available || latestFxCatalogData.items.length === 0;
+    masterFxCatalogLoadButton.disabled = masterFxCatalogUnavailable;
   }
 
   function updateSlotInfoControlsDisabled() {
@@ -176,6 +196,41 @@
 
   function setMasterFxStatus(message) {
     masterFxStatus.textContent = message;
+  }
+
+  function buildMasterFxCatalogControls() {
+    masterFxCatalogForm.className = 'master-fx-controls';
+    masterFxCatalogForm.setAttribute('aria-label', 'Load catalog FX into master chain');
+
+    const fxLabel = document.createElement('label');
+    fxLabel.className = 'master-fx-control';
+    const fxText = document.createElement('span');
+    fxText.textContent = 'Load FX';
+    masterFxCatalogSelect.dataset.typedAction = 'true';
+    masterFxCatalogSelect.setAttribute('aria-label', 'Choose catalog FX for master chain');
+    appendSelectOption(masterFxCatalogSelect, '', 'FX catalog loading…');
+    fxLabel.append(fxText, masterFxCatalogSelect);
+
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'slot-sample-field slot-sample-field--name';
+    const nameText = document.createElement('span');
+    nameText.textContent = 'Name';
+    masterFxNameInput.type = 'text';
+    masterFxNameInput.maxLength = 128;
+    masterFxNameInput.placeholder = 'optional';
+    masterFxNameInput.autocomplete = 'off';
+    masterFxNameInput.spellcheck = false;
+    masterFxNameInput.dataset.typedAction = 'true';
+    masterFxNameInput.setAttribute('aria-label', 'Optional display name for master FX');
+    nameLabel.append(nameText, masterFxNameInput);
+
+    masterFxCatalogLoadButton.type = 'submit';
+    masterFxCatalogLoadButton.className = 'typed-button';
+    masterFxCatalogLoadButton.textContent = 'Load';
+    masterFxCatalogLoadButton.dataset.typedAction = 'true';
+
+    masterFxCatalogForm.append(fxLabel, nameLabel, masterFxCatalogLoadButton);
+    masterFxStatus.parentElement.insertBefore(masterFxCatalogForm, masterFxStatus);
   }
 
   function typedRefreshIntervalLabel() {
@@ -577,6 +632,26 @@
     select.append(option);
   }
 
+  function appendFxCatalogOptions(select, catalog) {
+    select.textContent = '';
+    if (!catalog.available || catalog.items.length === 0) {
+      appendSelectOption(select, '', catalog.message || 'No catalog FX');
+      return;
+    }
+    catalog.items.forEach((item) => {
+      appendSelectOption(select, item.plugin, item.label || item.plugin);
+    });
+  }
+
+  function syncMasterFxCatalogSelect() {
+    const previousValue = masterFxCatalogSelect.value;
+    appendFxCatalogOptions(masterFxCatalogSelect, latestFxCatalogData);
+    if (latestFxCatalogData.items.some((item) => item.plugin === previousValue)) {
+      masterFxCatalogSelect.value = previousValue;
+    }
+    updateTypedControlsDisabled();
+  }
+
   function sampleNameFromEntry(entry) {
     if (typeof entry === 'string') {
       return entry.trim().replace(/\.wav$/i, '');
@@ -644,6 +719,79 @@
       packs: [],
       message: message || 'Built-in WAV sample catalog is unavailable.',
     };
+  }
+
+  function fxPluginValueFromEntry(entry, fallbackKey) {
+    if (typeof entry === 'string') {
+      return entry.trim();
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return typeof fallbackKey === 'string' ? fallbackKey.trim() : '';
+    }
+    const plugin = firstPresent(entry, ['plugin', 'id', 'name', 'slug', 'key', 'path'], fallbackKey || '');
+    return typeof plugin === 'string' ? plugin.trim() : String(plugin || '').trim();
+  }
+
+  function fxPluginLabelFromEntry(entry, plugin) {
+    if (typeof entry === 'string') {
+      return entry.trim();
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return plugin;
+    }
+    const label = firstPresent(entry, ['label', 'display_name', 'displayName', 'title', 'name', 'plugin'], plugin);
+    const vendor = firstPresent(entry, ['vendor', 'maker', 'manufacturer'], '');
+    const labelText = typeof label === 'string' && label.trim() ? label.trim() : plugin;
+    return typeof vendor === 'string' && vendor.trim() ? `${labelText} · ${vendor.trim()}` : labelText;
+  }
+
+  function normalizeFxCatalog(data) {
+    const dataObject = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    const available = firstPresent(dataObject, ['available'], true) !== false;
+    const source = data && typeof data === 'object' && !Array.isArray(data)
+      ? firstPresent(data, ['plugins', 'fx', 'items'], [])
+      : data;
+    const rawItems = Array.isArray(source)
+      ? source.map((entry) => ({entry, fallbackKey: ''}))
+      : source && typeof source === 'object'
+        ? Object.keys(source).map((key) => ({entry: source[key], fallbackKey: key}))
+        : [];
+    const seen = new Set();
+    const items = [];
+    rawItems.forEach(({entry, fallbackKey}) => {
+      const plugin = fxPluginValueFromEntry(entry, fallbackKey);
+      if (!plugin || seen.has(plugin)) {
+        return;
+      }
+      seen.add(plugin);
+      items.push({
+        plugin,
+        label: fxPluginLabelFromEntry(entry, plugin),
+      });
+    });
+    return {
+      available,
+      plugins: items.map((item) => item.plugin),
+      items,
+      message: available
+        ? (items.length === 0 ? 'No safe FX plugins returned by the typed API.' : '')
+        : formatValue(firstPresent(dataObject, ['message', 'error'], ''), 'Safe FX catalog is unavailable.'),
+    };
+  }
+
+  function renderFxCatalog(data) {
+    latestFxCatalogData = normalizeFxCatalog(data);
+    syncMasterFxCatalogSelect();
+  }
+
+  function renderFxCatalogUnavailable(message) {
+    latestFxCatalogData = {
+      available: false,
+      plugins: [],
+      items: [],
+      message: message || 'Safe FX catalog is unavailable.',
+    };
+    syncMasterFxCatalogSelect();
   }
 
   function selectedMidiChannel() {
@@ -1184,6 +1332,25 @@
 
     renderSlotInfoUnavailable(`master FX ${effectNumber}`, `Master FX ${effectNumber} was removed.`);
     setMasterFxStatus(`Removed master FX ${effectNumber}.`);
+  }
+
+  async function loadMasterFxFromCatalog() {
+    const plugin = masterFxCatalogSelect.value;
+    if (!plugin) {
+      const message = 'Choose a catalog FX before loading the master chain.';
+      setMasterFxStatus(message);
+      showTypedError(message);
+      return;
+    }
+
+    setMasterFxStatus(`Loading ${plugin} into master FX chain…`);
+    const ok = await mutateTyped('/api/master/fx', fxLoadPayload(plugin, masterFxNameInput.value.trim()));
+    if (ok) {
+      masterFxNameInput.value = '';
+      setMasterFxStatus(`Loaded ${plugin} into master FX chain. Status refreshed.`);
+    } else {
+      setMasterFxStatus('Master FX load failed. See typed API status above.');
+    }
   }
 
   async function removeSlotFx(slotNumber, slotName, effectIndex, groupName) {
@@ -1769,6 +1936,84 @@
     return panel;
   }
 
+  function fxLoadPayload(plugin, name) {
+    const payload = {plugin};
+    if (name) {
+      payload.name = name;
+    }
+    return payload;
+  }
+
+  async function loadSlotFxFromCatalog(slotNumber, plugin, name) {
+    if (!plugin) {
+      const message = `Choose a catalog FX before loading slot ${slotNumber}.`;
+      setTypedRefreshStatus(message);
+      showTypedError(message);
+      return;
+    }
+    setTypedRefreshStatus(`Loading ${plugin} into slot ${slotNumber} FX chain…`);
+    const ok = await mutateTyped(`/api/slots/${encodeURIComponent(slotNumber)}/fx`, fxLoadPayload(plugin, name));
+    setTypedRefreshStatus(ok ? `Loaded ${plugin} into slot ${slotNumber}. Status refreshed.` : 'Slot FX load failed. See typed API status above.');
+  }
+
+  function renderLoadedSlotFxControls(slotNumber) {
+    const catalog = latestFxCatalogData;
+    const panel = document.createElement('div');
+    panel.className = 'slot-sample-load slot-fx-load';
+
+    const title = document.createElement('strong');
+    title.textContent = 'Load catalog FX';
+    panel.append(title);
+
+    if (!catalog.available || catalog.items.length === 0) {
+      panel.append(makeEmptyState(catalog.message || 'No catalog FX are available.'));
+      return panel;
+    }
+
+    const form = document.createElement('form');
+    form.className = 'slot-sample-load-form slot-fx-load-form';
+
+    const fxLabel = document.createElement('label');
+    fxLabel.className = 'slot-sample-field';
+    const fxText = document.createElement('span');
+    fxText.textContent = 'FX';
+    const fxSelect = document.createElement('select');
+    fxSelect.className = 'slot-fx-select';
+    fxSelect.dataset.typedAction = 'true';
+    fxSelect.setAttribute('aria-label', `Choose catalog FX for slot ${slotNumber}`);
+    appendFxCatalogOptions(fxSelect, catalog);
+    fxLabel.append(fxText, fxSelect);
+
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'slot-sample-field slot-sample-field--name';
+    const nameText = document.createElement('span');
+    nameText.textContent = 'Name';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.maxLength = 128;
+    nameInput.placeholder = 'optional';
+    nameInput.autocomplete = 'off';
+    nameInput.spellcheck = false;
+    nameInput.dataset.typedAction = 'true';
+    nameInput.setAttribute('aria-label', `Optional display name for slot ${slotNumber} FX`);
+    nameLabel.append(nameText, nameInput);
+
+    const loadButton = document.createElement('button');
+    loadButton.type = 'submit';
+    loadButton.className = 'typed-button slot-sample-load-button slot-fx-load-button';
+    loadButton.textContent = 'Load FX';
+    loadButton.dataset.typedAction = 'true';
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      loadSlotFxFromCatalog(slotNumber, fxSelect.value, nameInput.value.trim());
+    });
+
+    form.append(fxLabel, nameLabel, loadButton);
+    panel.append(form);
+    return panel;
+  }
+
   function renderSlots(data) {
     latestTypedSlotsData = data;
     const slots = normalizeSlots(data);
@@ -1860,7 +2105,9 @@
       }
 
       card.append(header, meta, controls);
-      if (!loaded) {
+      if (loaded) {
+        card.append(renderLoadedSlotFxControls(slotNumber));
+      } else {
         card.append(renderEmptySlotSampleControls(slotNumber));
       }
       slotsList.append(card);
@@ -1885,7 +2132,7 @@
     typedRefreshInFlight = true;
     updateTypedControlsDisabled();
     showTypedError('');
-    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, samples, sessions, audio devices, and signal flow…' : 'Refreshing status, slots, samples, sessions, audio devices, and signal flow…');
+    setTypedRefreshStatus(source === 'auto' ? 'Auto-refreshing status, slots, samples, FX catalog, sessions, audio devices, and signal flow…' : 'Refreshing status, slots, samples, FX catalog, sessions, audio devices, and signal flow…');
     if (source !== 'auto') {
       typedRefreshButton.textContent = 'Refreshing…';
     }
@@ -1898,6 +2145,7 @@
         fetchJson('/api/sessions', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/audio/devices', {headers: {'Accept': 'application/json'}}),
         fetchJson('/api/flow', {headers: {'Accept': 'application/json'}}),
+        fetchJson('/api/fx/plugins', {headers: {'Accept': 'application/json'}}),
       ]);
 
       const messages = [];
@@ -1916,6 +2164,12 @@
         renderSampleCatalog(results[2].value);
       } else {
         renderSampleCatalogUnavailable('Built-in WAV sample catalog is unavailable; empty slots cannot load samples from the dashboard right now.');
+      }
+
+      if (results[6].status === 'fulfilled') {
+        renderFxCatalog(results[6].value);
+      } else {
+        renderFxCatalogUnavailable('Safe FX catalog is unavailable; FX load controls are disabled right now.');
       }
 
       if (results[1].status === 'fulfilled') {
@@ -2184,6 +2438,8 @@
     }
   }
 
+  buildMasterFxCatalogControls();
+
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     const command = input.value.trim();
@@ -2243,6 +2499,10 @@
       return;
     }
     removeMasterFx(effect);
+  });
+  masterFxCatalogForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    loadMasterFxFromCatalog();
   });
   tempoBpmInput.addEventListener('input', () => {
     tempoBpmDirty = tempoBpmInput.value.trim() !== '';
