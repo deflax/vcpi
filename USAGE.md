@@ -123,7 +123,7 @@ Example:
 ./vweb --sock /run/vcpi/vcpi.sock
 ```
 
-Phase 2 keeps the command console for compatibility and adds typed JSON
+The browser console keeps the command console for compatibility and adds typed JSON
 endpoints for the browser mixer. State-changing requests require the CSRF token
 embedded in the served page, and cross-origin posts are rejected. The server
 refuses non-loopback binds unless `--allow-remote` is set. Only use remote
@@ -151,13 +151,13 @@ displays the current ASCII mixer diagram returned by the read-only flow endpoint
 field can suggest saved sessions from the picker, while manual safe-name entry
 remains supported. The audio-device picker uses the read-only device list and
 sends the selected value to `/api/audio/start` as `{"device": "name or index"}`.
-Tempo and Link
-browser controls call typed POST routes for BPM, Link start, and Link stop
-actions. MIDI browser controls call typed POST routes to map 1-based channels to
-1-based slots and to cut channel routes. The Audition control is only a
-test-note trigger for an already-loaded slot. It is not a sequencer control and
-it does not manage MIDI ports. This phase does not add typed MIDI port listing,
-selection, open, or close controls.
+Tempo and Link browser controls call typed POST routes for BPM, Link start, and
+Link stop actions. MIDI browser controls call typed routes to list hardware
+generic MIDI inputs, open generic MIDI inputs, close open generic MIDI inputs,
+map 1-based channels to 1-based slots, and cut channel routes. The Audition
+control is only a test-note trigger for an already-loaded slot. It is not a
+sequencer control and it does not change MIDI routing. MIDI Mix input and output
+open/close controls remain CLI-only and out of scope for the typed browser API.
 
 ### Typed HTTP API
 
@@ -193,6 +193,9 @@ requirements.
 | `POST` | `/api/tempo` | `{"bpm": 128}` | Set tempo, where BPM is 20.0 to 300.0 |
 | `POST` | `/api/link/start` | optional `{"bpm": 128}` | Enable Ableton Link, optionally setting BPM first. BPM is 20.0 to 300.0. |
 | `POST` | `/api/link/stop` | `{}` | Disable Ableton Link |
+| `GET` | `/api/midi/ports` | none | Generic MIDI input inventory from the hardware input catalog, returned as `{"ok": true, "ports": [{"id": 0, "name": "Arturia BeatStep Pro MIDI 1"}], "open_inputs": []}`. Port ids are 0-based hardware input indexes. MIDI Mix output ports are not listed. |
+| `POST` | `/api/midi/inputs` | `{"port": 0}` | Open one generic MIDI input. `port` is a 0-based hardware input index from `/api/midi/ports`. Requires CSRF. |
+| `POST` | `/api/midi/inputs/<index>/close` | `{}` | Close one open generic MIDI input. `<index>` is the 1-based position in the current open generic MIDI input list. Requires CSRF. |
 | `POST` | `/api/midi/link` | `{"channel": 1, "slot": 1}` | Route a 1-based MIDI channel to a 1-based slot. Empty target slots are accepted. |
 | `POST` | `/api/midi/cut` | `{"channel": 1}` | Remove a 1-based MIDI channel route. Unrouted channels are accepted as a no-op. |
 | `POST` | `/api/master/gain` | `{"gain": 0.75}` | Set master gain, where gain is 0.0-1.0 |
@@ -233,8 +236,19 @@ Tempo and Link BPM payloads must be JSON numbers from 20.0 to 300.0. Strings,
 booleans, and values outside that range are rejected.
 
 MIDI route payloads use 1-based JSON integers. `channel` must be 1-16 and
-`slot` must be 1-8. The typed MIDI endpoints only edit channel routing. MIDI
-port listing, selection, opening, and closing stay in the CLI for this phase.
+`slot` must be 1-8.
+
+Generic MIDI input inventory/open/close is intentionally narrow. `GET
+/api/midi/ports` lists hardware MIDI input ports from the daemon catalog with
+0-based `id` values matching CLI `midi ports input` indexes, plus the current
+open generic MIDI inputs. `POST /api/midi/inputs` is state-changing, requires
+the CSRF token, and accepts only JSON such as `{"port": 0}` where `port` is one
+of those 0-based hardware input indexes. `POST /api/midi/inputs/<index>/close`
+is state-changing, requires the CSRF token, and accepts empty JSON `{}` where
+`<index>` is the 1-based position in the open generic MIDI input list. These
+routes do not open ports by arbitrary MIDI device name, do not manage MIDI Mix
+input or output ports, and do not change channel routing. MIDI Mix input/output
+open/close remains CLI-only and out of scope for the typed browser API.
 
 `POST /api/slots/<slot>/note` requires the CSRF token because it changes audio
 state by sending a note. It only sends a short audition/test note to a loaded
@@ -246,8 +260,9 @@ routing. The route accepts `<slot>` from 1 to 8 and requires integer `note` from
 and invalid payloads are rejected before a note is sent.
 
 `GET /api/samples`, `GET /api/fx/plugins`, `GET /api/audio/devices`, `GET
-/api/flow`, `GET /api/slots/<slot>/info`, `GET /api/slots/<slot>/params`, and
-`GET /api/master/fx/<fx>/params` are read-only and do not need a CSRF token. The
+/api/flow`, `GET /api/slots/<slot>/info`, `GET /api/slots/<slot>/params`, `GET
+/api/master/fx/<fx>/params`, and `GET /api/midi/ports` are read-only and do not
+need a CSRF token. The
 audio-device endpoint lists only devices with output channels. If `sounddevice`
 is unavailable or device querying fails in the daemon, the endpoint returns
 `{"ok": true, "available": false, "devices": []}` so the browser can keep the
@@ -313,6 +328,7 @@ curl http://127.0.0.1:8765/api/flow
 curl http://127.0.0.1:8765/api/slots/1/info
 curl http://127.0.0.1:8765/api/slots/1/params
 curl http://127.0.0.1:8765/api/master/fx/1/params
+curl http://127.0.0.1:8765/api/midi/ports
 ```
 
 For `POST` requests, read the CSRF token from `/` and send it as
@@ -387,6 +403,16 @@ curl -X POST http://127.0.0.1:8765/api/link/start \
   -d '{"bpm": 128}'
 
 curl -X POST http://127.0.0.1:8765/api/link/stop \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{}'
+
+curl -X POST http://127.0.0.1:8765/api/midi/inputs \
+  -H "Content-Type: application/json" \
+  -H "X-VCPI-CSRF: $TOKEN" \
+  -d '{"port": 0}'
+
+curl -X POST http://127.0.0.1:8765/api/midi/inputs/1/close \
   -H "Content-Type: application/json" \
   -H "X-VCPI-CSRF: $TOKEN" \
   -d '{}'
