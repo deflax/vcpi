@@ -97,6 +97,12 @@ complete detected VST3 plugin names, `slot <n> wav` completes pack and
 sample names, and `slot <n> vcv` completes patch names. You do not need
 to type full paths.
 
+The client keeps a scrolling `vcpi>` prompt with session history and uses
+`prompt_toolkit` + Rich for enhanced terminal output. `help`, `params`,
+`status`, and `info` display tables; flow diagrams and knob bars receive color.
+Piped input/output remains plain text. After updating an existing checkout,
+run `.venv/bin/pip install -r requirements.txt` to install the client dependencies.
+
 Inside the CLI, a typical first run is:
 
 ```text

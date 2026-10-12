@@ -103,6 +103,18 @@ sequencer & sync, sessions, status & diagnostics, and help & lifecycle.
 Commands are alphabetical within each group. Use `help <command>` for
 detailed syntax and usage.
 
+The interactive client uses `prompt_toolkit` for the `vcpi>` command line
+and Rich for terminal presentation; it is not a full-screen interface.
+`help`, `params`, `status`, and `info` use tables. `flow` retains its diagram
+layout with color, and `knobs` highlights filled slider bars. Other responses,
+including `help <command>`, retain their text.
+
+- Up/Down recall commands from the current client session.
+- `Ctrl-C` cancels the current input without disconnecting.
+- `Ctrl-D` on an empty prompt disconnects; `quit` and `exit` also disconnect.
+- Redirected input or output uses the plain-text client, without Rich formatting.
+- Existing environments need the new dependencies: `.venv/bin/pip install -r requirements.txt`.
+
 When connected with `./vcpi` (or `python main.py cli`), press `Tab` to
 autocomplete command names. `slot` has context-aware argument completion:
 

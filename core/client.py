@@ -18,11 +18,18 @@ from __future__ import annotations
 
 import os
 import re
-import readline  # noqa: F401  (enables line-editing in input())
 import socket
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion, CompleteEvent
+from prompt_toolkit.document import Document
+from prompt_toolkit.history import InMemoryHistory
+from rich.console import Console
+
+from core.client_display import display_response
 from core.paths import DEFAULT_SOCK_PATH
 
 # Must match the sentinel used by server.py
@@ -290,17 +297,25 @@ def connect(sock_path: str | Path | None = None):
     rfile = sock.makefile("r", encoding="utf-8", errors="replace")
     wfile = sock.makefile("w", encoding="utf-8")
 
-    # Read and display the welcome banner
-    _read_response(rfile)
-
-    # Enable readline tab-completion from live server command names.
-    command_names = _fetch_command_names(rfile, wfile)
-    _configure_tab_completion(command_names)
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    console = Console() if interactive else None
 
     try:
+        # Keep socket cleanup active during banner and completion discovery too.
+        if not _read_response(rfile, console):
+            return
+        command_names = _fetch_command_names(rfile, wfile)
+        session = (
+            PromptSession(
+                completer=CommandCompleter(command_names),
+                history=InMemoryHistory(),
+                complete_while_typing=False,
+            )
+            if interactive else None
+        )
         while True:
             try:
-                line = input("vcpi> ")
+                line = session.prompt("vcpi> ") if session else input("vcpi> ")
             except KeyboardInterrupt:
                 # Ctrl-C: cancel current input line and keep the client open.
                 print()
@@ -317,7 +332,7 @@ def connect(sock_path: str | Path | None = None):
                 # Server already closed the socket.
                 break
 
-            if not _read_response(rfile):
+            if not _read_response(rfile, console, line):
                 # Server closed the connection (e.g. after quit)
                 break
 
@@ -340,19 +355,23 @@ def connect(sock_path: str | Path | None = None):
             pass
 
 
-def _configure_tab_completion(command_names: list[str]):
-    """Enable command and load-argument completion on Tab."""
-    names = sorted(set(command_names))
-    if not names:
-        return
+class CommandCompleter(Completer):
+    """Complete commands and asset arguments using the existing discovery rules."""
 
-    def _complete(text: str, state: int):
-        line = readline.get_line_buffer()
-        begidx = readline.get_begidx()
-        prefix_tokens = line[:begidx].split()
+    def __init__(self, command_names: list[str]):
+        super().__init__()
+        self.names: list[str] = sorted(set(command_names))
+
+    def get_completions(
+        self, document: Document, complete_event: CompleteEvent,
+    ) -> Iterable[Completion]:
+        before = document.text_before_cursor
+        match = re.search(r"\S*$", before)
+        text = match.group() if match else ""
+        prefix_tokens = before[:len(before) - len(text)].split()
 
         if not prefix_tokens:
-            matches = _filter_prefix(names, text)
+            matches = _filter_prefix(self.names, text)
         elif prefix_tokens[0] == "slot":
             matches = _complete_slot_args(text, prefix_tokens)
         elif prefix_tokens[0] in ("info", "knobs"):
@@ -360,15 +379,10 @@ def _configure_tab_completion(command_names: list[str]):
         elif prefix_tokens[0] in ("save", "load"):
             matches = _filter_prefix(_session_names(), text)
         else:
-            return None
+            return
 
-        if len(matches) == 1:
-            matches = [matches[0] + " "]
-
-        return matches[state] if state < len(matches) else None
-
-    readline.parse_and_bind("tab: complete")
-    readline.set_completer(_complete)
+        for name in matches:
+            yield Completion(name + " ", start_position=-len(text), display=name)
 
 
 def _fetch_command_names(rfile, wfile) -> list[str]:
@@ -448,17 +462,16 @@ def _parse_help_commands(lines: list[str]) -> list[str]:
     return commands
 
 
-def _read_response(rfile) -> bool:
-    """Read lines from the server until the end-of-response sentinel.
-
-    Prints each line to stdout.  Returns ``False`` if the connection
-    was closed before a sentinel was seen.
-    """
+def _read_response(rfile, console: Console | None = None, command: str = "") -> bool:
+    """Display one response; non-interactive clients preserve the wire text."""
     lines = _read_response_lines(rfile)
     if lines is None:
         return False
-    for line in lines:
-        print(line)
+    if console is not None:
+        display_response(console, command, lines)
+    else:
+        for line in lines:
+            print(line)
     return True
 
 
