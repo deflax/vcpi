@@ -12,10 +12,7 @@ Fastest path:
 ./vcsrv
 
 # Terminal 2
-./vweb
-
-# Browser
-open http://127.0.0.1:8765
+./vcli
 ```
 
 Manual setup:
@@ -30,19 +27,9 @@ python main.py serve
 
 # Terminal 2: connect interactive client
 python main.py cli
-
-# Or start the local browser console and typed API
-python main.py web
 ```
 
-vcpi runs with a separate server (`serve`) and multiple clients. Use `cli`
-for the terminal client or `web` for the local browser command console. The
-typed JSON API covers status, slots, built-in WAV sample catalog and loading,
-safe bundled FX catalog and loading, signal-flow diagnostics, slot plugin info,
-instrument, slot FX, and master FX parameter controls, audio transport,
-audio-device listing, MIDI channel routing, slot mixer controls, and loaded-slot
-audition notes, plus generic MIDI input inventory/open/close, while keeping the
-command console available.
+vcpi runs with separate server (`serve`) and client (`cli`) processes.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcli` with `audio start [device]`.
@@ -78,7 +65,6 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
   main.py             # Top-level Python entry point
   vcsrv               # Server launcher (creates .venv on first run)
   vcli                # Client launcher (creates .venv on first run)
-  vweb                # Local browser console launcher (creates .venv on first run)
   requirements.txt    # Python dependencies
   USAGE.md            # Full CLI and startup flag reference
   rpi-build/          # Raspberry Pi image build/provisioning tools only
@@ -93,27 +79,15 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 # Connect CLI client to a running daemon
 ./vcli
 
-# Start local browser console and typed API
-./vweb
-
 # Direct python equivalents
 python main.py serve
 python main.py cli
-python main.py web --host 127.0.0.1 --port 8765
-
-# Raspberry Pi/systemd installs may need the service socket explicitly
-./vweb --sock /run/vcpi/vcpi.sock
 
 # Logging defaults:
 # - python main.py serve -> WARNING
 # - ./vcsrv -> DEBUG
 LOG_LEVEL=INFO ./vcsrv
 ```
-
-The web console binds to `127.0.0.1` by default, uses a per-process CSRF token
-for state-changing requests, and refuses non-loopback hosts unless you pass
-`--allow-remote`. Only expose it on a trusted network; both the command console
-and typed API control the running daemon.
 
 Full CLI and startup flag reference: `USAGE.md`
 
@@ -336,331 +310,6 @@ Headless server + remote CLI:
 
 From `vcli`, use `shutdown` to terminate the daemon process (for example, to
 let systemd restart it).
-
-Browser console and typed API:
-
-```bash
-# Terminal 1
-./vcsrv
-
-# Terminal 2
-./vweb
-
-# Browser
-open http://127.0.0.1:8765
-```
-
-`vweb` binds to `127.0.0.1:8765` by default and talks to the local vcpi
-daemon over its Unix socket. Pass `--allow-shutdown` only if you want the web
-console to expose daemon shutdown.
-
-The browser console keeps the free-form command console at `/api/command` and
-adds typed JSON endpoints for controls that a browser mixer can call without
-building CLI strings. The typed endpoints are still local/protected. They use the same
-loopback bind default, the same `--allow-remote` guard, and the same per-process
-CSRF token for state-changing requests.
-
-The browser dashboard polls `/api/status`, `/api/slots`, `/api/sessions`,
-`/api/audio/devices`, and `/api/flow` on a conservative client-side interval so
-CLI or hardware changes appear without pressing Refresh. Polling slows while
-the tab is hidden and waits for typed control updates to finish; the Refresh
-button still performs an immediate read. Empty slot cards expose built-in WAV
-sampler loading only: Pack and Sample selectors come from `/api/samples`, Name
-is optional display text, and Load calls `/api/slots/<slot>/wav`. Loaded slot
-cards include catalog-only Add FX controls backed by `/api/fx/plugins` and
-`/api/slots/<slot>/fx`, an Unload action that calls the typed slot clear
-endpoint, an Info action that opens a read-only panel backed by
-`/api/slots/<slot>/info`, a Params action that opens a parameter inspector backed
-by `/api/slots/<slot>/params`, and an Audition control that sends one short test
-note to that loaded slot. The Params panel can also select Master FX params from
-loaded master effects, and the master FX area has catalog-only Add FX controls
-backed by `/api/fx/plugins` and `/api/master/fx`. It shows inline Apply controls
-only for supported numeric instrument, slot FX, and master FX parameters, plus
-Remove controls for visible slot FX groups and the selected master FX.
-The signal-flow panel displays the current ASCII mixer diagram from the read-only
-flow endpoint. The session field can suggest saved sessions from the picker,
-while manual safe-name entry remains supported. The audio-device picker uses the
-read-only device list and sends the selected value to `/api/audio/start` as
-`{"device": "name or index"}`.
-Tempo and Link controls use typed POST routes so browser controls can set BPM,
-enable Link, and disable Link without sending free-form CLI commands. MIDI
-routing controls can map 1-based MIDI channels to 1-based slots and cut channel
-routes. Generic MIDI inputs can also be listed, opened, and closed from the
-dashboard. The Audition control is only a test-note trigger for an
-already-loaded slot. It is not a sequencer control and it does not change MIDI
-routing. MIDI Mix input and output open/close controls remain CLI-only and out
-of scope for the typed browser API.
-
-Expected typed endpoints:
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/status` | Return structured daemon status, including audio running state, sample rate, buffer size, tempo, Link state, and selected output name when known |
-| `GET` | `/api/slots` | Return all 8 slots with name, source type, route channels, gain, mute, solo, and loaded effect count |
-| `GET` | `/api/samples` | Return the built-in WAV sample catalog grouped by safe pack and sample names for the dashboard Pack and Sample selectors |
-| `POST` | `/api/slots/<slot>/wav` | Load one built-in WAV sample into slot 1-8 with JSON `{"pack": "909", "sample": "bassdrum", "name": "Kick"}`. `name` is optional display text. Requires CSRF. |
-| `GET` | `/api/fx/plugins` | Return the read-only safe bundled FX catalog from top-level `vst3/*.vst3` entries for Add FX controls |
-| `POST` | `/api/slots/<slot>/fx` | Load one safe bundled effect into a loaded slot insert chain with JSON `{"plugin": "DragonflyRoomReverb", "name": "Room"}`. `name` is optional display text. Requires CSRF. |
-| `GET` | `/api/slots/<slot>/info` | Return read-only diagnostics for one slot as `{"ok": true, "slot": {...}, "instrument": {...}, "effects": [...], "rendered": "..."}`. Empty slots return `instrument: null`, an empty effects list, and a `message`. |
-| `GET` | `/api/slots/<slot>/params` | Return read-only instrument and slot insert FX parameter groups for a loaded slot as `{"ok": true, "slot": {...}, "parameters": [...], "effects": [...], "count": 3}`. Empty slots and invalid slot numbers are rejected. |
-| `POST` | `/api/slots/<slot>/params` | Set one supported numeric instrument parameter on a loaded slot with JSON `{"name": "cutoff", "value": 0.42}` or one slot insert FX parameter with JSON `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}`. Requires CSRF. |
-| `POST` | `/api/slots/<slot>/fx/<fx>/clear` | Remove one already-loaded slot insert FX with empty JSON `{}`. `<slot>` is 1-8, `<fx>` is a 1-based effect index, and the request requires CSRF. |
-| `GET` | `/api/master/fx/<fx>/params` | Return read-only parameter metadata for one loaded master FX, where `<fx>` is a 1-based effect index. Unloaded or invalid master FX indexes are rejected. |
-| `POST` | `/api/master/fx` | Load one safe bundled effect into the master FX chain with JSON `{"plugin": "DragonflyRoomReverb", "name": "Room"}`. `name` is optional display text. Requires CSRF. |
-| `POST` | `/api/master/fx/<fx>/params` | Set one supported numeric parameter on a loaded master FX with JSON `{"name": "mix", "value": 0.5}`. Requires CSRF. |
-| `POST` | `/api/master/fx/<fx>/clear` | Remove one already-loaded master FX with empty JSON `{}`. `<fx>` is a 1-based effect index, and the request requires CSRF. |
-| `GET` | `/api/sessions` | Return saved safe session names found directly under `sessions/`, sorted by name, with the loaded session marked |
-| `GET` | `/api/audio/devices` | Return output-capable audio devices as `{"ok": true, "available": true, "current": "Built-in Output", "default_device": 1, "devices": [{"id": 1, "name": "Built-in Output", "output_channels": 2, "default": true, "selected": true}]}` for the browser picker |
-| `GET` | `/api/flow` | Return the current ASCII signal-flow diagram as `{"ok": true, "flow": "..."}` for the browser diagnostics panel |
-| `POST` | `/api/session/save` | Save the current daemon state, with optional JSON `{"name": "demo"}` |
-| `POST` | `/api/session/load` | Load a named session with JSON `{"name": "demo"}` and return refreshed slots |
-| `POST` | `/api/audio/start` | Start audio, optionally with JSON `{"device": "name or index"}` from the audio-device picker |
-| `POST` | `/api/audio/stop` | Stop audio |
-| `POST` | `/api/tempo` | Set tempo with JSON `{"bpm": 128}` where BPM is 20.0 to 300.0 |
-| `POST` | `/api/link/start` | Enable Ableton Link, optionally with JSON `{"bpm": 128}` where BPM is 20.0 to 300.0 |
-| `POST` | `/api/link/stop` | Disable Ableton Link |
-| `GET` | `/api/midi/ports` | Return generic MIDI input inventory from the hardware input catalog as `{"ok": true, "ports": [{"id": 0, "name": "Arturia BeatStep Pro MIDI 1"}], "open_inputs": []}`. Port ids are 0-based hardware input indexes. MIDI Mix output ports are not listed. |
-| `POST` | `/api/midi/inputs` | Open one generic MIDI input with JSON `{"port": 0}`. `port` is a 0-based hardware input index from `/api/midi/ports`. Requires CSRF. |
-| `POST` | `/api/midi/inputs/<index>/close` | Close one open generic MIDI input with empty JSON `{}`. `<index>` is the 1-based position in the current open generic MIDI input list. Requires CSRF. |
-| `POST` | `/api/midi/link` | Route a MIDI channel to a slot with JSON `{"channel": 1, "slot": 1}` where both values are 1-based. Empty target slots are accepted. |
-| `POST` | `/api/midi/cut` | Remove a MIDI channel route with JSON `{"channel": 1}` where channel is 1-based. Unrouted channels are accepted as a no-op. |
-| `POST` | `/api/master/gain` | Set master gain with JSON `{"gain": 0.75}` where gain is 0.0-1.0 |
-| `POST` | `/api/slots/<slot>/gain` | Set slot gain with JSON `{"gain": 0.75}` where `<slot>` is 1-8 |
-| `POST` | `/api/slots/<slot>/mute` | Set or toggle slot mute with JSON `{"muted": true}` or `{"toggle": true}` |
-| `POST` | `/api/slots/<slot>/solo` | Set or toggle slot solo with JSON `{"solo": true}` or `{"toggle": true}` |
-| `POST` | `/api/slots/<slot>/note` | Send one audition/test note to a loaded slot with JSON `{"note": 60, "velocity": 100, "duration_ms": 300}` |
-| `POST` | `/api/slots/<slot>/clear` | Unload an already-loaded slot and return updated slot/status data. Existing MIDI routing behavior follows the same core clear semantics as `slot <n> clear`. |
-| `POST` | `/api/slots/<slot>/unload` | Alias for `/api/slots/<slot>/clear` |
-
-Built-in WAV sampler loading is intentionally narrow. `GET /api/samples` only
-lists WAV files from bundled sample packs. `POST /api/slots/<slot>/wav` accepts
-safe `pack` and `sample` names from that catalog plus an optional display
-`name`; it does not accept arbitrary paths, absolute paths, nested paths, or
-dotfiles. VST and VCV instrument loading remain CLI-only and out of scope for
-these typed sampler routes.
-
-Safe typed FX loading is also intentionally narrow. `GET /api/fx/plugins` is a
-read-only catalog of bundled effect plugins found only as top-level
-`vst3/*.vst3` entries. `POST /api/slots/<slot>/fx` and `POST /api/master/fx` are
-state-changing and require the CSRF token. They accept a safe catalog plugin
-name or stem, for example `{"plugin": "DragonflyRoomReverb", "name": "Room"}`;
-`name` is optional display text. They do not accept arbitrary paths, absolute
-paths, nested paths, dotfiles, environment or system plugin directories, VCV
-patches, instruments, or FX reorder requests. The backend checks the resolved
-plugin type and rejects non-effect plugins before mutating slot or master state.
-FX reorder remains CLI-only and out of scope for the typed browser API.
-
-Session save and load only accept a safe session `name`, for example `demo` or
-`demo.json`. The name is normalized to `sessions/<name>.json`. `GET
-/api/sessions` lists only safe, top-level JSON session files in `sessions/` for
-the browser picker. Arbitrary paths, absolute paths, nested paths, dotfiles, and
-spaces are still not supported.
-
-`GET /api/samples`, `GET /api/fx/plugins`, `GET /api/audio/devices`, `GET
-/api/flow`, `GET /api/slots/<slot>/info`, `GET /api/slots/<slot>/params`, `GET
-/api/master/fx/<fx>/params`, and `GET /api/midi/ports` are read-only and do not
-need a CSRF token. The
-audio-device endpoint lists only devices with output channels. If `sounddevice`
-is unavailable or device querying fails in the daemon, the endpoint returns
-`{"ok": true, "available": false, "devices": []}` so the browser can keep the
-system-default option available. `GET /api/flow` returns the same current ASCII
-signal-flow diagram shown by the CLI `flow` command. `GET /api/slots/<slot>/info`
-returns diagnostics and plugin metadata for display only. `GET
-/api/slots/<slot>/params` powers the Params UI with names, values, units, and
-safe range metadata for the already-loaded slot instrument and slot insert FX
-chain. `GET /api/master/fx/<fx>/params` does the same for one loaded master FX,
-where `<fx>` is a 1-based effect index. These GET routes remain read-only and do
-not change slot or master state. Starting audio still uses a state-changing POST
-and must include the CSRF token, even when the device value came from the picker.
-
-`POST /api/slots/<slot>/params` is state-changing and requires the CSRF token.
-It edits instrument parameters on an already-loaded slot by default. To edit a
-slot insert FX parameter, send `target: "effect"` and a 1-based `effect` index,
-for example `{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}`.
-Payload names must exactly match supported parameter names, and values must be
-finite JSON numbers. Boolean, string, and enum parameters are not supported.
-When metadata provides numeric minimum or maximum values, the range is enforced.
-`POST /api/slots/<slot>/fx/<fx>/clear` is also state-changing and requires the
-CSRF token. It removes one already-loaded slot insert FX, where `<slot>` is 1-8
-and `<fx>` is a 1-based effect index. Send an empty JSON body `{}`. Slot FX load
-uses `/api/slots/<slot>/fx` for safe bundled catalog effects only. Slot FX
-reorder remains CLI-only and out of scope for the typed browser API. Remove is
-available only for already-loaded slot FX.
-
-`POST /api/master/fx/<fx>/params` is state-changing and requires the CSRF token.
-It edits one parameter on an already-loaded master FX, where `<fx>` is a 1-based
-effect index, with JSON such as `{"name": "mix", "value": 0.5}`. Payload names
-must exactly match supported parameter names, and values must be finite JSON
-numbers. Boolean, string, and enum parameters are not supported. When metadata
-provides numeric minimum or maximum values, the range is enforced.
-`POST /api/master/fx/<fx>/clear` is also state-changing and requires the CSRF
-token. It removes one already-loaded master FX, where `<fx>` is a 1-based effect
-index. Send an empty JSON body `{}`. Master FX load uses `/api/master/fx` for
-safe bundled catalog effects only. Master FX reorder remains CLI-only and out of
-scope for the typed browser API. Remove is available only for already-loaded
-master FX.
-
-Tempo and Link BPM payloads must be numbers from 20.0 to 300.0. Strings,
-booleans, and values outside that range are rejected before reaching the daemon.
-MIDI route payloads use 1-based numbers: `channel` must be an integer from 1 to
-16, and `slot` must be an integer from 1 to 8. State-changing MIDI route POSTs
-require the CSRF token.
-
-Generic MIDI input inventory/open/close is intentionally narrow. `GET
-/api/midi/ports` lists hardware MIDI input ports from the daemon catalog with
-0-based `id` values matching CLI `midi ports input` indexes, plus the current
-open generic MIDI inputs. `POST /api/midi/inputs` is state-changing, requires
-the CSRF token, and accepts only JSON such as `{"port": 0}` where `port` is one
-of those 0-based hardware input indexes. `POST /api/midi/inputs/<index>/close`
-is state-changing, requires the CSRF token, and accepts empty JSON `{}` where
-`<index>` is the 1-based position in the open generic MIDI input list. These
-routes do not open ports by arbitrary MIDI device name, do not manage MIDI Mix
-input or output ports, and do not change channel routing. MIDI Mix input/output
-open/close remains CLI-only and out of scope for the typed browser API.
-
-`POST /api/slots/<slot>/note` is also state-changing and requires the CSRF token.
-It only sends a short audition/test note to a loaded slot, similar to the CLI
-`note` command. It does not create a sequence, attach a sequencer bank, open a
-MIDI input, select a MIDI port, or change channel routing. The route accepts
-`<slot>` from 1 to 8 and requires integer `note` from 0 to 127. `velocity`
-defaults to 100 and must be an integer from 0 to 127. `duration_ms` defaults to
-300 and must be an integer from 1 to 5000. Empty slots and invalid payloads are
-rejected before a note is sent.
-
-`POST /api/slots/<slot>/wav` is state-changing and requires the CSRF token. It
-loads only a built-in WAV sample into the selected slot. Send JSON with safe
-`pack` and `sample` names, and optionally `name` for the display label. The route
-does not load VST plugins, VCV patches, slot FX, or master FX.
-
-`POST /api/slots/<slot>/fx` and `POST /api/master/fx` are state-changing and
-require the CSRF token. They load only bundled top-level `vst3/*.vst3` catalog
-effects selected by safe plugin name or stem. Send JSON such as
-`{"plugin": "DragonflyRoomReverb", "name": "Room"}`. The optional `name` value
-sets the display label. These routes do not load arbitrary paths, environment or
-system plugins, VCV patches, instruments, nested paths, dotfiles, or reorder FX.
-
-Example:
-
-```bash
-TOKEN=$(python3 - <<'TOKENPY'
-import re, urllib.request
-html = urllib.request.urlopen('http://127.0.0.1:8765/').read().decode()
-print(re.search(r'name="vcpi-csrf-token" content="([^"]+)"', html).group(1))
-TOKENPY
-)
-
-curl http://127.0.0.1:8765/api/status
-curl http://127.0.0.1:8765/api/slots
-curl http://127.0.0.1:8765/api/samples
-curl http://127.0.0.1:8765/api/fx/plugins
-curl http://127.0.0.1:8765/api/sessions
-curl http://127.0.0.1:8765/api/audio/devices
-curl http://127.0.0.1:8765/api/flow
-curl http://127.0.0.1:8765/api/slots/1/info
-curl http://127.0.0.1:8765/api/slots/1/params
-curl http://127.0.0.1:8765/api/master/fx/1/params
-curl http://127.0.0.1:8765/api/midi/ports
-
-curl -X POST http://127.0.0.1:8765/api/audio/start \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"device": "Built-in Output"}'
-
-curl -X POST http://127.0.0.1:8765/api/slots/1/gain \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"gain": 0.65}'
-
-curl -X POST http://127.0.0.1:8765/api/slots/2/wav \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"pack": "909", "sample": "bassdrum", "name": "Kick"}'
-
-curl -X POST http://127.0.0.1:8765/api/slots/1/fx \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"plugin": "DragonflyRoomReverb", "name": "Room"}'
-
-curl -X POST http://127.0.0.1:8765/api/slots/1/params \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"name": "cutoff", "value": 0.42}'
-
-curl -X POST http://127.0.0.1:8765/api/slots/1/params \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"target": "effect", "effect": 1, "name": "mix", "value": 0.5}'
-
-curl -X POST http://127.0.0.1:8765/api/slots/1/fx/1/clear \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{}'
-
-curl -X POST http://127.0.0.1:8765/api/master/fx/1/params \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"name": "mix", "value": 0.5}'
-
-curl -X POST http://127.0.0.1:8765/api/master/fx \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"plugin": "DragonflyRoomReverb", "name": "Room"}'
-
-curl -X POST http://127.0.0.1:8765/api/master/fx/1/clear \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{}'
-
-curl -X POST http://127.0.0.1:8765/api/tempo \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"bpm": 128}'
-
-curl -X POST http://127.0.0.1:8765/api/link/start \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"bpm": 128}'
-
-curl -X POST http://127.0.0.1:8765/api/link/stop \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{}'
-
-curl -X POST http://127.0.0.1:8765/api/midi/inputs \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"port": 0}'
-
-curl -X POST http://127.0.0.1:8765/api/midi/inputs/1/close \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{}'
-
-curl -X POST http://127.0.0.1:8765/api/midi/link \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"channel": 10, "slot": 3}'
-
-curl -X POST http://127.0.0.1:8765/api/midi/cut \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"channel": 10}'
-
-curl -X POST http://127.0.0.1:8765/api/slots/1/note \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"note": 60, "velocity": 100, "duration_ms": 300}'
-
-curl -X POST http://127.0.0.1:8765/api/session/save \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"name": "demo"}'
-
-curl -X POST http://127.0.0.1:8765/api/session/load \
-  -H "Content-Type: application/json" \
-  -H "X-VCPI-CSRF: $TOKEN" \
-  -d '{"name": "demo"}'
-```
 
 ## Raspberry Pi Builds
 
