@@ -99,8 +99,8 @@ def _cmd_serve(args):
     if existing_pid is not None:
         print(
             f"Error: vcpi server is already running (PID {existing_pid}).\n"
-            "Connect with:  ./vcli\n"
-            "Or stop it first:  ./vcli -c shutdown",
+            "Connect with:  ./vcpi\n"
+            "Or stop it first:  ./vcpi -c shutdown",
             file=sys.stderr,
         )
         sys.exit(1)

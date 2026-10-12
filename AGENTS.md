@@ -4,7 +4,7 @@ Read this file first in new sessions. It is a durable map of the repo, not a ful
 
 ## Overview
 
-`vcpi` is a Python VST3 host with Ableton Link tempo sync for hardware-centric live setups. The normal workflow is a split daemon/client model: start the server with `./vcsrv` (or `python main.py serve`) and connect with `./vcli` (or `python main.py cli`).
+`vcpi` is a Python VST3 host with Ableton Link tempo sync for hardware-centric live setups. The normal workflow is a split daemon/client model: start the server with `./vcpid` (or `python main.py serve`) and connect with `./vcpi` (or `python main.py cli`).
 
 ## Source of truth
 
@@ -27,8 +27,8 @@ Read this file first in new sessions. It is a durable map of the repo, not a ful
 ├── vst3/          Fetch scripts and docs for bundled VST3 plugins
 ├── rpi-build/     Raspberry Pi image build/provisioning tools
 ├── main.py        Top-level Python entry point
-├── vcsrv          Server launcher
-├── vcli           Client launcher
+├── vcpid          Server launcher
+├── vcpi           Client launcher
 ├── README.md      Project overview
 └── USAGE.md       Command and flag reference
 ```
@@ -104,8 +104,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Run server / client
-./vcsrv
-./vcli
+./vcpid
+./vcpi
 
 # Direct Python equivalents
 python main.py serve

@@ -9,10 +9,10 @@ Fastest path:
 
 ```bash
 # Terminal 1
-./vcsrv
+./vcpid
 
 # Terminal 2
-./vcli
+./vcpi
 ```
 
 Manual setup:
@@ -32,7 +32,7 @@ python main.py cli
 vcpi runs with separate server (`serve`) and client (`cli`) processes.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
-from `vcli` with `audio start [device]`.
+from `vcpi` with `audio start [device]`.
 
 If you are on Linux, you may also need:
 
@@ -63,8 +63,8 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
   patches/            # VCV/Cardinal .vcv patch files
   sessions/           # User-saved session files (save/load commands)
   main.py             # Top-level Python entry point
-  vcsrv               # Server launcher (creates .venv on first run)
-  vcli                # Client launcher (creates .venv on first run)
+  vcpid               # Server launcher (creates .venv on first run)
+  vcpi                # Client launcher (creates .venv on first run)
   requirements.txt    # Python dependencies
   USAGE.md            # Full CLI and startup flag reference
   rpi-build/          # Raspberry Pi image build/provisioning tools only
@@ -74,10 +74,10 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 
 ```bash
 # Start headless daemon with Unix socket API
-./vcsrv
+./vcpid
 
 # Connect CLI client to a running daemon
-./vcli
+./vcpi
 
 # Direct python equivalents
 python main.py serve
@@ -85,13 +85,13 @@ python main.py cli
 
 # Logging defaults:
 # - python main.py serve -> WARNING
-# - ./vcsrv -> DEBUG
-LOG_LEVEL=INFO ./vcsrv
+# - ./vcpid -> DEBUG
+LOG_LEVEL=INFO ./vcpid
 ```
 
 Full CLI and startup flag reference: `USAGE.md`
 
-Inside `./vcli`, press `Tab` to autocomplete command names. The `slot`
+Inside `./vcpi`, press `Tab` to autocomplete command names. The `slot`
 command has context-aware completion: `slot <n> vst` and `slot <n> fx`
 complete detected VST3 plugin names, `slot <n> wav` completes pack and
 sample names, and `slot <n> vcv` completes patch names. You do not need
@@ -302,13 +302,13 @@ Headless server + remote CLI:
 
 ```bash
 # Terminal 1
-./vcsrv
+./vcpid
 
 # Terminal 2
-./vcli
+./vcpi
 ```
 
-From `vcli`, use `shutdown` to terminate the daemon process (for example, to
+From `vcpi`, use `shutdown` to terminate the daemon process (for example, to
 let systemd restart it).
 
 ## Raspberry Pi Builds

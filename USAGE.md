@@ -19,8 +19,8 @@ Source of truth:
 
 | Command | What it does |
 |---|---|
-| `./vcsrv` | Starts headless server mode; bootstraps `.venv` on first run |
-| `./vcli` | Connects interactive client mode; bootstraps `.venv` on first run |
+| `./vcpid` | Starts headless server mode; bootstraps `.venv` on first run |
+| `./vcpi` | Connects interactive client mode; bootstraps `.venv` on first run |
 | `python main.py serve` | Starts headless server with Unix socket control |
 | `python main.py cli` | Connects to a running headless server |
 
@@ -53,12 +53,12 @@ When running `serve`, vcpi does not start audio automatically. Start audio
 manually from the client with `audio start [device]`.
 
 Only one server instance per user is allowed. If a server is already running
-(e.g. via systemd `payload.service`), `./vcsrv` will refuse to start and
-print the existing PID. Connect to the running instance with `./vcli` instead.
+(e.g. via systemd `payload.service`), `./vcpid` will refuse to start and
+print the existing PID. Connect to the running instance with `./vcpi` instead.
 The PID file is stored at `~/.config/vcpi/vcpi.pid`.
 
 Logging level is controlled by environment variable `LOG_LEVEL`.
-Core default is `WARNING`. `./vcsrv` defaults it to `DEBUG` if unset.
+Core default is `WARNING`. `./vcpid` defaults it to `DEBUG` if unset.
 The Raspberry Pi `payload.service` also sets `LOG_LEVEL=DEBUG`.
 
 VST3 plugin search and name resolution:
@@ -85,7 +85,7 @@ Cardinal/VCV helpers:
 Examples:
 
 ```bash
-LOG_LEVEL=INFO ./vcsrv
+LOG_LEVEL=INFO ./vcpid
 LOG_LEVEL=WARNING python main.py serve
 ```
 
@@ -98,7 +98,7 @@ Server/client specific:
 
 ## Interactive Commands
 
-When connected with `./vcli` (or `python main.py cli`), press `Tab` to
+When connected with `./vcpi` (or `python main.py cli`), press `Tab` to
 autocomplete command names. `slot` has context-aware argument completion:
 
 - `slot` -> slot numbers `1`-`8`, `master`
@@ -373,10 +373,10 @@ Headless server + client shell:
 
 ```bash
 # Terminal 1
-./vcsrv
+./vcpid
 
 # Terminal 2
-./vcli
+./vcpi
 ```
 
 Server logs now include:

@@ -13,7 +13,7 @@ This file is for transient session state. Durable repo facts live in `AGENTS.md`
 ## Key findings
 
 - `vcpi` is a Python VST3 host with Ableton Link tempo sync for hardware-centric live setups.
-- Normal runtime is split daemon/client: `./vcsrv` or `python main.py serve`, then `./vcli` or `python main.py cli`.
+- Normal runtime is split daemon/client: `./vcpid` or `python main.py serve`, then `./vcpi` or `python main.py cli`.
 - Main code areas are `core/`, `controllers/`, `graph/`, `sampler/`, `vst3/`, and `rpi-build/`.
 - Most useful code entrypoints are `core/host.py`, `core/engine.py`, `core/cli.py`, `core/server.py`, `core/client.py`, `core/link.py`, and `core/session.py`.
 

@@ -23,7 +23,7 @@
 | Persistence | JSON files | stdlib | Session save/restore |
 
 ## Architecture
-- **Client/Server**: `vcsrv` (daemon) ↔ `vcli` (client) over Unix socket
+- **Client/Server**: `vcpid` (daemon) ↔ `vcpi` (client) over Unix socket
 - **Central coordinator**: `VcpiCore` owns all subsystems (engine, link, MIDI, sequencer)
 - **Real-time audio**: `AudioEngine` callback renders slots in parallel via `ThreadPoolExecutor`
 - **8 instrument slots**: VST3, WAV sampler, or VCV/Cardinal per slot
