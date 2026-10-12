@@ -145,8 +145,30 @@ class HostCLI(cmd.Cmd):
 
         width = max(len(name) for name, _ in entries)
         self._print("Available commands:")
-        for name, summary in entries:
-            self._print(f"  {name:<{width}}  {summary}")
+        groups = (
+            ("Plugins", {"slot", "params", "set", "info", "knobs"}),
+            ("Mixer", {"gain", "mute", "solo"}),
+            ("Audio", {"audio"}),
+            ("MIDI", {"midi", "midimix", "note"}),
+            ("Sequencer & sync", {"seq", "tempo", "ableton"}),
+            ("Sessions", {"save", "load"}),
+            ("Status & diagnostics", {"status", "flow", "deps"}),
+            ("Help & lifecycle", {"help", "about", "quit", "exit", "shutdown"}),
+        )
+        remaining = dict(entries)
+        for title, commands in groups:
+            rows = [(name, summary) for name, summary in entries if name in commands]
+            if not rows:
+                continue
+            self._print(f"\n{title}:")
+            for name, summary in rows:
+                self._print(f"  {name:<{width}}  {summary}")
+                remaining.pop(name)
+        if remaining:
+            self._print("\nOther commands:")
+            for name, summary in remaining.items():
+                self._print(f"  {name:<{width}}  {summary}")
+        self._print()
         self._print("Tip: use 'help <command>' for detailed usage.")
 
     # -- plugins -------------------------------------------------------------

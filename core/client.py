@@ -420,8 +420,10 @@ def _parse_help_commands(lines: list[str]) -> list[str]:
             continue
 
         if in_custom_help:
-            # New vcpi help format prints one command per line, followed by
-            # a summary; only the first token is the command name.
+            if line.endswith(":"):
+                continue
+            # Group headings are skipped above; command rows contain a name
+            # followed by a summary.
             token = line.split()[0]
             if token == "EOF":
                 continue

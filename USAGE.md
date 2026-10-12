@@ -98,6 +98,11 @@ Server/client specific:
 
 ## Interactive Commands
 
+Type `help` for commands grouped by function: plugins, mixer, audio, MIDI,
+sequencer & sync, sessions, status & diagnostics, and help & lifecycle.
+Commands are alphabetical within each group. Use `help <command>` for
+detailed syntax and usage.
+
 When connected with `./vcpi` (or `python main.py cli`), press `Tab` to
 autocomplete command names. `slot` has context-aware argument completion:
 
