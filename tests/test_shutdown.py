@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from core import deps
 from core.engine import AudioEngine
 from core.models import InstrumentSlot
-from core.host import VcpiCore
+from core.sequencer import Sequencer
 
 
 class ShutdownTests(unittest.TestCase):
@@ -45,10 +45,10 @@ class ShutdownTests(unittest.TestCase):
             engine.shutdown()
 
     def test_stopping_sequence_delivers_pending_note_off_once(self):
-        host = VcpiCore()
-        seq = host.sequencer
+        host = SimpleNamespace(engine=AudioEngine())
+        seq = Sequencer(host)
         seq._running = True
-        seq._schedule_note_offs([(0, 60, 60.0)], deps.mido)
+        seq._schedule_note_offs([(0, 60, 60.0, 0)], deps.mido)
         timers = list(seq._note_off_timers)
         try:
             seq.stop()
@@ -67,11 +67,29 @@ class ShutdownTests(unittest.TestCase):
                 timer.join()
             host.engine.shutdown()
 
+    def test_stopping_failed_sequence_still_releases_pending_notes(self):
+        host = SimpleNamespace(engine=AudioEngine())
+        seq = Sequencer(host)
+        seq._schedule_note_offs([(0, 60, 60.0, 0)], deps.mido)
+        timers = list(seq._note_off_timers)
+        try:
+            seq.stop()  # The playback thread has already marked itself stopped.
+            self.assertEqual(
+                [(slot, message.type, message.note) for slot, message in host.engine._midi_queue],
+                [(0, "note_off", 60)],
+            )
+            self.assertTrue(all(not timer.is_alive() for timer in timers))
+        finally:
+            for timer in timers:
+                timer.cancel()
+                timer.join()
+            host.engine.shutdown()
+
     def test_stopping_sequence_does_not_repeat_completed_note_off(self):
-        host = VcpiCore()
-        seq = host.sequencer
+        host = SimpleNamespace(engine=AudioEngine())
+        seq = Sequencer(host)
         seq._running = True
-        seq._schedule_note_offs([(0, 60, 0.0)], deps.mido)
+        seq._schedule_note_offs([(0, 60, 0.0, 0)], deps.mido)
         timers = list(seq._note_off_timers)
         try:
             for timer in timers:

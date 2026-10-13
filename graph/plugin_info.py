@@ -1,68 +1,49 @@
 """Plugin info panel renderer for vcpi.
 
-Displays metadata exposed by pedalboard ExternalPlugin instances:
+Displays cached metadata captured by the audio owner process:
 name, vendor, category, version, latency, parameter count, etc.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.audio_state import PluginSnapshot
 
 
-def _safe_attr(plugin, attr: str, default: str = "n/a") -> str:
-    """Read an attribute with a fallback for plugins that don't expose it."""
-    try:
-        val = getattr(plugin, attr, None)
-        if val is None:
-            return default
-        return str(val)
-    except Exception:
-        return default
+def _metadata_text(value, default: str = "n/a") -> str:
+    """Format cached metadata, preserving the missing-field convention."""
+    return default if value is None else str(value)
 
 
-def render_plugin_info(plugin, label: str = "") -> str:
-    """Return an ASCII info box for a single plugin instance.
+def render_plugin_info(plugin: PluginSnapshot, label: str = "") -> str:
+    """Return an ASCII info box for a cached plugin snapshot.
 
     Parameters
     ----------
-    plugin : pedalboard ExternalPlugin / WavSamplerPlugin / any
-        The plugin object to inspect.
+    plugin : PluginSnapshot
+        Plain metadata published by the audio owner while stopped.
     label : str, optional
         An optional heading (e.g. "Slot 1" or "Master FX 2").
     """
     # -- gather metadata -----------------------------------------------------
-    name = _safe_attr(plugin, "name", type(plugin).__name__)
-    descriptive = _safe_attr(plugin, "descriptive_name")
-    vendor = _safe_attr(plugin, "manufacturer_name")
-    category = _safe_attr(plugin, "category")
-    version = _safe_attr(plugin, "version")
-    identifier = _safe_attr(plugin, "identifier")
-    latency = _safe_attr(plugin, "reported_latency_samples", "0")
-
-    plugin_type = _safe_attr(plugin, "info_type", "Unknown")
-
-    path = _safe_attr(plugin, "path_to_plugin_file",
-                      _safe_attr(plugin, "path", ""))
+    name = _metadata_text(plugin.name, "Unknown")
+    descriptive = _metadata_text(plugin.descriptive_name)
+    vendor = _metadata_text(plugin.manufacturer_name)
+    category = _metadata_text(plugin.category)
+    version = _metadata_text(plugin.version)
+    identifier = _metadata_text(plugin.identifier)
+    latency = _metadata_text(plugin.reported_latency_samples, "0")
+    plugin_type = _metadata_text(plugin.info_type, "Unknown")
+    path = _metadata_text(plugin.path_to_plugin_file, "")
 
     # -- parameters summary --------------------------------------------------
-    params = getattr(plugin, "parameters", {})
-    param_count = len(params) if params else 0
-
-    automatable = 0
-    boolean_count = 0
-    discrete_count = 0
-    for pname in params:
-        try:
-            raw_param = plugin._get_parameter(pname)
-        except Exception:
-            raw_param = None
-        if raw_param is not None:
-            if getattr(raw_param, "is_automatable", False):
-                automatable += 1
-            if getattr(raw_param, "is_boolean", False):
-                boolean_count += 1
-            if getattr(raw_param, "is_discrete", False):
-                discrete_count += 1
+    params = plugin.parameters
+    param_count = len(params)
+    automatable = sum(param.is_automatable for param in params.values())
+    boolean_count = sum(param.is_boolean for param in params.values())
+    discrete_count = sum(param.is_discrete for param in params.values())
 
     # -- compose rows --------------------------------------------------------
     rows: list[tuple[str, str]] = []

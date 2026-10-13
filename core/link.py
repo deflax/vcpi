@@ -69,16 +69,17 @@ class LinkSync:
         self._loop_thread = None
 
     def _make_link(self):
-        """Construct aalink.Link across old/new constructor signatures."""
-        # Older releases accepted a single bpm arg.
-        try:
-            return aalink.Link(self._bpm)
-        except TypeError:
-            pass
-
-        # Newer releases require an event loop arg.
+        """Construct Link on its running event loop, including older bindings."""
         loop = self._start_loop_thread()
-        return aalink.Link(self._bpm, loop)
+
+        async def construct():
+            try:
+                return aalink.Link(self._bpm)
+            except TypeError:
+                # Some supported releases require the explicit loop argument.
+                return aalink.Link(self._bpm, loop)
+
+        return asyncio.run_coroutine_threadsafe(construct(), loop).result(timeout=2.0)
 
     def enable(self):
         if not HAS_LINK:

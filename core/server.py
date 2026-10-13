@@ -277,10 +277,12 @@ def run_server(host: VcpiCore, sock_path: str | None = None):
     def _shutdown(signum, frame):
         del signum, frame
         logger.info("shutting down")
-        server.shutdown()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    server.start()
+    try:
+        server.start()
+    finally:
+        server.shutdown()

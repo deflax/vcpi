@@ -5,7 +5,7 @@ from __future__ import annotations
 import wave
 from pathlib import Path
 
-from core.deps import np
+from core.audio_deps import np
 
 
 def decode_pcm(raw: bytes, sample_width: int) -> np.ndarray:

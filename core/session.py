@@ -1,8 +1,8 @@
 """Session persistence -- save and restore host state to a JSON file.
 
 Saved state includes:
-  - Per-slot: source kind (plugin/wav), instrument path, name, gain, muted,
-    solo, insert effect paths/names, and all plugin parameter values
+  - Per-slot: source kind (plugin/wav/vcv), instrument path, name, gain,
+    enabled, muted, solo, insert effect paths/names, and all plugin parameter values
   - Master effects: paths, names, and parameter values
   - Master gain
   - MIDI channel -> slot routing
@@ -36,45 +36,38 @@ logger = logging.getLogger(__name__)
 # ===========================================================================
 
 def _fx_path(plugin) -> str:
-    """Return the filesystem path for an effect plugin, with safe fallbacks.
-
-    pedalboard C++ plugin objects sometimes raise when accessing
-    ``path_to_plugin_file`` from a non-main thread (``'super' object
-    has no attribute ...``).  We first try the stashed ``_vcpi_path``
-    set at load time, then fall back to the native attribute.
-    """
-    for attr in ("_vcpi_path", "path_to_plugin_file", "path"):
-        try:
-            val = getattr(plugin, attr, None)
-            if val:
-                return str(val)
-        except Exception:
-            continue
-    return ""
+    """Return the effect path captured by the audio process."""
+    return plugin.path_to_plugin_file
 
 
-def _plugin_params(plugin) -> dict[str, float]:
-    """Extract all parameter values from a pedalboard plugin."""
-    params = {}
-    names = getattr(plugin, "parameters", {})
-    for name in names:
-        try:
-            params[name] = float(getattr(plugin, name))
-        except Exception:
-            pass
-    return params
+def _plugin_params(plugin) -> dict[str, bool | str | int | float]:
+    """Copy cached parameter values without touching native plugin objects."""
+    return dict(plugin.values) if plugin is not None else {}
 
 
-def _apply_plugin_params(plugin, params: dict[str, float]):
-    """Apply saved parameter values to a pedalboard plugin."""
+def _apply_plugin_params(
+    host: VcpiCore,
+    slot_index: int | None,
+    params: dict[str, bool | str | int | float],
+    fx_index: int | None = None,
+):
+    """Restore each parameter through an acknowledged audio-process setter."""
     for name, value in params.items():
         try:
-            setattr(plugin, name, value)
-        except Exception:
-            logger.warning("[session] could not restore param '%s' = %s", name, value)
+            host.engine.set_parameter(slot_index, name, value, fx_index=fx_index)
+        except Exception as exc:
+            logger.warning(
+                "[session] could not restore param '%s' = %s: %s", name, value, exc,
+            )
 
 
 def snapshot(host: VcpiCore) -> dict:
+    """Copy one coherent cached state; never inspect a live native plugin."""
+    with host.engine.state_lock:
+        return _snapshot_cached(host)
+
+
+def _snapshot_cached(host: VcpiCore) -> dict:
     """Capture the full restorable state of the host as a plain dict."""
     slots_data = []
     for slot in host.engine.slots:
@@ -94,6 +87,7 @@ def snapshot(host: VcpiCore) -> dict:
             "path": slot.path,
             "name": slot.name,
             "gain": slot.gain,
+            "enabled": slot.enabled,
             "muted": slot.muted,
             "solo": slot.solo,
             "params": _plugin_params(slot.plugin),
@@ -141,6 +135,7 @@ def save(host: VcpiCore, path: Optional[Path] = None):
     """Save the current session to a JSON file."""
     path = Path(path) if path else DEFAULT_SESSION_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
+    host.engine.sync_state()
     data = snapshot(host)
     path.write_text(json.dumps(data, indent=2) + "\n")
     logger.info("[Session] Saved to %s", path)
@@ -163,6 +158,12 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
         logger.warning("[Session] Unknown session version %s, skipping", version)
         return
 
+    # Native loading and every restored control happen while audio is paused.
+    was_running = host.engine.running
+    previous_output = host.audio_output_name
+    if was_running:
+        host.stop_audio()
+
     errors = []
 
     # -- BPM / Link ----------------------------------------------------------
@@ -180,7 +181,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
     # -- Master gain ---------------------------------------------------------
     mg = data.get("master_gain")
     if mg is not None:
-        host.engine.master_gain = mg
+        host.engine.set_master_gain(mg)
 
     # -- Slots ---------------------------------------------------------------
     for idx, slot_data in enumerate(data.get("slots", [])):
@@ -206,20 +207,27 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                         )
                     else:
                         slot = host.load_instrument(idx, plugin_path, slot_data.get("name"))
-                        slot.source_type = "vcv"
                 case _:
                     slot = host.load_instrument(idx, plugin_path, slot_data.get("name"))
-            slot.gain = slot_data.get("gain", 0.8)
-            slot.muted = slot_data.get("muted", False)
-            slot.solo = slot_data.get("solo", False)
-            _apply_plugin_params(slot.plugin, slot_data.get("params", {}))
+            slot = host.engine.set_slot_state(
+                idx,
+                gain=slot_data.get("gain", 0.8),
+                enabled=slot_data.get("enabled", True),
+                muted=slot_data.get("muted", False),
+                solo=slot_data.get("solo", False),
+                source_type=slot_kind,
+                vcv_patch_path=slot_data.get("vcv_patch_path", ""),
+            )
+            _apply_plugin_params(host, idx, slot_data.get("params", {}))
             logger.info("[session] slot %d: %s", idx + 1, slot.name)
 
             for fx_data in slot_data.get("effects", []):
                 try:
                     host.load_effect(fx_data["path"], idx, fx_data.get("name"))
-                    fx_plugin = slot.effects[-1]
-                    _apply_plugin_params(fx_plugin, fx_data.get("params", {}))
+                    slot = host.engine.slots[idx]
+                    _apply_plugin_params(
+                        host, idx, fx_data.get("params", {}), len(slot.effects) - 1,
+                    )
                 except Exception as e:
                     errors.append(f"slot {idx + 1} fx '{fx_data.get('path')}': {e}")
 
@@ -230,8 +238,10 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
     for fx_data in data.get("master_effects", []):
         try:
             host.load_effect(fx_data["path"], None, fx_data.get("name"))
-            fx_plugin = host.engine.master_effects[-1]
-            _apply_plugin_params(fx_plugin, fx_data.get("params", {}))
+            _apply_plugin_params(
+                host, None, fx_data.get("params", {}),
+                len(host.engine.master_effects) - 1,
+            )
         except Exception as e:
             errors.append(f"master fx '{fx_data.get('path')}': {e}")
 
@@ -280,7 +290,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                     time.sleep(retry_delay)
         errors.append(f"{label} '{value}': {last_exc}")
 
-    def _restore_audio(name: str, retries: int = max_retries):
+    def _restore_audio(name: str | None, retries: int = max_retries):
         last_exc = None
         for attempt in range(retries):
             try:
@@ -308,9 +318,6 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
     if isinstance(audio_output, str) and not audio_output.strip():
         audio_selected = False
 
-    if audio_selected and isinstance(audio_output, str):
-        _restore_audio(audio_output)
-
     midi_inputs = connections.get("midi_inputs")
     if isinstance(midi_inputs, list):
         already_open = set(host.midi_input_names)
@@ -322,6 +329,10 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
 
     _restore_port("MIDI mix in", connections.get("midi_mix_in"), host.open_mixer_midi)
     _restore_port("MIDI mix out", connections.get("midi_mix_out"), host.open_mixer_midi_out)
+    if audio_selected and isinstance(audio_output, str):
+        _restore_audio(audio_output)
+    elif was_running:
+        _restore_audio(previous_output)
 
     # -- Report --------------------------------------------------------------
     if errors:

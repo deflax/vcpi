@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal
 import sys
 from typing import TYPE_CHECKING
 
@@ -52,40 +53,47 @@ def _boot_host(args) -> "VcpiCore":
 
     host = VcpiCore(sample_rate=args.sr, buffer_size=args.buf,
                     session_path=args.session)
-    host.link._bpm = args.bpm
+    try:
+        host.link._bpm = args.bpm
 
-    if not args.no_restore:
-        try:
-            host.restore_session()
-        except Exception as e:
-            logger.warning("session restore failed: %s", e)
-
-    if args.link:
-        try:
-            host.start_link(args.bpm)
-        except Exception as e:
-            logger.warning("link startup failed: %s", e)
-
-    if args.midi_in:
-        for port in args.midi_in:
+        if not args.no_restore:
             try:
-                host.open_midi_input(port)
+                host.restore_session()
             except Exception as e:
-                logger.warning("MIDI input startup failed for '%s': %s", port, e)
+                logger.warning("session restore failed: %s", e)
 
-    if args.mix_midi is not None:
+        if args.link:
+            try:
+                host.start_link(args.bpm)
+            except Exception as e:
+                logger.warning("link startup failed: %s", e)
+
+        if args.midi_in:
+            for port in args.midi_in:
+                try:
+                    host.open_midi_input(port)
+                except Exception as e:
+                    logger.warning("MIDI input startup failed for '%s': %s", port, e)
+
+        if args.mix_midi is not None:
+            try:
+                host.open_mixer_midi(args.mix_midi)
+            except Exception as e:
+                logger.warning("MIDI Mix startup failed: %s", e)
+
+        if args.mix_midi_out is not None:
+            try:
+                host.open_mixer_midi_out(args.mix_midi_out)
+            except Exception as e:
+                logger.warning("MIDI Mix OUT startup failed: %s", e)
+
+        return host
+    except BaseException:
         try:
-            host.open_mixer_midi(args.mix_midi)
-        except Exception as e:
-            logger.warning("MIDI Mix startup failed: %s", e)
-
-    if args.mix_midi_out is not None:
-        try:
-            host.open_mixer_midi_out(args.mix_midi_out)
-        except Exception as e:
-            logger.warning("MIDI Mix OUT startup failed: %s", e)
-
-    return host
+            host.shutdown()
+        except Exception:
+            logger.exception("startup cleanup failed")
+        raise
 
 
 # -- subcommand handlers -----------------------------------------------------
@@ -108,12 +116,26 @@ def _cmd_serve(args):
     level = configure_logging(default_level="WARNING")
     logger.info("vcpi server starting (log level: %s)", logging.getLevelName(level))
 
+    # Install before booting: unwind active RPCs instead of re-entering their
+    # locks from a signal handler. Resource cleanup happens in finally blocks.
+    def interrupt(signum, frame):
+        del signum, frame
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, interrupt)
+    signal.signal(signal.SIGTERM, interrupt)
+
     write_pidfile()
+    host = None
     try:
         host = _boot_host(args)
         run_server(host, args.sock)
     finally:
-        remove_pidfile()
+        try:
+            if host is not None:
+                host.shutdown()
+        finally:
+            remove_pidfile()
 
 
 def _cmd_cli(args):

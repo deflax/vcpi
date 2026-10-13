@@ -29,7 +29,12 @@ python main.py serve
 python main.py cli
 ```
 
-vcpi runs with separate server (`serve`) and client (`cli`) processes.
+The daemon runs a control process and a spawned audio-owner process; the CLI
+remains a separate client. Command parsing, formatting, session files, MIDI
+ports, the sequencer, and Ableton Link stay in the control process. PortAudio,
+VST3/Cardinal instances, effects, and WAV rendering belong to the audio owner,
+with a separate Python GIL. Read-only commands use cached snapshots rather
+than inspecting processing plugins or querying the running audio backend.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcpi` with `audio start [device]`.
@@ -45,8 +50,12 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 ```text
 .
   core/               # Main package
-    host.py           # vcpi core orchestration
-    engine.py         # Real-time audio engine (sounddevice callback)
+    host.py           # Control-process orchestration
+    audio_process.py  # Spawned audio owner, bounded IPC, failure supervision
+    plugin_host.py    # Native plugin/device lifecycle in the audio child
+    audio_state.py    # Plain plugin/parameter snapshots for control and display
+    audio_deps.py     # Native audio imports (audio owner and sampler tools only)
+    engine.py         # Audio callback, owner-applied controls, render workers
     cli.py            # Interactive command-line interface
     server.py         # Unix socket server for headless mode
     client.py         # CLI client (connects to server)

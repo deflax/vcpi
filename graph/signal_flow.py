@@ -7,22 +7,24 @@ gain/mute/solo state, master effects, and master gain in a single diagram.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from core.models import NUM_SLOTS
 
-
-def _plugin_name(plugin) -> str:
-    """Best-effort short name for a pedalboard plugin."""
-    name = getattr(plugin, "name", None)
-    if name:
-        return name
-    path = getattr(plugin, "path_to_plugin_file", None)
-    if path:
-        return Path(path).stem
-    return type(plugin).__name__
+if TYPE_CHECKING:
+    from core.audio_state import PluginSnapshot
 
 
-def _fx_chain_str(effects: list) -> str:
+def _plugin_name(plugin: PluginSnapshot) -> str:
+    """Short name from metadata cached by the audio owner."""
+    if plugin.name:
+        return plugin.name
+    if plugin.path_to_plugin_file:
+        return Path(plugin.path_to_plugin_file).stem
+    return "Unknown"
+
+
+def _fx_chain_str(effects: list[PluginSnapshot]) -> str:
     if not effects:
         return ""
     names = [_plugin_name(fx) for fx in effects]
@@ -41,8 +43,8 @@ def render_signal_flow(engine, channel_map: dict) -> str:
 
     Parameters
     ----------
-    engine : AudioEngine
-        The running audio engine (provides slots, master_effects, master_gain).
+    engine : RemoteAudioEngine
+        Cached slot, plugin and mixer state; no owner requests are issued.
     channel_map : dict
         MIDI channel (0-15) -> slot index (0-7) routing map.
     """
@@ -54,7 +56,8 @@ def render_signal_flow(engine, channel_map: dict) -> str:
     for chs in routes_by_slot.values():
         chs.sort()
 
-    any_solo = engine.any_solo()
+    slots = engine.slots
+    any_solo = any(slot.solo for slot in slots if slot is not None)
 
     # -- collect row data for each slot --------------------------------------
     #
@@ -67,7 +70,7 @@ def render_signal_flow(engine, channel_map: dict) -> str:
 
     slot_lines: list[str] = []
     for i in range(NUM_SLOTS):
-        slot = engine.slots[i]
+        slot = slots[i]
         num = i + 1
 
         if slot is None:
@@ -98,6 +101,8 @@ def render_signal_flow(engine, channel_map: dict) -> str:
             flags += " M"
         if slot.solo:
             flags += " S"
+        if not slot.enabled:
+            flags += " disabled"
 
         aud_mark = " " if audible else "x"
         bar = _gain_bar(slot.gain)

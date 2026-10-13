@@ -1,7 +1,7 @@
 """System status panel renderer for vcpi.
 
 Displays audio engine state, backend, MIDI connections, Ableton Link,
-session path, and render thread pool information in an ASCII box.
+session path, render worker capacity, and callback health in an ASCII box.
 """
 
 from __future__ import annotations
@@ -9,68 +9,12 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from core.deps import HAS_SOUNDDEVICE, sd
-
 if TYPE_CHECKING:
     from core.host import VcpiCore
 
 
-def _audio_backend_label(engine) -> str:
-    """Best-effort host-audio backend label (ALSA/JACK/Pulse/PipeWire/etc.)."""
-    if not HAS_SOUNDDEVICE or sd is None:
-        return "sounddevice unavailable"
-    try:
-        device_index = None
-        stream = engine._stream
-        if stream is not None:
-            stream_device = getattr(stream, "device", None)
-            if isinstance(stream_device, (tuple, list)):
-                if len(stream_device) >= 2 and isinstance(stream_device[1], int):
-                    device_index = stream_device[1]
-                elif len(stream_device) == 1 and isinstance(stream_device[0], int):
-                    device_index = stream_device[0]
-            elif isinstance(stream_device, int):
-                device_index = stream_device
-
-        if not isinstance(device_index, int):
-            default_device = sd.default.device
-            if isinstance(default_device, (tuple, list)):
-                if len(default_device) >= 2 and isinstance(default_device[1], int):
-                    device_index = default_device[1]
-                elif len(default_device) == 1 and isinstance(default_device[0], int):
-                    device_index = default_device[0]
-            elif isinstance(default_device, int):
-                device_index = default_device
-
-        if not isinstance(device_index, int) or device_index < 0:
-            return "unknown"
-
-        device_info = sd.query_devices(device_index)
-        hostapi_index = device_info.get("hostapi")
-        if not isinstance(hostapi_index, int):
-            return "unknown"
-        hostapi_name = sd.query_hostapis(hostapi_index).get("name", "unknown")
-        device_name = device_info.get("name")
-        if device_name:
-            return f"{hostapi_name} ({device_name})"
-        return str(hostapi_name)
-    except Exception:
-        return "unknown"
-
-
-def _pool_status(engine) -> tuple[int, int]:
-    """Return (max_workers, active_threads) for the render pool."""
-    pool = getattr(engine, "_render_pool", None)
-    if pool is None:
-        return 0, 0
-    max_w = getattr(pool, "_max_workers", 0)
-    # _threads is the set of alive worker threads in ThreadPoolExecutor
-    active = len(getattr(pool, "_threads", set()))
-    return max_w, active
-
-
 def render_status(host: VcpiCore) -> str:
-    """Return an ASCII status box summarising the host state.
+    """Return an ASCII status box using control state and cached audio health.
 
     Parameters
     ----------
@@ -83,14 +27,36 @@ def render_status(host: VcpiCore) -> str:
     rows: list[tuple[str, str]] = []
 
     # -- Audio ---------------------------------------------------------------
-    audio_state = "RUNNING" if engine.running else "STOPPED"
+    # Failure wins over the last shared running flag: an owner failure is
+    # explicitly stopped, even if its final callback could not publish health.
+    failure = engine.failure
+    audio_state = "RUNNING" if engine.running and not failure else "STOPPED"
     rows.append(("Audio", f"{audio_state}  (sr={host.sample_rate} buf={host.buffer_size})"))
-    rows.append(("Backend", _audio_backend_label(engine)))
+    rows.append(("Audio owner", f"PID {engine.owner_pid} (native plugins and callback)"))
+    rows.append(("Audio failure", str(failure) if failure else "(none)"))
+    rows.append(("Backend", engine.backend_label))
 
-    # -- Render pool ---------------------------------------------------------
-    max_w, active = _pool_status(engine)
+    # -- Render capacity and callback health ---------------------------------
+    # Capacity is the maximum worker count, not active threads/eligible slots.
+    workers = engine.render_workers
+    slots = engine.render_slots
     cpus = os.cpu_count() or 0
-    rows.append(("Render", f"{max_w} workers / {cpus} CPUs  ({active} active)"))
+    mode = ("idle" if slots == 0 else "inline" if slots == 1
+            else "parallel" if workers > 1 else "serial")
+    slot_label = "slot" if slots == 1 else "slots"
+    rows.append(
+        ("Render", f"max: {workers} workers / {cpus} CPUs"
+         f"  (last callback: {slots} eligible {slot_label}, {mode})")
+    )
+    rows.append(("Callbacks", str(engine.callback_count)))
+    rows.append(
+        ("Callback time", f"last: {engine.last_callback_ms:.3f} ms"
+         f"  peak: {engine.peak_callback_ms:.3f} ms"
+         f"  deadline: {engine.block_period_ms:.3f} ms")
+    )
+    rows.append(("Deadline misses", str(engine.deadline_misses)))
+    rows.append(("Underruns", str(engine.underruns)))
+    rows.append(("Render errors", str(engine.render_errors)))
 
     rows.append(("", ""))  # spacer
 

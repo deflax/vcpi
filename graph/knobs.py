@@ -6,6 +6,11 @@ value, units, and range information.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.audio_state import ParameterSnapshot, PluginSnapshot
+
 
 # Bar width in characters (the filled/empty portion).
 BAR_WIDTH = 20
@@ -18,76 +23,34 @@ def _param_bar(raw_value: float, width: int = BAR_WIDTH) -> str:
     return "#" * filled + "-" * (width - filled)
 
 
-def _format_value(plugin, pname: str, params: dict) -> tuple[str, str, str]:
-    """Return (display_value, units, type_hint) for a parameter.
-
-    Falls back gracefully when attributes are missing (e.g. WavSamplerPlugin).
-    """
-    param_obj = params.get(pname)
-    if param_obj is None:
-        return "???", "", "?"
-
-    # Current value through plugin attribute
-    try:
-        val = getattr(plugin, pname)
-    except Exception:
-        val = None
-
-    # Units / label
-    units = ""
-    try:
-        units = getattr(param_obj, "label", "") or ""
-        if not units:
-            units = getattr(param_obj, "units", "") or ""
-    except Exception:
-        pass
-
-    # Type hint
-    try:
-        ptype = getattr(param_obj, "type", None)
-        if ptype is bool:
-            type_hint = "bool"
-        elif ptype is str:
-            type_hint = "enum"
-        else:
-            type_hint = "float"
-    except Exception:
-        type_hint = "float"
-
-    # Display value: prefer the plugin's own string_value representation
-    display = ""
-    try:
-        raw_param = plugin._get_parameter(pname)
-        if raw_param is not None:
-            sv = getattr(raw_param, "string_value", None)
-            if sv:
-                display = sv
-    except Exception:
-        pass
-
+def _format_value(
+    plugin: PluginSnapshot, pname: str, param: ParameterSnapshot,
+) -> tuple[str, str, str]:
+    """Return (display_value, units, type_hint) from cached parameter data."""
+    val = plugin.values.get(pname)
+    units = param.label or param.units or ""
+    display = param.string_value
     if not display:
-        if val is not None:
-            try:
-                display = f"{float(val):.4g}" if isinstance(val, (int, float)) else str(val)
-            except (TypeError, ValueError):
-                display = str(val)
-        else:
+        if val is None:
             display = "???"
+        elif isinstance(val, (int, float)):
+            display = f"{float(val):.4g}"
+        else:
+            display = str(val)
+    return str(display), str(units), param.kind
 
-    return str(display), str(units), type_hint
 
-
-def render_knobs(plugin, label: str = "") -> str:
-    """Return an ASCII knob/slider view for all parameters of *plugin*.
+def render_knobs(plugin: PluginSnapshot, label: str = "") -> str:
+    """Return an ASCII knob/slider view for a cached plugin snapshot.
 
     Parameters
     ----------
-    plugin : pedalboard ExternalPlugin / WavSamplerPlugin / any
-        The plugin object whose parameters to display.
+    plugin : PluginSnapshot
+        Plain parameter metadata and values published by the audio owner.
     label : str, optional
         Optional heading text (e.g. "Slot 1: Dexed").
     """
-    params = getattr(plugin, "parameters", {})
+    params = plugin.parameters
     if not params:
         heading = label or "Parameters"
         border = "+" + "-" * (len(heading) + 2) + "+"
@@ -103,27 +66,13 @@ def render_knobs(plugin, label: str = "") -> str:
     rows: list[dict] = []
     for pname in params:
         param_obj = params[pname]
-        display, units, type_hint = _format_value(plugin, pname, params)
+        display, units, type_hint = _format_value(plugin, pname, param_obj)
 
-        # Raw value (0-1) for the bar
-        raw_val = 0.0
-        try:
-            raw_param = plugin._get_parameter(pname)
-            if raw_param is not None:
-                raw_val = float(getattr(raw_param, "raw_value", 0.0))
-        except Exception:
-            # Fallback: compute from range
-            try:
-                val = getattr(plugin, pname)
-                rng = getattr(param_obj, "range", None)
-                if rng and len(rng) >= 2 and rng[1] != rng[0]:
-                    raw_val = (float(val) - rng[0]) / (rng[1] - rng[0])
-                    raw_val = max(0.0, min(1.0, raw_val))
-            except Exception:
-                pass
+        # Preserve the plugin's cached normalized slider position.
+        raw_val = param_obj.raw_value
 
         # Range text
-        rng = getattr(param_obj, "range", None)
+        rng = param_obj.range
         if rng and len(rng) >= 2 and rng[0] is not None and rng[1] is not None:
             try:
                 range_text = f"{float(rng[0]):.4g} .. {float(rng[1]):.4g}"
@@ -135,10 +84,7 @@ def render_knobs(plugin, label: str = "") -> str:
         # For enum/string parameters, show valid values instead of bar
         valid_values: list[str] = []
         if type_hint == "enum":
-            try:
-                valid_values = list(getattr(param_obj, "valid_values", []))
-            except Exception:
-                pass
+            valid_values = list(param_obj.valid_values)
 
         rows.append({
             "name": pname,

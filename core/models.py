@@ -14,7 +14,7 @@ class InstrumentSlot:
 
     name: str
     path: str
-    plugin: object  # pedalboard ExternalPlugin
+    plugin: object  # native plugin in audio owner, PluginSnapshot in control process
     effects: list = field(default_factory=list)
     midi_channels: set = field(default_factory=set)  # routed MIDI channels (0-15)
     gain: float = 0.8
@@ -23,6 +23,7 @@ class InstrumentSlot:
     enabled: bool = True
     source_type: str = "plugin"  # plugin | wav | vcv
     vcv_patch_path: str = ""     # .vcv patch file (when source_type == "vcv")
+    generation: int = 0  # protects queued inputs from instrument replacement
     _effects_board: object = field(default=None, repr=False, compare=False)
 
     @property

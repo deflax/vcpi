@@ -159,6 +159,15 @@ To override the display label, use `slot 1 vst Acid V --name Bass`.
 The same syntax applies to `slot <slot|master> fx`; trailing words without
 `--name` are part of the plugin name, not a custom label.
 
+`set` waits for the audio owner to apply the change at a render boundary and
+prints the actual applied value, including plugin clamping. Boolean values may
+use `true`/`false`; quote enum values containing spaces, for example
+`set 1 transpose_semitones "24 semitones"`. `params`, `info`, and `knobs`
+read cached snapshots and never call live plugin getters. Metadata is captured
+while audio is stopped during loading, chain edits, and session saves; owned
+parameter changes publish incremental value updates. Plugin-side changes
+between captures can therefore make a diagnostic snapshot temporarily stale.
+
 ### Mixer Commands
 
 | Command | Description |
@@ -179,9 +188,45 @@ All audio operations are subcommands of `audio`:
 | `audio stop` | Stop audio engine |
 | `audio devices` | List available output devices |
 
+The daemon spawns a dedicated audio process; command parsing/display work,
+MIDI ports, Link, sequencing, and session-file I/O run in the control process.
+The callback never waits for command responses, IPC writes, display formatting,
+or filesystem operations. Python API entry points that construct `VcpiCore`
+must use the usual `if __name__ == "__main__":` guard for multiprocessing spawn.
+
+`audio devices` displays the cached device catalog, refreshed at audio-owner
+startup and while stopped during `audio start`/`audio stop`. After replugging
+devices, stop audio before using the catalog's current indexes.
+
 Running `audio start` again stops and closes the previous output stream before
 opening the new one, including when changing devices. If opening or starting
 the replacement fails, audio remains stopped.
+
+One eligible instrument slot renders inline on the audio callback; multiple
+slots use persistent workers started before audio opens, capped at the CPU
+count or eight workers. Gain/mix, sampler interpolation, and master-input
+buffers are reused for unchanged block sizes. Plugin processing still has to
+finish within the block deadline; Python and third-party plugins are not a
+hard-real-time environment.
+
+Each callback consumes at most 256 queued MIDI messages and 64 owner-applied
+controls, retaining later entries for subsequent blocks. Input queues are
+bounded at 4096 entries; ordinary MIDI order and note-offs are preserved.
+Heavy traffic can increase control latency. Saturation is an explicit failure
+that stops the audio owner, not silent MIDI loss. Messages and scheduled
+note-offs for a retired instrument generation cannot affect its replacement.
+
+Instrument loading/removal, Cardinal patch loading, slot/master chain edits,
+session-state capture, and restoration deliberately pause audio around native
+lifecycle work. New effects are warmed on the audio child's main thread;
+existing effects are not processed or reset during warmup. Chain construction
+or warmup failure retains the previous chain and resumes the same device.
+If reopening fails, audio remains stopped; failed native stop/close is terminal
+because quiescence cannot be assumed.
+
+For persistent underruns, restart the daemon with `./vcpid --buf 1024` (or
+`2048`), reconnect, and issue `audio start`. Larger buffers provide more
+scheduling headroom at the cost of note-to-sound latency.
 
 ### MIDI Commands
 
@@ -313,6 +358,13 @@ Saved/restored session state includes:
 - Sequencer banks and links
 - Audio output device and MIDI connections
 
+Parameter snapshots preserve numeric, boolean, and enum/string values. Saving
+waits for prior controls/MIDI, pauses rendering for a fresh native parameter
+capture, resumes the selected device, then writes JSON in the control process.
+Restoration stays paused until plugin/control changes are complete. Read-only
+diagnostics do not perform this capture. If the owner has failed, saving fails
+explicitly rather than overwriting the last good session with unconfirmed state.
+
 On startup restore, vcpi attempts to reconnect audio and MIDI targets
 automatically.
 
@@ -404,11 +456,34 @@ knobs master      # first master bus effect (index defaults to 1)
 | `shutdown` | Shut down the vcpi daemon process |
 | `quit` / `exit` / `Ctrl-D` | Disconnect this client session |
 
-`shutdown` saves the session before teardown. The daemon stops sequencer and
-MIDI input activity, cancels and joins pending note-off timers, disables Link,
-then closes audio and joins the render workers. Slot and master plugin
-references, including cyclic parameter caches, are released on the main thread
-before interpreter exit.
+`status` reads shared callback health and cached metadata; it does not contact
+the audio owner or query PortAudio while rendering. `Audio owner` identifies
+the child PID, and `Audio failure` takes precedence over stale running flags.
+`Render` distinguishes maximum worker capacity from the eligible slot count
+in the last callback and reports `idle`, `inline`, `parallel`, or `serial`.
+
+`Callback time` shows last/peak execution time and the block deadline.
+`Deadline misses` counts callbacks whose execution exceeded that deadline;
+it does not measure every OS scheduling delay. `Underruns` counts reported
+output underflows; `Render errors` counts failed slot/MIDI/master processing.
+Counters are cumulative for the audio owner's lifetime, including stream
+restarts. The callback publishes fixed shared-memory fields instead of logging.
+
+If a running callback stops completing for two seconds (or eight block periods,
+whichever is longer), supervision stops the owner. Running-stream control
+acknowledgments have a two-second timeout; queued timed-out work is canceled,
+and an in-flight timeout terminates the owner rather than allowing late or
+overlapping plugin calls. Stopped-owner operations are bounded by their RPC
+timeout. Owner death/channel failure produces explicit stopped/error state while
+cached diagnostics and client disconnect remain usable. Restart the daemon
+after a terminal audio-owner failure; no automatic restart hides lost state.
+
+`shutdown` saves before teardown, stops MIDI/sequencing and joins pending
+note-off timers, disables Link, then shuts down the audio child and its workers.
+Plugin references/cyclic parameter caches are released on the child's main
+thread. Cleanup still runs after save failure. Unresponsive children are
+terminated/killed with bounded waits, and signal handlers unwind pending RPCs
+instead of re-entering their locks.
 
 ## Example Workflows
 

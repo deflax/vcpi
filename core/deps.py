@@ -1,20 +1,6 @@
-"""Graceful optional dependency imports.
-
-Every other module imports availability flags from here so the try/except
-blocks live in exactly one place.
-"""
+"""Control-process dependencies; native audio imports live in audio_deps."""
 
 from __future__ import annotations
-
-# -- pedalboard (VST3 hosting) ----------------------------------------------
-
-try:
-    from pedalboard import Pedalboard, load_plugin
-    HAS_PEDALBOARD = True
-except ImportError:
-    Pedalboard = None  # type: ignore[assignment,misc]
-    load_plugin = None  # type: ignore[assignment]
-    HAS_PEDALBOARD = False
 
 # -- aalink (Ableton Link) --------------------------------------------------
 
@@ -43,15 +29,3 @@ except ImportError:
     mido = None  # type: ignore[assignment]
     HAS_MIDO = False
 
-# -- sounddevice (real-time audio I/O) --------------------------------------
-
-try:
-    import sounddevice as sd
-    HAS_SOUNDDEVICE = True
-except ImportError:
-    sd = None  # type: ignore[assignment]
-    HAS_SOUNDDEVICE = False
-
-# -- numpy (always required) ------------------------------------------------
-
-import numpy as np

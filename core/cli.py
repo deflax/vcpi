@@ -12,7 +12,7 @@ import os
 import shlex
 from pathlib import Path
 
-from core.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDDEVICE, sd
+from core.deps import HAS_LINK, HAS_RTMIDI, HAS_MIDO
 from core.host import VcpiCore
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import NUM_SLOTS
@@ -663,23 +663,25 @@ class HostCLI(cmd.Cmd):
                 self._print("  Empty slot")
                 return
             plugin = slot.plugin
-        params = getattr(plugin, "parameters", {})
-        for name in params:
-            try:
-                val = getattr(plugin, name)
-                rng = getattr(params[name], "range", None)
-                if rng is not None and len(rng) >= 2:
-                    self._print(
-                        f"  {name} = {val}  (range {rng[0]:.3f} .. {rng[1]:.3f})"
-                    )
-                else:
-                    self._print(f"  {name} = {val}")
-            except Exception:
-                self._print(f"  {name} = ???")
+        if plugin is None:
+            return
+        for name, val in plugin.values.items():
+            parameter = plugin.parameters.get(name)
+            rng = parameter.range if parameter is not None else ()
+            if parameter is not None and parameter.kind == "float" and len(rng) >= 2:
+                self._print(
+                    f"  {name} = {val}  (range {rng[0]:.3f} .. {rng[1]:.3f})"
+                )
+            else:
+                self._print(f"  {name} = {val}")
 
     def do_set(self, arg):
         """Set param: set <slot 1-8> <name> <value>  or  set master <fx> <name> <value>"""
-        parts = arg.strip().split()
+        try:
+            parts = shlex.split(arg)
+        except ValueError as error:
+            self._print(f"Error: {error}")
+            return
         if not parts:
             self._print("Usage: set <slot 1-8> <name> <value>")
             return
@@ -695,7 +697,7 @@ class HostCLI(cmd.Cmd):
             if not 0 <= fx_idx < len(self.host.engine.master_effects):
                 self._print("Error: fx_index out of range")
                 return
-            plugin = self.host.engine.master_effects[fx_idx]
+            idx = None
             pname, pval = parts[2], parts[3]
         else:
             if len(parts) < 3:
@@ -710,16 +712,20 @@ class HostCLI(cmd.Cmd):
             if slot is None:
                 self._print("  Empty slot")
                 return
-            plugin = slot.plugin
+            fx_idx = None
             pname, pval = parts[1], parts[2]
+        plugin = (self.host.engine.master_effects[fx_idx] if idx is None
+                  else self.host.engine.slots[idx].plugin)
+        parameter = plugin.parameters.get(pname)
+        if parameter is None or parameter.kind != "enum":
+            try:
+                pval = float(pval)
+            except ValueError:
+                if pval.lower() in ("true", "false"):
+                    pval = pval.lower() == "true"
         try:
-            pval = float(pval)
-        except ValueError:
-            if pval.lower() in ("true", "false"):
-                pval = pval.lower() == "true"
-        try:
-            setattr(plugin, pname, pval)
-            self._print(f"  {pname} = {pval}")
+            actual = self.host.engine.set_parameter(idx, pname, pval, fx_index=fx_idx)
+            self._print(f"  {pname} = {actual}")
         except Exception as e:
             self._print(f"Error: {e}")
 
@@ -755,8 +761,11 @@ class HostCLI(cmd.Cmd):
             if not 0.0 <= gain <= 1.0:
                 self._print("Error: gain must be between 0.0 and 1.0")
                 return
-            self.host.engine.master_gain = gain
-            self._print(f"  master gain = {self.host.engine.master_gain:.2f}")
+            try:
+                self.host.engine.set_master_gain(gain)
+                self._print(f"  master gain = {self.host.engine.master_gain:.2f}")
+            except Exception as e:
+                self._print(f"Error: {e}")
             return
 
         if len(parts) < 2:
@@ -782,8 +791,11 @@ class HostCLI(cmd.Cmd):
             self._print("Error: gain must be between 0.0 and 1.0")
             return
 
-        slot.gain = gain
-        self._print(f"  gain = {slot.gain:.2f}")
+        try:
+            slot = self.host.engine.set_slot_state(idx, gain=gain)
+            self._print(f"  gain = {slot.gain:.2f}")
+        except Exception as e:
+            self._print(f"Error: {e}")
 
     def do_mute(self, arg):
         """Toggle mute: mute <slot 1-8>"""
@@ -801,9 +813,12 @@ class HostCLI(cmd.Cmd):
             self._print(f"Error: slot {token} is empty")
             return
 
-        slot.muted = not slot.muted
-        self.host.refresh_mixer_leds([idx])
-        self._print(f"  {slot.name}: {'MUTED' if slot.muted else 'unmuted'}")
+        try:
+            slot = self.host.engine.set_slot_state(idx, muted=not slot.muted)
+            self.host.refresh_mixer_leds([idx])
+            self._print(f"  {slot.name}: {'MUTED' if slot.muted else 'unmuted'}")
+        except Exception as e:
+            self._print(f"Error: {e}")
 
     def do_solo(self, arg):
         """Toggle solo: solo <slot 1-8>"""
@@ -821,9 +836,12 @@ class HostCLI(cmd.Cmd):
             self._print(f"Error: slot {token} is empty")
             return
 
-        slot.solo = not slot.solo
-        self.host.refresh_mixer_leds([idx])
-        self._print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
+        try:
+            slot = self.host.engine.set_slot_state(idx, solo=not slot.solo)
+            self.host.refresh_mixer_leds([idx])
+            self._print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
+        except Exception as e:
+            self._print(f"Error: {e}")
 
     # -- routing / MIDI ------------------------------------------------------
 
@@ -970,10 +988,15 @@ class HostCLI(cmd.Cmd):
             self.host.stop_audio()
 
         elif sub == "devices":
-            if HAS_SOUNDDEVICE:
-                self._print(sd.query_devices())
-            else:
-                self._print("  sounddevice not installed")
+            devices = self.host.engine.audio_devices
+            if not devices:
+                self._print("  No audio devices available.")
+            for device in devices:
+                self._print(
+                    f"  [{device['index']}] {device['name']} "
+                    f"({device['max_input_channels']} in, "
+                    f"{device['max_output_channels']} out)"
+                )
 
         else:
             self._print(f"Unknown audio subcommand: {sub}")
@@ -1422,9 +1445,10 @@ class HostCLI(cmd.Cmd):
 
     def do_deps(self, arg):
         """Check dependencies."""
-        for name, ok in [("pedalboard", HAS_PEDALBOARD), ("aalink", HAS_LINK),
+        native = self.host.engine.native_dependencies
+        for name, ok in [("pedalboard", native["pedalboard"]), ("aalink", HAS_LINK),
                          ("python-rtmidi", HAS_RTMIDI), ("mido", HAS_MIDO),
-                         ("sounddevice", HAS_SOUNDDEVICE)]:
+                         ("sounddevice", native["sounddevice"])]:
             self._print(f"  {name}: {'OK' if ok else 'MISSING'}")
 
     def do_quit(self, arg):

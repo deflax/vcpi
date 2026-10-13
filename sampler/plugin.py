@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.deps import np
+from core.audio_deps import np
 from sampler.wav import read_wav, resample_linear, adapt_channels
 
 
@@ -32,9 +32,22 @@ class WavSamplerPlugin:
         self.root_note = int(root_note)
         self.max_voices = max(1, int(max_voices))
 
-        self._sample = sample.astype(np.float32)
+        self._sample = sample.astype(np.float32, order="C")
         self._frames = int(self._sample.shape[1])
         self._voices: list[dict[str, float | int]] = []
+
+        self._output = np.empty((self.output_channels, 0), dtype=np.float32)
+        self._block_positions = np.empty(0, dtype=np.float32)
+        self._positions = np.empty(0, dtype=np.float32)
+        self._valid = np.empty(0, dtype=np.bool_)
+        self._idx0 = np.empty(0, dtype=np.int64)
+        self._idx1 = np.empty(0, dtype=np.int64)
+        self._frac = np.empty(0, dtype=np.float64)
+        self._weight = np.empty(0, dtype=np.float64)
+        self._left = np.empty(0, dtype=np.float32)
+        self._right = np.empty(0, dtype=np.float32)
+        self._rendered = np.empty(0, dtype=np.float64)
+        self._right_weighted = np.empty(0, dtype=np.float64)
 
     @classmethod
     def from_file(
@@ -86,18 +99,34 @@ class WavSamplerPlugin:
         })
 
     def process(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
-        """Render active voices into an output block (channels, frames)."""
+        """Render voices; the returned buffer is valid until the next process call.
+
+        Output and interpolation scratch are reused for consecutive blocks with
+        the same frame count, including silent blocks.
+        """
         del sample_rate
 
         frames = int(audio.shape[1])
-        out = np.zeros((self.output_channels, frames), dtype=np.float32)
+        if self._output.shape[1] != frames:
+            self._output = np.empty((self.output_channels, frames), dtype=np.float32)
+            self._block_positions = np.arange(frames, dtype=np.float32)
+            self._positions = np.empty(frames, dtype=np.float32)
+            self._valid = np.empty(frames, dtype=np.bool_)
+            self._idx0 = np.empty(frames, dtype=np.int64)
+            self._idx1 = np.empty(frames, dtype=np.int64)
+            self._frac = np.empty(frames, dtype=np.float64)
+            self._weight = np.empty(frames, dtype=np.float64)
+            self._left = np.empty(frames, dtype=np.float32)
+            self._right = np.empty(frames, dtype=np.float32)
+            self._rendered = np.empty(frames, dtype=np.float64)
+            self._right_weighted = np.empty(frames, dtype=np.float64)
 
+        out = self._output
+        out.fill(0.0)
         if frames <= 0 or self._frames <= 0 or not self._voices:
             return out
 
-        block_positions = np.arange(frames, dtype=np.float32)
-        alive: list[dict[str, float | int]] = []
-
+        alive_count = 0
         for voice in self._voices:
             start = float(voice["position"])
             rate = float(voice["rate"])
@@ -106,27 +135,49 @@ class WavSamplerPlugin:
             if start >= self._frames:
                 continue
 
-            positions = start + (block_positions * rate)
-            valid = positions < self._frames
-            sample_count = int(valid.sum())
+            np.multiply(self._block_positions, rate, out=self._positions)
+            np.add(self._positions, start, out=self._positions)
+            np.less(self._positions, self._frames, out=self._valid)
+            sample_count = int(np.count_nonzero(self._valid))
             if sample_count <= 0:
                 continue
 
-            pos = positions[:sample_count]
-            idx0 = np.floor(pos).astype(np.int64)
-            idx1 = np.minimum(idx0 + 1, self._frames - 1)
-            frac = pos - idx0
+            positions = self._positions[:sample_count]
+            idx0 = self._idx0[:sample_count]
+            idx1 = self._idx1[:sample_count]
+            frac = self._frac[:sample_count]
+            weight = self._weight[:sample_count]
+            left = self._left[:sample_count]
+            right = self._right[:sample_count]
+            rendered = self._rendered[:sample_count]
+            right_weighted = self._right_weighted[:sample_count]
 
-            left = self._sample[:, idx0]
-            right = self._sample[:, idx1]
-            rendered = left * (1.0 - frac) + right * frac
+            np.floor(positions, out=frac)
+            np.copyto(idx0, frac, casting="unsafe")
+            np.add(idx0, 1, out=idx1)
+            np.minimum(idx1, self._frames - 1, out=idx1)
+            np.subtract(positions, idx0, out=frac)
+            np.subtract(1.0, frac, out=weight)
 
-            out[:, :sample_count] += rendered * gain
+            # Contiguous one-channel gathers avoid advanced-indexing copies and
+            # np.take's buffered output for a noncontiguous partial stereo block.
+            # Float64 interpolation preserves the original int64-index promotion.
+            for channel in range(self.output_channels):
+                sample_channel = 0 if self._sample.shape[0] == 1 else channel
+                np.take(self._sample[sample_channel], idx0, out=left, mode="clip")
+                np.take(self._sample[sample_channel], idx1, out=right, mode="clip")
+                np.multiply(left, weight, out=rendered)
+                np.multiply(right, frac, out=right_weighted)
+                np.add(rendered, right_weighted, out=rendered)
+                np.multiply(rendered, gain, out=rendered)
+                channel_out = out[channel, :sample_count]
+                np.add(channel_out, rendered, out=channel_out)
 
             next_pos = start + (frames * rate)
             if next_pos < self._frames:
                 voice["position"] = next_pos
-                alive.append(voice)
+                self._voices[alive_count] = voice
+                alive_count += 1
 
-        self._voices = alive
+        del self._voices[alive_count:]
         return out

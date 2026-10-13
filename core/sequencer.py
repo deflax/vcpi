@@ -210,7 +210,7 @@ class Sequencer:
 
     def stop(self):
         """Stop the sequencer playback thread (idempotent)."""
-        if not self._running:
+        if not self._running and self._thread is None and not self._note_off_timers:
             return
         self._running = False
         self._stop_event.set()  # wake up the sleep immediately
@@ -219,14 +219,21 @@ class Sequencer:
             self._thread = None
         for timer in self._note_off_timers:
             timer.cancel()
+        first_error = None
         for timer in self._note_off_timers:
             timer.join()
             # Deliver a canceled note-off now so detaching a bank cannot
             # leave its last note held. The timer has finished, so this
             # cannot race its callback.
-            timer.function()
+            try:
+                timer.function()
+            except Exception as error:
+                if first_error is None:
+                    first_error = error
         self._note_off_timers.clear()
         logger.info("[SEQ] playback thread stopped")
+        if first_error is not None:
+            raise first_error
 
     @property
     def _bpm(self) -> float:
@@ -262,19 +269,19 @@ class Sequencer:
         return 4.0 / lcm  # beats
 
     def _fire_banks(self, beat_position: float, quantum_beats: float,
-                    mido) -> list[tuple[int, int, float]]:
+                    mido) -> list[tuple[int, int, float, int]]:
         """Fire notes for all banks whose step falls on the current beat.
 
         *beat_position* is the current position within the bar (0.0 to
         4.0).  Each bank's cursor is derived directly from this position
         so that every bank always starts from the beginning of the bar.
 
-        Returns a list of (slot_idx, midi_note, note_dur_seconds) for
-        note-off scheduling.
+        Returns (slot_idx, midi_note, duration_seconds, instrument_generation)
+        entries so delayed note-offs cannot silence a replacement instrument.
         """
         bpm = self._bpm
         beat_dur = 60.0 / bpm  # seconds per beat
-        fired: list[tuple[int, int, float]] = []
+        fired: list[tuple[int, int, float, int]] = []
 
         for bi, bank in enumerate(self.banks):
             if bank is None or bank.linked_slot is None or not bank.notes:
@@ -296,32 +303,34 @@ class Sequencer:
             slot_idx = bank.linked_slot
             vel = bank.velocity
 
+            slot = self._host.engine.slots[slot_idx]
+            generation = slot.generation if slot is not None else 0
             on = mido.Message("note_on", note=midi_note, velocity=vel)
-            self._host.engine.enqueue_midi(slot_idx, on)
+            self._host.engine.enqueue_midi(slot_idx, on, generation=generation)
 
             step_dur_secs = bank_quantum * beat_dur
-            fired.append((slot_idx, midi_note, step_dur_secs))
+            fired.append((slot_idx, midi_note, step_dur_secs, generation))
 
             self._cursors[bi] = (step_idx + 1) % n_steps
 
         return fired
 
-    def _schedule_note_offs(self, fired: list[tuple[int, int, float]],
+    def _schedule_note_offs(self, fired: list[tuple[int, int, float, int]],
                             mido) -> None:
         """Schedule note-off messages for all recently fired notes."""
         self._note_off_timers = [
             timer for timer in self._note_off_timers if timer.is_alive()
         ]
-        for slot_idx, midi_note, step_dur in fired:
+        for slot_idx, midi_note, step_dur, generation in fired:
             off_delay = step_dur * self.NOTE_OFF_RATIO
 
             sent = threading.Event()
 
-            def _send_off(si=slot_idx, mn=midi_note, _mido=mido, _sent=sent):
+            def _send_off(si=slot_idx, mn=midi_note, gen=generation, _mido=mido, _sent=sent):
                 if not _sent.is_set():
                     _sent.set()
                     off = _mido.Message("note_off", note=mn)
-                    self._host.engine.enqueue_midi(si, off)
+                    self._host.engine.enqueue_midi(si, off, generation=gen)
 
             off_timer = threading.Timer(off_delay, _send_off)
             off_timer.daemon = True
@@ -340,11 +349,17 @@ class Sequencer:
             self._running = False
             return
 
-        while self._running:
-            if self._link_enabled:
-                self._run_link(mido)
-            else:
-                self._run_freewheel(mido)
+        try:
+            while self._running:
+                if self._link_enabled:
+                    self._run_link(mido)
+                else:
+                    self._run_freewheel(mido)
+        except Exception:
+            logger.exception("[SEQ] playback failed")
+        finally:
+            self._running = False
+            self._stop_event.set()
 
     def _run_link(self, mido):
         """Link-synced loop: sleep on beat-grid boundaries.

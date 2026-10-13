@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 from core import deps
 
-from core.host import VcpiCore
+from core.engine import AudioEngine
+from core.sequencer import Sequencer
 
 
 class FreewheelTimingTests(unittest.TestCase):
@@ -17,11 +18,11 @@ class FreewheelTimingTests(unittest.TestCase):
         clock = SimpleNamespace(now=0.0)
         events: list[tuple[float, int, int]] = []
 
-        def enqueue(slot, message):
+        def enqueue(slot, message, generation=None):
             events.append((clock.now, slot, message.note))
 
-        host = VcpiCore()
-        seq = host.sequencer
+        host = SimpleNamespace(engine=AudioEngine(), link=SimpleNamespace(bpm=120.0, enabled=False))
+        seq = Sequencer(host)
         for index, notes in enumerate(patterns):
             bank = seq.set_bank(index, notes)
             bank.linked_slot = index
