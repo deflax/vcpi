@@ -706,10 +706,10 @@ class VcpiCore:
     def shutdown(self):
         self.save_session()
         self.sequencer.stop()
-        self.engine.shutdown()  # stops audio stream + render thread pool
         for ctrl in self.midi_inputs:
             ctrl.close()
         self.midi_inputs.clear()
         self.midimix.close()
         self.stop_link()
+        self.engine.shutdown()  # stops audio stream + render thread pool
         logger.info("[Host] Shutdown complete")

@@ -129,6 +129,7 @@ class Sequencer:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._note_off_timers: list[threading.Timer] = []
 
         # Per-bank playback cursor (step index within the pattern).
         self._cursors: list[int] = [0] * NUM_SEQ_BANKS
@@ -214,8 +215,17 @@ class Sequencer:
         self._running = False
         self._stop_event.set()  # wake up the sleep immediately
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            self._thread.join()
             self._thread = None
+        for timer in self._note_off_timers:
+            timer.cancel()
+        for timer in self._note_off_timers:
+            timer.join()
+            # Deliver a canceled note-off now so detaching a bank cannot
+            # leave its last note held. The timer has finished, so this
+            # cannot race its callback.
+            timer.function()
+        self._note_off_timers.clear()
         logger.info("[SEQ] playback thread stopped")
 
     @property
@@ -299,15 +309,23 @@ class Sequencer:
     def _schedule_note_offs(self, fired: list[tuple[int, int, float]],
                             mido) -> None:
         """Schedule note-off messages for all recently fired notes."""
+        self._note_off_timers = [
+            timer for timer in self._note_off_timers if timer.is_alive()
+        ]
         for slot_idx, midi_note, step_dur in fired:
             off_delay = step_dur * self.NOTE_OFF_RATIO
 
-            def _send_off(si=slot_idx, mn=midi_note, _mido=mido):
-                off = _mido.Message("note_off", note=mn)
-                self._host.engine.enqueue_midi(si, off)
+            sent = threading.Event()
+
+            def _send_off(si=slot_idx, mn=midi_note, _mido=mido, _sent=sent):
+                if not _sent.is_set():
+                    _sent.set()
+                    off = _mido.Message("note_off", note=mn)
+                    self._host.engine.enqueue_midi(si, off)
 
             off_timer = threading.Timer(off_delay, _send_off)
             off_timer.daemon = True
+            self._note_off_timers.append(off_timer)
             off_timer.start()
 
     # -- main playback loops -------------------------------------------------

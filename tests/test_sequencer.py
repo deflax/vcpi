@@ -3,14 +3,10 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
-from typing import TYPE_CHECKING, cast
 
 from core import deps
 
-from core.sequencer import Sequencer
-
-if TYPE_CHECKING:
-    from core.host import VcpiCore
+from core.host import VcpiCore
 
 
 class FreewheelTimingTests(unittest.TestCase):
@@ -24,11 +20,8 @@ class FreewheelTimingTests(unittest.TestCase):
         def enqueue(slot, message):
             events.append((clock.now, slot, message.note))
 
-        host = SimpleNamespace(
-            engine=SimpleNamespace(enqueue_midi=enqueue),
-            link=SimpleNamespace(bpm=120.0, enabled=False),
-        )
-        seq = Sequencer(cast("VcpiCore", host))
+        host = VcpiCore()
+        seq = host.sequencer
         for index, notes in enumerate(patterns):
             bank = seq.set_bank(index, notes)
             bank.linked_slot = index
@@ -41,10 +34,15 @@ class FreewheelTimingTests(unittest.TestCase):
                 seq._running = False
 
         seq._running = True
-        with patch("core.sequencer.time", SimpleNamespace(monotonic=lambda: clock.now)), \
-                patch.object(seq, "_stop_event", SimpleNamespace(wait=wait)), \
-                patch.object(seq, "_schedule_note_offs"):
-            seq._run_freewheel(deps.mido)
+        try:
+            with patch("core.sequencer.time", SimpleNamespace(monotonic=lambda: clock.now)), \
+                    patch.object(host.engine, "enqueue_midi", side_effect=enqueue), \
+                    patch.object(seq, "_stop_event", SimpleNamespace(wait=wait)), \
+                    patch.object(seq, "_schedule_note_offs"):
+                seq._run_freewheel(deps.mido)
+        finally:
+            seq._running = False
+            host.engine.shutdown()
         return events
 
     def test_one_trigger_per_step_despite_wake_jitter(self):

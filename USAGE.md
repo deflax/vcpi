@@ -404,6 +404,12 @@ knobs master      # first master bus effect (index defaults to 1)
 | `shutdown` | Shut down the vcpi daemon process |
 | `quit` / `exit` / `Ctrl-D` | Disconnect this client session |
 
+`shutdown` saves the session before teardown. The daemon stops sequencer and
+MIDI input activity, cancels and joins pending note-off timers, disables Link,
+then closes audio and joins the render workers. Slot and master plugin
+references, including cyclic parameter caches, are released on the main thread
+before interpreter exit.
+
 ## Example Workflows
 
 Headless server + client shell:

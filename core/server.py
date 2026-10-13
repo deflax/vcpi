@@ -125,6 +125,11 @@ class VcpiServer:
             try:
                 output, shutdown = self._run_command(req.line, req.client_id)
                 req.result_box[:] = [output, shutdown]
+                if shutdown:
+                    # Native plugin teardown must run on the same main
+                    # thread as plugin loading, not the socket reader.
+                    self.shutdown()
+                    return
             except Exception as exc:
                 req.result_box[:] = [f"Error: {exc}\n", False]
             finally:
@@ -219,7 +224,6 @@ class VcpiServer:
 
                 if shutdown_requested:
                     logger.info("%s requested daemon shutdown", client_id)
-                    self.shutdown()
                     break
 
         except (BrokenPipeError, ConnectionResetError, OSError) as e:

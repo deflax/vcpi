@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import gc
 import logging
 import os
 import threading
@@ -286,9 +287,20 @@ class AudioEngine:
                 logger.info("[Audio] Stopped")
 
     def shutdown(self):
-        """Stop audio and release the render thread pool."""
-        self.stop()
-        self._render_pool.shutdown(wait=False)
+        """Stop rendering and release plugins before interpreter teardown."""
+        with self._lock:
+            self.stop()
+            self._render_pool.shutdown(wait=True)
+            self._master_board = None
+            self.master_effects.clear()
+            self.slots[:] = [None] * NUM_SLOTS
+            self._midi_queue.clear()
+            self._param_queue.clear()
+            self.channel_map.clear()
+            # Pedalboard's parameter cache holds parameters which retain
+            # their plugin. Collect those cycles on the shutdown thread,
+            # while the interpreter and native libraries are still live.
+            gc.collect()
         logger.info("[Audio] Render pool shut down")
 
     @property
