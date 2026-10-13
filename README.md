@@ -100,8 +100,10 @@ to type full paths.
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `params`,
 `status`, and `info` display tables; flow diagrams and knob bars receive color.
-Piped input/output remains plain text. After updating an existing checkout,
-run `.venv/bin/pip install -r requirements.txt` to install the client dependencies.
+Piped input/output remains plain text. `./vcpi` and `./vcpid` install dependencies
+on first launch and when `requirements.txt` changes, including for existing
+environments. For direct Python startup, install them manually with
+`.venv/bin/pip install -r requirements.txt`.
 
 Inside the CLI, a typical first run is:
 

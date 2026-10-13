@@ -19,10 +19,17 @@ Source of truth:
 
 | Command | What it does |
 |---|---|
-| `./vcpid` | Starts headless server mode; bootstraps `.venv` on first run |
-| `./vcpi` | Connects interactive client mode; bootstraps `.venv` on first run |
+| `./vcpid` | Starts headless server mode; creates `.venv` and synchronizes dependencies |
+| `./vcpi` | Connects interactive client mode; creates `.venv` and synchronizes dependencies |
 | `python main.py serve` | Starts headless server with Unix socket control |
 | `python main.py cli` | Connects to a running headless server |
+
+Both launchers install `requirements.txt` when the environment is new, when
+upgrading an older environment without a dependency snapshot, or when the
+requirements file changes. Successful installs are recorded in
+`$VENV_DIR/.vcpi-requirements.txt` (`VENV_DIR` defaults to the repo `.venv`).
+Unchanged requirements skip installation; failed installs stop startup and
+are retried on the next launch. Direct Python startup does not install dependencies.
 
 Default socket path (server and client):
 
@@ -113,7 +120,7 @@ including `help <command>`, retain their text.
 - `Ctrl-C` cancels the current input without disconnecting.
 - `Ctrl-D` on an empty prompt disconnects; `quit` and `exit` also disconnect.
 - Redirected input or output uses the plain-text client, without Rich formatting.
-- Existing environments need the new dependencies: `.venv/bin/pip install -r requirements.txt`.
+- For direct Python startup, install dependencies with `.venv/bin/pip install -r requirements.txt`.
 
 When connected with `./vcpi` (or `python main.py cli`), press `Tab` to
 autocomplete command names. `slot` has context-aware argument completion:

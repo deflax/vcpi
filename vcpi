@@ -6,11 +6,19 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 VENV_DIR="${VENV_DIR:-$ROOT_DIR/.venv}"
 PYTHON_BIN="$VENV_DIR/bin/python"
 PIP_BIN="$VENV_DIR/bin/pip"
+REQUIREMENTS="$ROOT_DIR/requirements.txt"
+INSTALLED_REQUIREMENTS="$VENV_DIR/.vcpi-requirements.txt"
 
 if [ ! -x "$PYTHON_BIN" ]; then
   python3 -m venv "$VENV_DIR"
   "$PIP_BIN" install --upgrade pip
-  "$PIP_BIN" install -r "$ROOT_DIR/requirements.txt"
+fi
+
+# Older environments have no snapshot; synchronize once and after each change.
+# Record success only after pip completes so a failed install is retried.
+if ! cmp -s "$REQUIREMENTS" "$INSTALLED_REQUIREMENTS"; then
+  "$PIP_BIN" install -r "$REQUIREMENTS"
+  cp "$REQUIREMENTS" "$INSTALLED_REQUIREMENTS"
 fi
 
 exec "$PYTHON_BIN" "$ROOT_DIR/main.py" cli "$@"
