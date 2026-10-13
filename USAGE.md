@@ -245,6 +245,9 @@ vcpi> slot 5 wav synth-leads c4-mono-saw
 vcpi has a built-in step sequencer with up to 16 sequence banks. Notes in
 a bank loop over one bar at the current tempo. Notes are evenly spaced:
 1 note plays once per bar, 4 notes play as quarter notes, etc.
+Without Ableton Link, playback fires once per position on a shared timing grid,
+including banks with different pattern lengths. Late wake-ups skip missed
+positions rather than retriggering notes or emitting a catch-up burst.
 
 | Command | Description |
 |---|---|

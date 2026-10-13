@@ -375,7 +375,7 @@ class Sequencer:
         logger.info("[SEQ] leaving Link-synced loop")
 
     def _run_freewheel(self, mido):
-        """Wall-clock loop (original behaviour, no Link phase alignment).
+        """Wall-clock loop with no Link phase alignment.
 
         Used when Ableton Link is not enabled.  Still reads ``bpm`` from
         the LinkSync object for tempo, but times steps with
@@ -388,6 +388,7 @@ class Sequencer:
         """
         now = time.monotonic()
         bar_start = now  # shared reference for bar alignment
+        last_grid = None
 
         logger.info("[SEQ] entering freewheel loop")
 
@@ -405,52 +406,31 @@ class Sequencer:
                 bar_start += bars_elapsed * bar_duration
                 elapsed = now - bar_start
 
-            beat_position = (elapsed / bar_duration) * 4.0  # 0.0 – 4.0
-
-            # Find the smallest step duration across active banks so we
-            # can wake up at the next grid point.
-            smallest_step_dur = None
-            has_active = False
-            for bank in self.banks:
-                if bank is None or bank.linked_slot is None or not bank.notes:
-                    continue
-                has_active = True
-                sd = bar_duration / len(bank.notes)
-                if smallest_step_dur is None or sd < smallest_step_dur:
-                    smallest_step_dur = sd
-
-            if not has_active or smallest_step_dur is None:
+            if not any(
+                bank is not None and bank.linked_slot is not None and bank.notes
+                for bank in self.banks
+            ):
                 self._stop_event.wait(timeout=0.05)
                 continue
 
-            # Determine the next grid time we should fire at.
-            # Grid times within the bar: 0, smallest_step_dur, 2*smallest_step_dur, ...
-            steps_so_far = elapsed / smallest_step_dur
-            next_step_index = int(steps_so_far + 0.5)  # nearest integer step
-            # Are we close enough to fire now?
-            current_grid_time = next_step_index * smallest_step_dur
-            delta = current_grid_time - elapsed
-
-            if delta > 0.001:
-                # Not yet at a grid point -- sleep until the next one.
-                self._stop_event.wait(timeout=delta)
-                if not self._running:
-                    break
-                now = time.monotonic()
-                elapsed = now - bar_start
-                if elapsed >= bar_duration:
-                    bars_elapsed = int(elapsed / bar_duration)
-                    bar_start += bars_elapsed * bar_duration
-                    elapsed = now - bar_start
-                beat_position = (elapsed / bar_duration) * 4.0
-
-            # Fire all banks whose step boundary aligns with this moment.
+            # Use the common grid, including mixed pattern lengths (e.g.
+            # three and four notes). Wake-up jitter must not change the
+            # musical position or retrigger the same step.
             quantum = self._smallest_quantum()
-            fired = self._fire_banks(beat_position, quantum, mido)
-            self._schedule_note_offs(fired, mido)
+            step_duration = quantum * 60.0 / bpm
+            grid_index = int(elapsed / step_duration)
+            grid = (bar_start, quantum, grid_index)
+            if grid != last_grid:
+                beat_position = (grid_index * quantum) % 4.0
+                fired = self._fire_banks(beat_position, quantum, mido)
+                self._schedule_note_offs(fired, mido)
+                last_grid = grid
 
-            # Brief sleep to avoid busy-spinning on the same grid point.
-            self._stop_event.wait(timeout=0.001)
+            # After a late wake-up, fire only the current grid position;
+            # do not emit a burst of missed steps to catch up.
+            next_grid_time = bar_start + (grid_index + 1) * step_duration
+            self._stop_event.wait(
+                timeout=max(0.0, next_grid_time - time.monotonic()))
 
         logger.info("[SEQ] leaving freewheel loop")
 
