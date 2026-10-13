@@ -37,6 +37,9 @@ VST3/Cardinal or WAV source and insert effects. The output process owns
 PortAudio, the mixer, and master effects. Slot audio crosses preallocated shared
 memory with one block of added buffering. Loading/replacing a slot does not
 stop unrelated slots; read-only commands use cached snapshots.
+Saved-session parameters restore in bounded batches rather than repeatedly
+recapturing every plugin's metadata. Interrupted startup releases native owners
+without overwriting the saved session.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcpi` with `audio start [device]`.

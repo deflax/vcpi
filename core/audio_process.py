@@ -11,9 +11,11 @@ import multiprocessing as mp
 import os
 import pickle
 import queue
+import signal
 import threading
 import time
 from collections import deque
+from itertools import islice
 from multiprocessing.connection import wait as wait_connections
 
 from core.audio_state import capture_state, hydrate_slots
@@ -27,6 +29,7 @@ STATE_LIMIT = 16 * 1024 * 1024
 INPUT_LIMIT = 16 * 1024
 UPDATE_LIMIT = 64 * 1024
 CALLBACK_STALL_TIMEOUT = 2.0
+OWNER_SHUTDOWN_TIMEOUT = 10.0
 LIFECYCLE_OPERATIONS = frozenset({
     "load_instrument", "load_wav", "remove_instrument", "load_effect",
     "remove_effect", "load_vcv", "load_vcv_patch",
@@ -40,6 +43,10 @@ REMOTE_ERRORS = {
 
 class AudioProcessError(RuntimeError):
     """The audio owner is unavailable; no command was silently accepted."""
+
+class _OwnerCancelled(BaseException):
+    """Unwind native ownership on deliberate control-process interruption."""
+
 
 
 def _encode(message, limit):
@@ -69,13 +76,14 @@ def _discover_devices():
 class _OwnerRuntime:
     """Output dispatcher; only native master/device edits quiesce the stream."""
 
-    def __init__(self, owner, control, inputs, updates):
+    def __init__(self, owner, control, inputs, updates, cancelled):
         self.owner = owner
         self.engine = owner.engine
         self.control = control
         self.inputs = inputs
         self.updates = updates
         self.epoch = 0
+        self.cancelled = cancelled
         self.generations = [0] * NUM_SLOTS
         self.previous_slots = [None] * NUM_SLOTS
         self.received_input = 0
@@ -125,6 +133,7 @@ class _OwnerRuntime:
     def await_inputs(self, sequence):
         deadline = time.monotonic() + 5
         while self.received_input < sequence:
+            self.check_cancelled()
             if not self.engine.running:
                 self.engine.apply_pending_controls()
             self.send_updates()
@@ -186,6 +195,7 @@ class _OwnerRuntime:
 
     def service_wait(self):
         """Keep MIDI and mixer controls moving while another slot initializes."""
+        self.check_cancelled()
         if not self.engine.running:
             self.engine.apply_pending_controls()
         self.send_updates()
@@ -194,6 +204,11 @@ class _OwnerRuntime:
                 break
             self.receive_input()
         self.publish_slot_health()
+
+    def check_cancelled(self):
+        if self.cancelled.value:
+            raise _OwnerCancelled
+
 
     def slot_request(self, index, operation, **arguments):
         worker = self._slot_worker(index)
@@ -329,6 +344,7 @@ class _OwnerRuntime:
                 self.engine.flush_controls()
                 deadline = time.monotonic() + 2
                 while self.engine._midi_queue:
+                    self.check_cancelled()
                     if time.monotonic() >= deadline:
                         raise TimeoutError("MIDI state capture barrier timed out")
                     self.send_updates()
@@ -366,6 +382,25 @@ class _OwnerRuntime:
             else:
                 forwarded = {key: value for key, value in arguments.items() if key != "slot_index"}
                 result = self.slot_request(index, operation, **forwarded)
+        elif operation == "set_parameters":
+            index = arguments.get("slot_index")
+            if index is not None:
+                forwarded = {key: value for key, value in arguments.items() if key != "slot_index"}
+                result = self.slot_request(index, operation, **forwarded)
+            else:
+                if len(arguments["params"]) > 64:
+                    raise ValueError("parameter batch exceeds 64 entries")
+                values, errors = {}, {}
+                for name, value in arguments["params"].items():
+                    self.check_cancelled()
+                    try:
+                        values[name] = self.engine.set_parameter(
+                            None, name, value, fx_index=arguments.get("fx_index"))
+                    except (TimeoutError, BufferError):
+                        raise
+                    except Exception as error:
+                        errors[name] = str(error)
+                result = {"values": values, "errors": errors}
         elif operation == "set_slot_state":
             self.engine.set_slot_state(**arguments)
             result = None
@@ -400,6 +435,7 @@ class _OwnerRuntime:
         state = self.snapshot(inspect_master=True)
         self.control.send_bytes(_encode({"ok": True, "state": state}, STATE_LIMIT))
         while True:
+            self.check_cancelled()
             if not self.engine.running:
                 self.engine.apply_pending_controls()
             self.send_updates()
@@ -439,8 +475,9 @@ class _OwnerRuntime:
             self.control.poll(0.005)
 
 
-def _audio_owner(sample_rate, buffer_size, health, control, inputs, updates):
+def _audio_owner(sample_rate, buffer_size, health, control, inputs, updates, cancelled):
     owner = None
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         from core.plugin_host import PluginHost
 
@@ -448,8 +485,10 @@ def _audio_owner(sample_rate, buffer_size, health, control, inputs, updates):
         owner.engine.health_buffer = health
         owner.engine.isolated_slots = True
         owner.engine._publish_health()
-        runtime = _OwnerRuntime(owner, control, inputs, updates)
+        runtime = _OwnerRuntime(owner, control, inputs, updates, cancelled)
         runtime.run()
+    except _OwnerCancelled:
+        pass  # Deliberate cancellation still runs normal native/finalizer teardown.
     except (EOFError, BrokenPipeError):
         pass  # Control process exited; release native resources on this main thread.
     except Exception as error:
@@ -504,13 +543,15 @@ class RemoteAudioEngine:
         self._threads = []
         context = mp.get_context("spawn")
         self._health = context.RawArray("d", 9)
+        self._cancelled = context.RawValue("b", 0)
         self._health[8] = buffer_size / sample_rate * 1000
         self._control, child_control = context.Pipe(duplex=True)
         child_inputs, self._input_writer = context.Pipe(duplex=False)
         self._updates, child_updates = context.Pipe(duplex=False)
         self._process = context.Process(
             target=_audio_owner,
-            args=(sample_rate, buffer_size, self._health, child_control, child_inputs, child_updates),
+            args=(sample_rate, buffer_size, self._health, child_control, child_inputs,
+                  child_updates, self._cancelled),
             name="vcpi-audio-owner", daemon=False,
         )
         try:
@@ -535,6 +576,7 @@ class RemoteAudioEngine:
             child_control.close()
             child_inputs.close()
             child_updates.close()
+            self._cancelled.value = 1
             self.shutdown()
             raise
 
@@ -599,6 +641,17 @@ class RemoteAudioEngine:
             self._state_condition.notify_all()
         if terminate and self._process.pid is not None and self._process.is_alive():
             self._process.terminate()
+
+    def _cancel_operation(self, operation):
+        # Do not kill the semaphore-owning process before it can retire slots.
+        # The terminal flag still forbids consuming a late reply as another RPC.
+        self._cancelled.value = 1
+        with self._state_condition:
+            if self._failure is None:
+                self._failure = f"audio operation '{operation}' interrupted"
+                logger.info("[Audio owner] %s; closing native owners", self._failure)
+            self._state_condition.notify_all()
+
 
     def add_state_listener(self, callback):
         with self._state_condition:
@@ -750,9 +803,7 @@ class RemoteAudioEngine:
         try:
             return self._exchange(operation, arguments, timeout)
         except (KeyboardInterrupt, SystemExit):
-            # An interrupted request may still be executing in the owner.
-            # Terminate it rather than consuming its reply as a later command.
-            self._fail(f"audio operation '{operation}' interrupted", terminate=True)
+            self._cancel_operation(operation)
             raise
         finally:
             self._rpc_lock.release()
@@ -809,6 +860,33 @@ class RemoteAudioEngine:
     def set_parameter(self, slot_index, name, value, fx_index=None):
         return self.request("set_parameter", slot_index=slot_index, name=name, value=value, fx_index=fx_index)
 
+    def set_parameters(self, slot_index, params, fx_index=None):
+        """Restore bounded ordered batches, returning applied values and errors."""
+        values, errors = {}, {}
+        entries = iter(params.items())
+        while batch := dict(islice(entries, 64)):
+            pending = deque([batch])
+            while pending:
+                current = pending.popleft()
+                try:
+                    result = self.request(
+                        "set_parameters", slot_index=slot_index,
+                        params=current, fx_index=fx_index)
+                except BufferError as error:
+                    # Oversized packets fail before transmission. Split without
+                    # changing order; an oversized single value cannot be sent.
+                    if len(current) == 1:
+                        errors[next(iter(current))] = str(error)
+                    else:
+                        items = list(current.items())
+                        middle = len(items) // 2
+                        pending.appendleft(dict(items[middle:]))
+                        pending.appendleft(dict(items[:middle]))
+                    continue
+                values.update(result["values"])
+                errors.update(result["errors"])
+        return {"values": values, "errors": errors}
+
     def set_slot_state(self, slot_index, **fields):
         self.request("set_slot_state", slot_index=slot_index, **fields)
         return self.slots[slot_index]
@@ -846,12 +924,13 @@ class RemoteAudioEngine:
         try:
             if self._ready and self._failure is None and self._process.is_alive():
                 try:
-                    self._rpc("shutdown", {}, 3)
+                    self._rpc("shutdown", {}, OWNER_SHUTDOWN_TIMEOUT)
                 except Exception:
                     logger.warning("audio owner did not shut down gracefully", exc_info=True)
         finally:
             if self._process.pid is not None:
-                self._process.join(timeout=1)
+                self._process.join(
+                    timeout=OWNER_SHUTDOWN_TIMEOUT if self._cancelled.value else 1)
                 if self._process.is_alive():
                     self._process.terminate()
                     self._process.join(timeout=1)

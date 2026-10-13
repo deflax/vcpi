@@ -6,6 +6,7 @@ import os
 import signal
 import struct
 import tempfile
+import threading
 import unittest
 import wave
 from pathlib import Path
@@ -141,6 +142,36 @@ class AudioProcessTests(unittest.TestCase):
                 timeout=5,
             )
         self.assertTrue(reported)
+
+    @unittest.skipUnless(
+        hasattr(signal, "SIGUSR1") and hasattr(signal, "SIGSTOP"),
+        "requires POSIX signals",
+    )
+    def test_interrupted_slot_rpc_retires_owners_and_preserves_good_session(self):
+        host = self.host
+        slot = host.load_wav(0, str(self.sample), "retained")
+        host.save_session()
+        previous = host.session_path.read_bytes()
+        os.kill(slot.worker_pid, signal.SIGSTOP)
+
+        def interrupt(signum, frame):
+            raise KeyboardInterrupt
+
+        previous_handler = signal.signal(signal.SIGUSR1, interrupt)
+        timer = threading.Timer(0.05, os.kill, args=(os.getpid(), signal.SIGUSR1))
+        try:
+            timer.start()
+            with self.assertRaises(KeyboardInterrupt):
+                host.engine.sync_state()
+        finally:
+            timer.join()
+            signal.signal(signal.SIGUSR1, previous_handler)
+            host.shutdown(save=False)
+        self.assertEqual(host.session_path.read_bytes(), previous)
+        self.assertEqual(host.engine._process.exitcode, 0)
+        self.assertTrue(all(not thread.is_alive() for thread in host.engine._threads))
+        with self.assertRaises(ProcessLookupError):
+            os.kill(slot.worker_pid, 0)
 
     @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "requires POSIX process suspension")
     def test_timed_out_rpc_is_terminal_not_a_late_accepted_change(self):

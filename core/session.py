@@ -51,14 +51,13 @@ def _apply_plugin_params(
     params: dict[str, bool | str | int | float],
     fx_index: int | None = None,
 ):
-    """Restore each parameter through an acknowledged audio-process setter."""
-    for name, value in params.items():
-        try:
-            host.engine.set_parameter(slot_index, name, value, fx_index=fx_index)
-        except Exception as exc:
-            logger.warning(
-                "[session] could not restore param '%s' = %s: %s", name, value, exc,
-            )
+    """Restore one plugin through bounded, acknowledged parameter batches."""
+    result = host.engine.set_parameters(slot_index, params, fx_index=fx_index)
+    for name, error in result["errors"].items():
+        logger.warning(
+            "[session] could not restore param '%s' = %s: %s",
+            name, params[name], error,
+        )
 
 
 def snapshot(host: VcpiCore) -> dict:

@@ -14,6 +14,7 @@ import os
 import pickle
 import queue
 import threading
+import signal
 import time
 from collections import deque
 from multiprocessing.connection import wait as wait_connections
@@ -27,6 +28,7 @@ _REQUEST_CELLS = ((0, 1, 2), (1, 2, 0), (2, 0, 1))
 MIDI_CAPACITY = 4096
 MIDI_MESSAGE_LIMIT = 1024
 CONTROL_LIMIT = 64 * 1024
+PARAMETER_BATCH_LIMIT = 64
 STATE_LIMIT = 16 * 1024 * 1024
 STARTUP_TIMEOUT = 90.0  # Leave cleanup time inside the outer 120-second RPC.
 REQUEST_TIMEOUT = 90.0
@@ -109,34 +111,44 @@ def _normalized_result(operation, result):
     return None
 
 
-def _watch_parent(lifeline, shared):
-    # A separate pipe has exactly one writer, in the output owner. The spawn
-    # parent's sentinel also detects death during hung native startup/render.
-    # This thread performs no native work and need not join on normal shutdown.
+def _watch_parent(lifeline, shared, stopping):
+    # EOF can precede the parent's sentinel during teardown. Keep watching the
+    # sentinel rather than exiting before orphan semaphore cleanup is possible.
     parent = mp.parent_process()
     watched = [lifeline]
     if parent is not None:
         watched.append(parent.sentinel)
-    try:
-        wait_connections(watched)
-    except OSError:
-        pass
-    if parent is not None and not parent.is_alive():
-        # Spawn locks are named semaphores owned by their creator. SIGKILL
-        # skips that owner's finalizers; this last user must unlink them.
-        from multiprocessing.synchronize import SemLock
+    while not stopping.is_set():
+        try:
+            ready = wait_connections(watched, timeout=0.05)
+        except OSError:
+            if stopping.is_set():
+                return
+            watched = [parent.sentinel] if parent is not None else []
+            continue
+        if stopping.is_set():
+            return
+        if parent is not None and parent.sentinel in ready:
+            # Sentinel readiness, unlike is_alive immediately after pipe EOF,
+            # proves the creator is gone and cannot run its lock finalizers.
+            from multiprocessing.synchronize import SemLock
 
-        locks = (*shared.request_locks, *shared.output_locks,
-                 shared.midi_lock, shared.progress_lock)
-        for lock in locks:
-            name = lock._semlock.name
-            if name is not None:
-                try:
-                    SemLock._cleanup(name)
-                except FileNotFoundError:
-                    pass  # An orderly parent exit already unlinked this lock.
-    os._exit(1)
-
+            locks = (*shared.request_locks, *shared.output_locks,
+                     shared.midi_lock, shared.progress_lock)
+            for lock in locks:
+                name = lock._semlock.name
+                if name is not None:
+                    try:
+                        SemLock._cleanup(name)
+                    except FileNotFoundError:
+                        pass  # An orderly parent exit already unlinked it.
+            os._exit(1)
+            return
+        if lifeline in ready:
+            if parent is None:
+                os._exit(1)
+                return
+            watched.remove(lifeline)
 
 def _next_job(shared, previous):
     sequence, endpoint = previous, 0
@@ -204,6 +216,26 @@ def _execute(owner, index, operation, arguments):
         raise ValueError("control targets a different slot")
     if operation == "set_parameter":
         result = owner.engine.set_parameter(slot_index=index, **arguments)
+    elif operation == "set_parameters":
+        params = arguments.pop("params")
+        fx_index = arguments.pop("fx_index", None)
+        if arguments:
+            raise TypeError("set_parameters takes only params and fx_index")
+        if not isinstance(params, dict):
+            raise TypeError("params must be a dict")
+        if len(params) > PARAMETER_BATCH_LIMIT:
+            raise ValueError(
+                f"parameter batch exceeds {PARAMETER_BATCH_LIMIT} entries")
+        values, errors = {}, {}
+        for name, value in params.items():
+            try:
+                values[name] = owner.engine.set_parameter(
+                    slot_index=index, name=name, value=value, fx_index=fx_index)
+            except (TimeoutError, BufferError, SlotProcessError):
+                raise
+            except Exception as error:
+                errors[name] = str(error)
+        result = {"values": values, "errors": errors}
     elif operation == "sync_state":
         if arguments:
             raise TypeError("sync_state takes no arguments")
@@ -220,16 +252,22 @@ def _execute(owner, index, operation, arguments):
         raise ValueError(f"unknown slot operation: {operation}")
     updates = list(owner.engine._applied_updates)
     owner.engine._applied_updates.clear()
-    return {"ok": True, "result": result,
-            "state": _slot_state(owner, index), "updates": updates}
+    reply = {"ok": True, "result": result, "updates": updates}
+    if operation not in {"set_parameter", "set_parameters"}:
+        reply["state"] = _slot_state(owner, index)
+    return reply
 
 
 def _slot_owner(sample_rate, frames, index, operation, arguments,
                 shared, control, lifeline):
+    # Foreground Ctrl-C belongs to the control process, never a native owner.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     owner = None
     ready = False
-    parent_watch = threading.Thread(target=_watch_parent, args=(lifeline, shared),
-                                    name="vcpi-slot-parent", daemon=True)
+    stopping = threading.Event()
+    parent_watch = threading.Thread(
+        target=_watch_parent, args=(lifeline, shared, stopping),
+        name="vcpi-slot-parent", daemon=True)
     parent_watch.start()
     try:
         import mido
@@ -259,6 +297,8 @@ def _slot_owner(sample_rate, frames, index, operation, arguments,
                             owner, index, frames, shared, audio, sequence,
                             request.get("after_midi", 0), mido)
                         previous = sequence
+                    if operation == "shutdown":
+                        stopping.set()
                     reply = _execute(owner, index, operation, request["arguments"])
                     data = _encode(reply, STATE_LIMIT)
                 except Exception as error:
@@ -292,10 +332,15 @@ def _slot_owner(sample_rate, frames, index, operation, arguments,
         except (OSError, SlotProcessError):
             pass
     finally:
+        # Normal teardown must run native cleanup and Python finalizers; a
+        # closed lifeline must not make the watchdog short-circuit either.
+        stopping.set()
         control.close()
-        if owner is not None:
-            owner.shutdown()
-        lifeline.close()
+        try:
+            if owner is not None:
+                owner.shutdown()
+        finally:
+            lifeline.close()
 
 
 class SlotWorker:
@@ -433,6 +478,21 @@ class SlotWorker:
                 # Gain, routing, generation and mute/solo are mixer-owned.
                 self.slot.plugin = state["plugin"]
                 self.slot.effects = state["effects"]
+        for update in reply.get("updates", ()):
+            if update[0] != "parameter":
+                continue
+            _, index, fx_index, name, value, raw, display = update
+            if index != self.slot_index or self.slot is None:
+                continue
+            plugin = (self.slot.plugin if fx_index is None
+                      else self.slot.effects[fx_index])
+            if plugin is not None:
+                plugin.values[name] = value
+                descriptor = plugin.parameters.get(name)
+                if descriptor is not None:
+                    if raw is not None:
+                        descriptor.raw_value = raw
+                    descriptor.string_value = str(value) if display is None else display
 
     def request(self, operation, *, wait_hook=None, **arguments):
         self._assert_main()
@@ -443,8 +503,8 @@ class SlotWorker:
         data = _encode({"operation": operation, "arguments": arguments,
                         "after_block": self._sequence,
                         "after_midi": self._published_midi}, CONTROL_LIMIT)
-        timeout = (PARAMETER_TIMEOUT if operation in {"set_parameter", "sync_state"}
-                   else REQUEST_TIMEOUT)
+        timeout = (PARAMETER_TIMEOUT if operation in {
+            "set_parameter", "set_parameters", "sync_state"} else REQUEST_TIMEOUT)
         self._rpc_active = True
         try:
             reply = self._exchange(data, timeout,

@@ -164,10 +164,11 @@ and prints the actual applied value, including plugin clamping. Boolean values
 may use `true`/`false`; quote enum values containing spaces, for example
 `set 1 transpose_semitones "24 semitones"`. `params`, `info`, and `knobs`
 read cached snapshots and never call live plugin getters. Slot metadata is
-captured sequentially with native rendering in that slot's process; master
-metadata capture requires the output stream stopped. Owned parameter changes
-publish applied value updates. Plugin-side changes
-between captures can therefore make a diagnostic snapshot temporarily stale.
+captured at loading, chain edits, and explicit session-state capture, sequentially
+with native rendering in that slot's process. Master metadata capture requires
+the output stream stopped. A parameter setter returns only its actual value,
+raw/display delta, and acknowledgment—not a fresh catalog of all parameters.
+Plugin-side changes between full captures can make diagnostics temporarily stale.
 
 ### Mixer Commands
 
@@ -376,12 +377,22 @@ waits for prior controls/MIDI and captures each slot's native state between its
 render jobs. Without master effects it leaves the output stream running; native
 capture can delay the inspected slot. With master effects it also pauses the
 output stream for fresh master state. JSON is written in the control process.
-Restoration stays paused until plugin/control changes are complete. Read-only
-diagnostics do not perform this capture. A failed slot or output owner makes
-saving fail explicitly rather than overwrite the last good session.
+Restoration stays paused until plugin/control changes are complete. Parameters
+are applied in ordered batches of at most 64 values, preserving numeric,
+boolean, and enum types. Individual incompatible parameters are reported while
+other entries continue; a terminal native-owner failure aborts that plugin's
+restore. Read-only diagnostics do not perform native capture. A failed slot or
+output owner makes saving fail rather than overwrite the last good session.
 
 On startup restore, vcpi attempts to reconnect audio and MIDI targets
 automatically.
+
+An interrupted startup retires native owners without saving partially restored
+state; the original session file remains unchanged. Native owners ignore
+foreground Ctrl-C, leaving the control process to cancel pending work and
+perform teardown. Canceled control channels cannot accept a late reply as a
+subsequent operation. Slot-parent supervision waits for confirmed parent death
+before unlinking orphaned shared semaphore resources.
 
 ### Visualization Commands
 
@@ -506,10 +517,13 @@ after a terminal output-owner failure.
 
 `shutdown` saves before teardown, stops MIDI/sequencing and joins pending
 note-off timers, disables Link, then shuts down the output owner and slot children.
-Plugin references/cyclic parameter caches are released on their native owner's
-main thread. Cleanup still runs after save failure. Unresponsive children are
-terminated/killed with bounded waits, and signal handlers unwind pending RPCs
-instead of re-entering their locks.
+Aborted startup uses the Python API `host.shutdown(save=False)` instead, avoiding
+a session capture/write while still releasing resources. Plugin references and
+cyclic parameter caches are released on their native owner's main thread.
+Cleanup still runs after save failure. Deliberately interrupted RPCs request
+cooperative output-owner cleanup with a bounded ten-second grace period;
+unresponsive children are then terminated/killed with bounded waits. Signal
+handlers unwind pending RPCs instead of re-entering their locks.
 
 ## Example Workflows
 

@@ -374,17 +374,18 @@ class VcpiCore:
                 logger.exception("[Host] Cleanup failed")
         return first_error
 
-    def shutdown(self):
-        """Save once, always releasing controllers, timers and the audio child."""
+    def shutdown(self, *, save: bool = True):
+        """Release all resources, optionally saving a fully initialized session."""
         with self._shutdown_lock:
             if self._shutdown:
                 return
             self._shutdown = True
             save_error = None
-            try:
-                self.save_session()
-            except BaseException as exc:
-                save_error = exc
+            if save:
+                try:
+                    self.save_session()
+                except BaseException as exc:
+                    save_error = exc
             cleanup_error = self._close_resources()
             logger.info("[Host] Shutdown complete")
             if save_error is not None:

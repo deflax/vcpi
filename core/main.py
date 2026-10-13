@@ -90,8 +90,8 @@ def _boot_host(args) -> "VcpiCore":
         return host
     except BaseException:
         try:
-            host.shutdown()
-        except Exception:
+            host.shutdown(save=False)
+        except BaseException:
             logger.exception("startup cleanup failed")
         raise
 

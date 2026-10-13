@@ -21,7 +21,7 @@ import numpy as np
 from core.audio_state import PluginSnapshot
 from core.slot_process import (
     MIDI_CAPACITY, RING_SIZE, SlotProcessError, SlotWorker,
-    _SharedBlocks, _next_job, _take_midi,
+    _SharedBlocks, _next_job, _take_midi, _watch_parent,
 )
 
 
@@ -32,6 +32,24 @@ def _own_slot_for_orphan_test(connection, sample):
         connection.recv()
     finally:
         worker.shutdown()
+        connection.close()
+
+
+def _watch_lifeline_for_cleanup_test(connection, lifeline, shared):
+    stopping = threading.Event()
+    watcher = threading.Thread(target=_watch_parent,
+                               args=(lifeline, shared, stopping), daemon=True)
+    watcher.start()
+    try:
+        connection.send("watching")
+        connection.recv()
+        stopping.set()
+        # The parent has already closed the writer; cleanup must still finish.
+        time.sleep(0.1)
+        watcher.join(2)
+        connection.send(("cleanup completed", watcher.is_alive()))
+    finally:
+        lifeline.close()
         connection.close()
 
 
@@ -222,6 +240,49 @@ class SpawnedSlotTests(unittest.TestCase):
         worker.shutdown()
         self.assertFalse(worker._process.is_alive())
         self.assertFalse(worker._io_thread.is_alive())
+        self.assertEqual(worker._process.exitcode, 0)
+
+    def test_slot_ignores_foreground_interrupt_and_still_cleans_up(self):
+        worker = self.worker()
+        os.kill(worker.pid, signal.SIGINT)
+        reply = worker.request("sync_state")
+        self.assertEqual(reply["state"]["name"], "remote")
+        worker.render([mido.Message("note_on", note=60, velocity=127)], 64)
+        self.await_render(worker, 1)
+        np.testing.assert_array_equal(
+            worker.render([], 64), np.full((64, 2), 0.125, dtype=np.float32))
+        worker.shutdown()
+        self.assertEqual(worker._process.exitcode, 0)
+        self.assertFalse(worker._io_thread.is_alive())
+
+    def test_lifeline_eof_before_parent_exit_allows_cleanup_to_complete(self):
+        context = mp.get_context("spawn")
+        shared = _SharedBlocks(context, 8)
+        connection, child_connection = context.Pipe()
+        lifeline, writer = context.Pipe(duplex=False)
+        child = context.Process(target=_watch_lifeline_for_cleanup_test,
+                                args=(child_connection, lifeline, shared))
+        child.start()
+        child_connection.close()
+        lifeline.close()
+        try:
+            self.assertTrue(connection.poll(10))
+            self.assertEqual(connection.recv(), "watching")
+            writer.close()
+            # EOF must not kill a child while its creator is still alive.
+            time.sleep(0.1)
+            self.assertTrue(child.is_alive())
+            connection.send("shutdown")
+            self.assertTrue(connection.poll(5))
+            self.assertEqual(connection.recv(), ("cleanup completed", False))
+            child.join(2)
+            self.assertEqual(child.exitcode, 0)
+        finally:
+            writer.close()
+            connection.close()
+            if child.is_alive():
+                child.kill()
+            child.join(2)
 
     @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "requires POSIX process suspension")
     def test_snapshot_barrier_does_not_render_an_extra_discarded_block(self):
