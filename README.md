@@ -236,7 +236,7 @@ vcpi> note 1 60 100 500
 Full paths also work:
 
 ```text
-vcpi> slot 1 vst /path/to/Synth.vst3 Lead
+vcpi> slot 1 vst /path/to/Synth.vst3 --name Lead
 ```
 
 Load a WAV sample into a slot and trigger it from MIDI routing:
@@ -283,9 +283,9 @@ vcpi> seq                    # show all banks
 Typical multi-instrument setup:
 
 ```text
-vcpi> slot 1 vst Dexed Lead
-vcpi> slot 2 vst OB-Xf Bass
-vcpi> slot 3 vst Geonkick Drums
+vcpi> slot 1 vst Dexed --name Lead
+vcpi> slot 2 vst OB-Xf --name Bass
+vcpi> slot 3 vst Geonkick --name Drums
 
 vcpi> midi link 1 1
 vcpi> midi link 2 2
@@ -294,7 +294,7 @@ vcpi> midi link 10 3
 vcpi> midi input 0
 vcpi> midi input 1
 vcpi> midimix input 2
-vcpi> slot 1 fx DragonflyRoomReverb Reverb
+vcpi> slot 1 fx DragonflyRoomReverb --name Reverb
 vcpi> audio start
 vcpi> ableton link 120
 vcpi> status

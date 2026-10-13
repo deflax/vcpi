@@ -136,10 +136,10 @@ autocomplete command names. `slot` has context-aware argument completion:
 
 | Command | Description |
 |---|---|
-| `slot <slot> vst <path\|vst_name> [name]` | Load VST instrument into slot |
+| `slot <slot> vst <path\|vst_name> [--name <label>]` | Load VST instrument into slot |
 | `slot <slot> wav <pack> <sample> [name]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into slot |
 | `slot <slot> vcv <patch_name> [name]` | Load Cardinal into slot from `patches/<patch_name>.vcv` |
-| `slot <slot\|master> fx <path\|vst_name> [name]` | Load effect into slot insert chain or master bus |
+| `slot <slot\|master> fx <path\|vst_name> [--name <label>]` | Load effect into slot insert chain or master bus |
 | `slot <slot> clear` | Clear instrument from slot |
 | `slot <slot\|master> fx clear <fx_index>` | Remove effect by index |
 | `params <slot>` | Show instrument parameters |
@@ -152,6 +152,12 @@ autocomplete command names. `slot` has context-aware argument completion:
 | `knobs <slot>` | Show ASCII parameter sliders with values, units, and ranges |
 | `knobs <slot> fx <fx_index>` | Show parameter sliders for a slot effect |
 | `knobs master [fx_index]` | Show parameter sliders for a master bus effect |
+
+VST names and paths may contain spaces: `slot 1 vst Acid V` loads the plugin
+named `Acid V` and uses that name as the slot label. Quotes are also supported.
+To override the display label, use `slot 1 vst Acid V --name Bass`.
+The same syntax applies to `slot <slot|master> fx`; trailing words without
+`--name` are part of the plugin name, not a custom label.
 
 ### Mixer Commands
 

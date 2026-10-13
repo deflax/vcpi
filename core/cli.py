@@ -9,6 +9,7 @@ from __future__ import annotations
 import cmd
 import inspect
 import os
+import shlex
 from pathlib import Path
 
 from core.deps import HAS_PEDALBOARD, HAS_LINK, HAS_RTMIDI, HAS_MIDO, HAS_SOUNDDEVICE, sd
@@ -175,13 +176,28 @@ class HostCLI(cmd.Cmd):
 
     def _slot_usage(self) -> str:
         return (
-            "slot <1-8> vst <path|vst_name> [name] | "
+            "slot <1-8> vst <path|vst_name> [--name <label>] | "
             "slot <1-8> wav <pack> <sample> [name] | "
             "slot <1-8> vcv <patch_name[.vcv]> [name] | "
-            "slot <1-8|master> fx <path|vst_name> [name] | "
+            "slot <1-8|master> fx <path|vst_name> [--name <label>] | "
             "slot <1-8> clear | "
             "slot <1-8|master> fx clear <fx_index>"
         )
+
+    @staticmethod
+    def _parse_vst_args(text: str) -> tuple[str, str | None]:
+        tokens = shlex.split(text)
+        name = None
+        if "--name" in tokens:
+            marker = tokens.index("--name")
+            name = " ".join(tokens[marker + 1:])
+            if not name or "--name" in tokens[marker + 1:]:
+                raise ValueError("--name requires a single display label")
+            tokens = tokens[:marker]
+        plugin = " ".join(tokens)
+        if not plugin:
+            raise ValueError("VST path/name is required")
+        return plugin, name
 
     @staticmethod
     def _repo_root() -> Path:
@@ -445,7 +461,7 @@ class HostCLI(cmd.Cmd):
         return self._complete_slot_fx(text, prefix_tokens)
 
     def do_slot(self, arg):
-        """Slot management: slot <1-8> vst <path|name> [name] | slot <1-8> wav <pack> <sample> [name] | slot <1-8> vcv <patch> [name] | slot <1-8|master> fx <path|name> [name] | slot <1-8> clear | slot <1-8|master> fx clear <fx_index>"""
+        """Slot management: slot <1-8> vst <path|name> [--name <label>] | slot <1-8> wav <pack> <sample> [name] | slot <1-8> vcv <patch> [name] | slot <1-8|master> fx <path|name> [--name <label>] | slot <1-8> clear | slot <1-8|master> fx clear <fx_index>"""
         text = arg.strip()
         if not text:
             self._print(f"Usage: {self._slot_usage()}")
@@ -486,7 +502,7 @@ class HostCLI(cmd.Cmd):
         # -- slot <num|master> fx ... ----------------------------------------
         if mode == "fx":
             if len(parts) < 3:
-                self._print(f"Usage: slot <1-8|master> fx <path|vst_name> [name] | slot <1-8|master> fx clear <fx_index>")
+                self._print(f"Usage: slot <1-8|master> fx <path|vst_name> [--name <label>] | slot <1-8|master> fx clear <fx_index>")
                 return
 
             slot_idx = None if slot_num is None else _slot_to_internal(slot_num)
@@ -511,10 +527,9 @@ class HostCLI(cmd.Cmd):
                     self._print(f"Error: {e}")
                 return
 
-            # slot <num|master> fx <path|vst_name> [name]
-            path_token = parts[2]
-            name = " ".join(parts[3:]) if len(parts) > 3 else None
+            # slot <num|master> fx <path|vst_name> [--name <label>]
             try:
+                path_token, name = self._parse_vst_args(text.split(maxsplit=2)[2])
                 path = self._resolve_vst_token(path_token)
             except ValueError as e:
                 self._print(f"Error: {e}")
@@ -533,15 +548,14 @@ class HostCLI(cmd.Cmd):
 
         idx = _slot_to_internal(slot_num)
 
-        # -- slot <num> vst <path|name> [name] -------------------------------
+        # -- slot <num> vst <path|name> [--name <label>] ----------------------
         if mode == "vst":
-            rest = text.split(maxsplit=3)  # [target, "vst", path, name?]
+            rest = text.split(maxsplit=2)
             if len(rest) < 3:
-                self._print(f"Usage: slot <1-8> vst <path|vst_name> [name]")
+                self._print(f"Usage: slot <1-8> vst <path|vst_name> [--name <label>]")
                 return
-            path_token = rest[2]
-            name = rest[3] if len(rest) > 3 else None
             try:
+                path_token, name = self._parse_vst_args(rest[2])
                 path = self._resolve_vst_token(path_token)
                 slot = self.host.load_instrument(idx, path, name)
                 self._print(f"  slot {slot_num} = {slot.name}")
