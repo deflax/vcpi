@@ -96,6 +96,52 @@ class AudioProcessTests(unittest.TestCase):
         self.assertTrue(all(not thread.is_alive() for thread in host.engine._threads))
         host.shutdown()
 
+    @unittest.skipUnless(hasattr(signal, "SIGKILL"), "requires POSIX process termination")
+    def test_slot_crash_is_local_and_can_be_replaced(self):
+        host = self.host
+        first = host.load_wav(0, str(self.sample), "healthy")
+        second = host.load_wav(1, str(self.sample), "crashing")
+        self.assertNotEqual(first.worker_pid, second.worker_pid)
+        self.assertNotEqual(first.worker_pid, host.engine.owner_pid)
+        os.kill(second.worker_pid, signal.SIGKILL)
+        with host.engine.state_lock:
+            reported = host.engine._state_condition.wait_for(
+                lambda: host.engine.slots[1].worker_failure is not None,
+                timeout=5,
+            )
+        self.assertTrue(reported)
+        self.assertIsNone(host.engine.failure)
+        host.engine.set_slot_state(0, gain=0.375)
+        self.assertEqual(host.engine.slots[0].worker_pid, first.worker_pid)
+        self.assertEqual(host.engine.slots[0].gain, 0.375)
+        replacement = host.load_wav(1, str(self.sample), "recovered")
+        self.assertNotEqual(replacement.worker_pid, second.worker_pid)
+        self.assertIsNone(replacement.worker_failure)
+        host.save_session()
+        saved = json.loads(host.session_path.read_text())
+        self.assertEqual(saved["slots"][0]["name"], "healthy")
+        self.assertEqual(saved["slots"][1]["name"], "recovered")
+
+    @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "requires POSIX process suspension")
+    def test_hung_slot_snapshot_preserves_session_and_output_owner(self):
+        host = self.host
+        slot = host.load_wav(0, str(self.sample), "retained")
+        host.save_session()
+        previous = host.session_path.read_bytes()
+        os.kill(slot.worker_pid, signal.SIGSTOP)
+        with self.assertRaises(RuntimeError):
+            host.save_session()
+        self.assertEqual(host.session_path.read_bytes(), previous)
+        self.assertIsNone(host.engine.failure)
+        host.engine.set_master_gain(0.375)
+        self.assertEqual(host.engine.master_gain, 0.375)
+        with host.engine.state_lock:
+            reported = host.engine._state_condition.wait_for(
+                lambda: host.engine.slots[0].worker_failure is not None,
+                timeout=5,
+            )
+        self.assertTrue(reported)
+
     @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "requires POSIX process suspension")
     def test_timed_out_rpc_is_terminal_not_a_late_accepted_change(self):
         engine = self.host.engine

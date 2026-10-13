@@ -244,6 +244,140 @@ class AudioTests(unittest.TestCase):
         np.testing.assert_allclose(self.block(), 0.2)
 
 
+class IsolatedAudioTests(unittest.TestCase):
+    class RemoteRenderer:
+        def __init__(self, amplitude):
+            self.amplitude = amplitude
+            self.held = set()
+            self.calls = []
+            self.output = np.empty((8, 2), dtype=np.float32)
+            self.shutdown_calls = 0
+
+        def render(self, messages, frames):
+            self.calls.append(tuple(messages))
+            for message in messages:
+                if message.type == "note_on" and message.velocity:
+                    self.held.add(message.note)
+                elif message.type in ("note_off", "note_on"):
+                    self.held.discard(message.note)
+            self.output.fill(self.amplitude if self.held else 0)
+            return self.output
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    def setUp(self):
+        self.engine = AudioEngine(buffer_size=8)
+        self.engine.isolated_slots = True
+        self.engine._prepare_buffers(8)
+        self.addCleanup(self.engine.shutdown)
+
+    def block(self, frames=8):
+        out = np.empty((frames, 2), dtype=np.float32)
+        self.engine._callback(out, frames, None, None)
+        return out
+
+    def slot(self, index, amplitude=0.2):
+        remote = self.RemoteRenderer(amplitude)
+        # Snapshot stand-ins deliberately have no native render interface.
+        slot = InstrumentSlot("remote", "remote", object(), gain=1,
+                              effects=[object()], render_owner=remote)
+        slot._effects_board = object()
+        self.engine.publish_slot(index, slot)
+        self.engine.enqueue_midi(index, note())
+        return slot
+
+    def test_muted_and_solo_excluded_slots_drain_noteoffs_and_advance(self):
+        first = self.slot(0)
+        second = self.slot(1, 0.3)
+        np.testing.assert_allclose(self.block(), 0.5)
+        second.muted = True
+        self.engine.enqueue_midi(1, note("note_off"))
+        np.testing.assert_allclose(self.block(), 0.2)
+        second.muted = False
+        np.testing.assert_allclose(self.block(), 0.2)
+        first.solo = True
+        self.engine.enqueue_midi(1, note())
+        np.testing.assert_allclose(self.block(), 0.2)
+        self.engine.enqueue_midi(1, note("note_off"))
+        np.testing.assert_allclose(self.block(), 0.2)
+        first.solo = False
+        np.testing.assert_allclose(self.block(), 0.2)
+        self.assertEqual(len(second.render_owner.calls), 6)
+        self.assertEqual(self.engine.render_slots, 2)
+        self.assertEqual(self.engine.eligible_slots, 2)
+        self.assertEqual(self.engine.render_workers, NUM_SLOTS)
+        self.assertEqual(self.engine._workers, [])
+        self.assertEqual(self.engine.render_errors, 0)
+
+    def test_publication_clears_consumed_and_backlogged_midi_at_boundary(self):
+        old = self.slot(0)
+        other = self.slot(1, 0.1)
+        np.testing.assert_allclose(self.block(), 0.3)
+        replacement_owner = self.RemoteRenderer(0.4)
+        replacement_owner.held.add(60)
+        replacement = InstrumentSlot("new", "new", object(), gain=1,
+                                     render_owner=replacement_owner)
+        self.engine.enqueue_midi(1, note("note_off"))
+        for _ in range(self.engine._midi_budget + 10):
+            self.engine.enqueue_midi(0, note("note_off"))
+        retired, errors = [], []
+
+        def publish():
+            try:
+                retired.append(self.engine.publish_slot(0, replacement))
+            except Exception as error:
+                errors.append(error)
+
+        self.engine._running = True
+        setter = threading.Thread(target=publish)
+        try:
+            setter.start()
+            deadline = time.monotonic() + 2
+            while not self.engine.pending_control_count and time.monotonic() < deadline:
+                time.sleep(0.001)
+            self.assertEqual(self.engine.pending_control_count, 1)
+            np.testing.assert_allclose(self.block(), 0.4)
+            setter.join(timeout=2)
+            self.assertFalse(setter.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(retired, [old])
+            self.assertEqual(replacement_owner.calls, [()])
+            self.assertEqual(len(old.render_owner.calls), 1)
+            self.assertEqual(other.render_owner.held, set())
+            self.assertEqual(len(self.engine._midi_queue), 0)
+            self.assertEqual(old.render_owner.shutdown_calls, 0)
+            np.testing.assert_allclose(self.block(), 0.4)
+        finally:
+            self.engine._running = False
+            setter.join(timeout=2)
+        self.assertIs(self.engine.clear_slot(0), replacement)
+        self.assertIsNone(self.engine.slots[0])
+        self.assertEqual(replacement_owner.shutdown_calls, 0)
+
+    def test_frame_mismatch_silences_without_resizing_or_consuming_midi(self):
+        slot = self.slot(0)
+        mixed = self.engine._mixed_buf
+        np.testing.assert_array_equal(self.block(5), 0)
+        self.assertIs(self.engine._mixed_buf, mixed)
+        self.assertEqual(slot.render_owner.calls, [])
+        self.assertEqual(len(self.engine._midi_queue), 1)
+        self.assertEqual(self.engine.render_errors, 1)
+        np.testing.assert_allclose(self.block(), 0.2)
+
+    def test_failed_remote_does_not_interrupt_other_slots(self):
+        self.slot(0)
+        failed = self.slot(1, 0.3)
+
+        def render(messages, frames):
+            raise RuntimeError("remote failure")
+
+        failed.render_owner.render = render
+        np.testing.assert_allclose(self.block(), 0.2)
+        np.testing.assert_allclose(self.block(), 0.2)
+        self.assertEqual(self.engine.render_errors, 2)
+
+
 class SamplerTests(unittest.TestCase):
     def test_interpolation_pitch_tail_and_empty_blocks(self):
         for channels in (1, 2):

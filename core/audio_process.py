@@ -1,7 +1,7 @@
 """Spawned audio owner with bounded control/input channels and cached diagnostics.
 
-Only the child imports PluginHost/native audio libraries. Nothing in the audio
-callback serializes data, waits for IPC, or services CLI/diagnostic requests.
+The output child owns PortAudio and master effects; persistent slot children own
+instruments and inserts. The callback only exchanges fixed shared-memory blocks.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def _discover_devices():
 
 
 class _OwnerRuntime:
-    """Child main-thread dispatcher. Lifecycle work is performed with audio stopped."""
+    """Output dispatcher; only native master/device edits quiesce the stream."""
 
     def __init__(self, owner, control, inputs, updates):
         self.owner = owner
@@ -81,6 +81,9 @@ class _OwnerRuntime:
         self.received_input = 0
         self.update_serial = 0
         self.devices = _discover_devices()
+        self.pending_parameters = deque()
+        self.master_snapshots = []
+        self._last_slot_health = 0.0
         try:
             import mido
         except ImportError:
@@ -89,7 +92,7 @@ class _OwnerRuntime:
 
     def pending(self):
         return (self.engine.pending_control_count + len(self.engine._midi_queue)
-                + len(self.engine._applied_updates))
+                + len(self.engine._applied_updates) + len(self.pending_parameters))
 
     def receive_input(self):
         sequence, kind, index, generation, payload = pickle.loads(
@@ -105,9 +108,13 @@ class _OwnerRuntime:
         if kind == "midi":
             if self.mido is None:
                 raise RuntimeError("mido not installed")
-            self.engine.enqueue_midi(index, self.mido.Message.from_dict(payload))
+            self.engine.enqueue_midi(index, self.mido.Message.from_dict(payload),
+                                     generation=generation)
         elif kind == "parameter":
-            self.engine.enqueue_param_change(index, payload[0], payload[1])
+            if index is None:
+                self.engine.enqueue_param_change(index, payload[0], payload[1])
+            else:
+                self.pending_parameters.append((index, generation, payload[0], payload[1]))
         elif kind == "slot":
             self.engine.enqueue_slot_change(index, **payload)
         elif kind == "master_gain":
@@ -121,6 +128,7 @@ class _OwnerRuntime:
             if not self.engine.running:
                 self.engine.apply_pending_controls()
             self.send_updates()
+            self.apply_slot_parameters()
             if self.pending() >= INPUT_CAPACITY:
                 if not self.engine.running:
                     raise BufferError("audio input backlog is full while audio is stopped")
@@ -150,7 +158,109 @@ class _OwnerRuntime:
                     batches.appendleft(current[:middle])
                     continue
                 self.updates.send_bytes(data)
+                self._cache_master_updates(current)
                 self.update_serial = serial
+
+    def _cache_master_updates(self, updates):
+        for update in updates:
+            if update[0] != "parameter" or update[1] is not None:
+                continue
+            _, _, fx_index, name, actual, raw, display = update
+            if fx_index is None or not 0 <= fx_index < len(self.master_snapshots):
+                continue
+            plugin = self.master_snapshots[fx_index]
+            plugin.values[name] = actual
+            descriptor = plugin.parameters.get(name)
+            if descriptor is not None:
+                if raw is not None:
+                    descriptor.raw_value = raw
+                descriptor.string_value = str(actual) if display is None else display
+
+    def _slot_worker(self, index):
+        if not isinstance(index, int) or not 0 <= index < NUM_SLOTS:
+            raise ValueError("invalid slot index")
+        slot = self.engine.slots[index]
+        if slot is None:
+            raise ValueError(f"slot {index + 1} is empty")
+        return slot.render_owner
+
+    def service_wait(self):
+        """Keep MIDI and mixer controls moving while another slot initializes."""
+        if not self.engine.running:
+            self.engine.apply_pending_controls()
+        self.send_updates()
+        for _ in range(64):
+            if self.pending() >= INPUT_CAPACITY or not self.inputs.poll():
+                break
+            self.receive_input()
+        self.publish_slot_health()
+
+    def slot_request(self, index, operation, **arguments):
+        worker = self._slot_worker(index)
+        reply = worker.request(operation, wait_hook=self.service_wait, **arguments)
+        slot = self.engine.slots[index]
+        slot.plugin = worker.slot.plugin
+        slot.effects = worker.slot.effects
+        self.engine._applied_updates.extend(reply.get("updates", ()))
+        return reply.get("result")
+
+    def apply_slot_parameters(self):
+        # Bound command work per dispatcher pass; never process these on the
+        # mixer callback or inspect a processing plugin from the output owner.
+        count = min(64, len(self.pending_parameters))
+        for _ in range(count):
+            index, generation, name, value = self.pending_parameters.popleft()
+            if generation != self.generations[index]:
+                continue
+            try:
+                self.slot_request(index, "set_parameter", name=name, value=value)
+            except Exception as error:
+                worker = self._slot_worker(index)
+                worker.failure = f"parameter update failed: {error}"
+        self.send_updates()
+
+    def publish_slot_health(self):
+        now = time.monotonic()
+        if now - self._last_slot_health < 0.1:
+            return
+        self._last_slot_health = now
+        for index, slot in enumerate(self.engine.slots):
+            if slot is None:
+                continue
+            worker = slot.render_owner
+            worker.poll_failure()
+            fields = {"worker_pid": worker.pid, "worker_failure": worker.failure,
+                      "worker_misses": worker.misses,
+                      "buffering_samples": self.engine.buffer_size}
+            changed = {key: value for key, value in fields.items()
+                       if getattr(slot, key) != value}
+            if changed:
+                for key, value in changed.items():
+                    setattr(slot, key, value)
+                self.engine._applied_updates.append(("slot", index, changed))
+
+    def snapshot(self, inspect_master=False):
+        state = capture_state(
+            self.owner, self.generations, self.epoch, self.devices,
+            cached_master_effects=None if inspect_master else self.master_snapshots)
+        if inspect_master:
+            self.master_snapshots = state["master_effects"]
+        return state
+
+    def state_reply(self, result=None, inspect_master=False):
+        self.send_updates()
+        self.epoch += 1
+        state = self.snapshot(inspect_master)
+        return _encode({"ok": True, "result": result, "state": state,
+                        "update_serial": self.update_serial}, STATE_LIMIT)
+
+    def shutdown_slots(self):
+        for slot in self.engine.slots:
+            if slot is not None and slot.render_owner is not None:
+                try:
+                    slot.render_owner.shutdown()
+                except Exception:
+                    logger.exception("slot worker shutdown failed")
 
     def refresh_generations(self):
         changed = set()
@@ -176,36 +286,67 @@ class _OwnerRuntime:
         }
 
     def execute(self, operation, arguments):
-        if operation == "sync_state" and self.engine.running:
-            # A save must include plugin-side MIDI/program changes, not only
-            # cached setter echoes. Finish prior inputs, then inspect stopped.
-            self.engine.flush_controls()
-            deadline = time.monotonic() + 2.0
-            while self.engine._midi_queue and self.engine.running:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("MIDI state capture barrier timed out")
-                time.sleep(0.001)
+        if operation in {"load_instrument", "load_wav", "load_vcv", "load_vcv_patch"}:
+            from core.slot_process import SlotWorker
+
+            index = arguments["slot_index"]
+            if not isinstance(index, int) or not 0 <= index < NUM_SLOTS:
+                raise ValueError("invalid slot index")
+            staged = SlotWorker(
+                self.engine.sample_rate, self.engine.buffer_size, index,
+                operation, arguments, wait_hook=self.service_wait)
+            published = False
+            try:
+                staged.slot.render_owner = staged
+                staged.slot.worker_pid = staged.pid
+                staged.slot.buffering_samples = self.engine.buffer_size
+                staged.slot.midi_channels = {
+                    channel for channel, target in self.engine.channel_map.items()
+                    if target == index}
+                retired = self.engine.publish_slot(index, staged.slot)
+                published = True
+                self.refresh_generations()
+                if retired is not None:
+                    retired.render_owner.shutdown()
+                return self.state_reply(staged.result)
+            finally:
+                if not published:
+                    staged.shutdown()
+        if operation == "remove_instrument":
+            index = arguments["slot_index"]
+            self._slot_worker(index)
+            retired = self.engine.clear_slot(index)
+            self.refresh_generations()
+            retired.render_owner.shutdown()
+            return self.state_reply()
+        if operation in {"load_effect", "remove_effect"} and arguments.get("slot_index") is not None:
+            index = arguments["slot_index"]
+            forwarded = {key: value for key, value in arguments.items() if key != "slot_index"}
+            self.slot_request(index, operation, **forwarded)
+            return self.state_reply()
+        if operation == "sync_state":
+            if self.engine.running:
+                self.engine.flush_controls()
+                deadline = time.monotonic() + 2
+                while self.engine._midi_queue:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("MIDI state capture barrier timed out")
+                    self.send_updates()
+                    time.sleep(0.001)
+            for index, slot in enumerate(self.engine.slots):
+                if slot is not None:
+                    self.slot_request(index, "sync_state")
+            if not self.engine.master_effects:
+                return self.state_reply()
         if operation in LIFECYCLE_OPERATIONS or operation == "sync_state":
+            # Only native master-bus inspection/chain edits still need the
+            # entire device stopped. Slot native work lives in its own child.
             with self.engine.edit_effects():
                 self.engine.apply_pending_controls()
                 self.send_updates()
-                result = (None if operation == "sync_state"
-                          else getattr(self.owner, operation)(**arguments))
-                self.refresh_generations()
-                self.epoch += 1
-                state = capture_state(self.owner, self.generations, self.epoch, self.devices)
-                self.engine._applied_updates.clear()
-                if operation == "load_vcv":
-                    result = {"patch_result": result[1], "cardinal_path": result[2]}
-                elif operation == "load_vcv_patch":
-                    result = {"patch_result": result[1], "cardinal_path": result[2],
-                              "patch_path": str(result[3])}
-                else:
-                    result = None  # Native slots/plugin instances never leave this process.
-                # Encode full metadata before resuming the callback. Sending
-                # already-encoded bytes may block this thread, not the callback.
-                return _encode({"ok": True, "result": result, "state": state,
-                                "update_serial": self.update_serial}, STATE_LIMIT)
+                if operation != "sync_state":
+                    getattr(self.owner, operation)(**arguments)
+                return self.state_reply(inspect_master=True)
         if operation == "start_audio":
             self.engine.stop()
             self.engine.apply_pending_controls()
@@ -219,7 +360,12 @@ class _OwnerRuntime:
             self.devices = _discover_devices()
             result = None
         elif operation == "set_parameter":
-            result = self.engine.set_parameter(**arguments)
+            index = arguments.get("slot_index")
+            if index is None:
+                result = self.engine.set_parameter(**arguments)
+            else:
+                forwarded = {key: value for key, value in arguments.items() if key != "slot_index"}
+                result = self.slot_request(index, operation, **forwarded)
         elif operation == "set_slot_state":
             self.engine.set_slot_state(**arguments)
             result = None
@@ -238,6 +384,7 @@ class _OwnerRuntime:
             else:
                 self.engine.apply_pending_controls()
             self.send_updates()
+            self.shutdown_slots()
             self.previous_slots = [None] * NUM_SLOTS
             self.owner.shutdown()
             result = None
@@ -250,17 +397,23 @@ class _OwnerRuntime:
         return _encode(reply, STATE_LIMIT)
 
     def run(self):
-        state = capture_state(self.owner, self.generations, self.epoch, self.devices)
+        state = self.snapshot(inspect_master=True)
         self.control.send_bytes(_encode({"ok": True, "state": state}, STATE_LIMIT))
         while True:
             if not self.engine.running:
                 self.engine.apply_pending_controls()
             self.send_updates()
+            self.apply_slot_parameters()
+            self.publish_slot_health()
             if self.control.poll():
                 request = pickle.loads(self.control.recv_bytes(CONTROL_LIMIT))
                 operation = request["operation"]
                 try:
                     self.await_inputs(request["after"])
+                    while self.pending_parameters:
+                        self.apply_slot_parameters()
+                    if not self.engine.running:
+                        self.engine.apply_pending_controls()
                     reply = self.execute(operation, request["arguments"])
                 except Exception as error:
                     fatal = (isinstance(error, (TimeoutError, BufferError))
@@ -293,8 +446,10 @@ def _audio_owner(sample_rate, buffer_size, health, control, inputs, updates):
 
         owner = PluginHost(sample_rate=sample_rate, buffer_size=buffer_size)
         owner.engine.health_buffer = health
+        owner.engine.isolated_slots = True
         owner.engine._publish_health()
-        _OwnerRuntime(owner, control, inputs, updates).run()
+        runtime = _OwnerRuntime(owner, control, inputs, updates)
+        runtime.run()
     except (EOFError, BrokenPipeError):
         pass  # Control process exited; release native resources on this main thread.
     except Exception as error:
@@ -307,7 +462,12 @@ def _audio_owner(sample_rate, buffer_size, health, control, inputs, updates):
             pass
     finally:
         if owner is not None:
-            owner.shutdown()
+            try:
+                owner.engine.stop()
+            finally:
+                if "runtime" in locals():
+                    runtime.shutdown_slots()
+                owner.shutdown()
         control.close()
         inputs.close()
         updates.close()
@@ -351,7 +511,7 @@ class RemoteAudioEngine:
         self._process = context.Process(
             target=_audio_owner,
             args=(sample_rate, buffer_size, self._health, child_control, child_inputs, child_updates),
-            name="vcpi-audio-owner", daemon=True,
+            name="vcpi-audio-owner", daemon=False,
         )
         try:
             self._process.start()
@@ -635,7 +795,8 @@ class RemoteAudioEngine:
         return reply.get("result")
 
     def request(self, operation, **arguments):
-        timeout = 120 if operation in LIFECYCLE_OPERATIONS or operation == "start_audio" else 10
+        timeout = (120 if operation in LIFECYCLE_OPERATIONS
+                   or operation in {"start_audio", "sync_state"} else 10)
         result = self._rpc(operation, arguments, timeout)
         if operation in {"route", "unroute"}:
             with self._state_condition:

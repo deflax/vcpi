@@ -165,13 +165,13 @@ class VcpiCore:
 
     def load_instrument(self, slot_index: int, path: str,
                         name: Optional[str] = None) -> InstrumentSlot:
-        """Load an instrument in the audio owner and return its cached state."""
+        """Stage a native slot process and return its published cached state."""
         self.engine.request("load_instrument", slot_index=slot_index, path=path, name=name)
         return self._loaded_slot(slot_index)
 
     def load_wav(self, slot_index: int, wav_path: str,
                  name: Optional[str] = None) -> InstrumentSlot:
-        """Load a WAV sampler in the audio owner and return its cached state."""
+        """Stage a sampler slot process and return its published cached state."""
         self.engine.request("load_wav", slot_index=slot_index, wav_path=wav_path, name=name)
         return self._loaded_slot(slot_index)
 

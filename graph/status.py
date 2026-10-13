@@ -32,7 +32,7 @@ def render_status(host: VcpiCore) -> str:
     failure = engine.failure
     audio_state = "RUNNING" if engine.running and not failure else "STOPPED"
     rows.append(("Audio", f"{audio_state}  (sr={host.sample_rate} buf={host.buffer_size})"))
-    rows.append(("Audio owner", f"PID {engine.owner_pid} (native plugins and callback)"))
+    rows.append(("Audio owner", f"PID {engine.owner_pid} (output mixer and master effects)"))
     rows.append(("Audio failure", str(failure) if failure else "(none)"))
     rows.append(("Backend", engine.backend_label))
 
@@ -41,11 +41,10 @@ def render_status(host: VcpiCore) -> str:
     workers = engine.render_workers
     slots = engine.render_slots
     cpus = os.cpu_count() or 0
-    mode = ("idle" if slots == 0 else "inline" if slots == 1
-            else "parallel" if workers > 1 else "serial")
+    mode = "idle" if slots == 0 else "isolated processes"
     slot_label = "slot" if slots == 1 else "slots"
     rows.append(
-        ("Render", f"max: {workers} workers / {cpus} CPUs"
+        ("Render", f"max: {workers} slot processes / {cpus} CPUs"
          f"  (last callback: {slots} eligible {slot_label}, {mode})")
     )
     rows.append(("Callbacks", str(engine.callback_count)))
@@ -57,6 +56,14 @@ def render_status(host: VcpiCore) -> str:
     rows.append(("Deadline misses", str(engine.deadline_misses)))
     rows.append(("Underruns", str(engine.underruns)))
     rows.append(("Render errors", str(engine.render_errors)))
+    buffering_ms = host.buffer_size * 1000.0 / host.sample_rate
+    rows.append(("Slot buffering", f"{host.buffer_size} samples / {buffering_ms:.3f} ms (1 block)"))
+    for index, slot in enumerate(engine.slots):
+        if slot is None:
+            continue
+        state = f"FAILED: {slot.worker_failure}" if slot.worker_failure else "ready"
+        rows.append((f"Slot {index + 1} worker",
+                     f"PID {slot.worker_pid}  {state}  missing blocks: {slot.worker_misses}"))
 
     rows.append(("", ""))  # spacer
 

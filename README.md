@@ -29,12 +29,14 @@ python main.py serve
 python main.py cli
 ```
 
-The daemon runs a control process and a spawned audio-owner process; the CLI
-remains a separate client. Command parsing, formatting, session files, MIDI
-ports, the sequencer, and Ableton Link stay in the control process. PortAudio,
-VST3/Cardinal instances, effects, and WAV rendering belong to the audio owner,
-with a separate Python GIL. Read-only commands use cached snapshots rather
-than inspecting processing plugins or querying the running audio backend.
+The daemon runs a control process, a spawned audio-output process, and a
+persistent process for each loaded slot; the CLI remains a separate client.
+Command parsing, formatting, session files, MIDI ports, the sequencer, and
+Ableton Link stay in the control process. Each slot process owns its
+VST3/Cardinal or WAV source and insert effects. The output process owns
+PortAudio, the mixer, and master effects. Slot audio crosses preallocated shared
+memory with one block of added buffering. Loading/replacing a slot does not
+stop unrelated slots; read-only commands use cached snapshots.
 
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcpi` with `audio start [device]`.
@@ -51,11 +53,12 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
 .
   core/               # Main package
     host.py           # Control-process orchestration
-    audio_process.py  # Spawned audio owner, bounded IPC, failure supervision
-    plugin_host.py    # Native plugin/device lifecycle in the audio child
+    audio_process.py  # Output owner, control IPC, staged slot publication
+    slot_process.py   # Persistent slot owners and shared-memory audio/MIDI
+    plugin_host.py    # Native lifecycle helpers for output and slot children
     audio_state.py    # Plain plugin/parameter snapshots for control and display
-    audio_deps.py     # Native audio imports (audio owner and sampler tools only)
-    engine.py         # Audio callback, owner-applied controls, render workers
+    audio_deps.py     # Native audio imports (native owners and sampler tools)
+    engine.py         # Shared-block mixer, controls, standalone native rendering
     cli.py            # Interactive command-line interface
     server.py         # Unix socket server for headless mode
     client.py         # CLI client (connects to server)

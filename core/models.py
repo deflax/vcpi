@@ -14,7 +14,7 @@ class InstrumentSlot:
 
     name: str
     path: str
-    plugin: object  # native plugin in audio owner, PluginSnapshot in control process
+    plugin: object  # native plugin in slot owner, PluginSnapshot elsewhere
     effects: list = field(default_factory=list)
     midi_channels: set = field(default_factory=set)  # routed MIDI channels (0-15)
     gain: float = 0.8
@@ -24,6 +24,11 @@ class InstrumentSlot:
     source_type: str = "plugin"  # plugin | wav | vcv
     vcv_patch_path: str = ""     # .vcv patch file (when source_type == "vcv")
     generation: int = 0  # protects queued inputs from instrument replacement
+    render_owner: object = field(default=None, repr=False, compare=False)
+    worker_pid: int | None = None
+    worker_failure: str | None = None
+    worker_misses: int = 0
+    buffering_samples: int = 0
     _effects_board: object = field(default=None, repr=False, compare=False)
 
     @property

@@ -109,6 +109,7 @@ class AudioEngine:
         self.slots: list[Optional[InstrumentSlot]] = [None] * NUM_SLOTS
         self.master_effects: list = []  # pedalboard plugin instances
         self.master_gain: float = 1.0
+        self.isolated_slots = False
 
         self._midi_queue: collections.deque = collections.deque()  # (slot_index, msg)
         self._control_queue: collections.deque = collections.deque()
@@ -204,14 +205,14 @@ class AudioEngine:
         """Enqueue MIDI without discarding notes; overflow is an explicit error."""
         if not isinstance(slot_index, int) or not 0 <= slot_index < NUM_SLOTS:
             raise ValueError(f"slot index must be 0-{NUM_SLOTS - 1}")
-        if generation is not None:
-            slot = self.slots[slot_index]
-            current = slot.generation if slot is not None else 0
-            if generation != current:
-                return False
         with self._control_lock:
             if self._closed:
                 raise RuntimeError("audio engine is shut down")
+            if generation is not None:
+                slot = self.slots[slot_index]
+                current = slot.generation if slot is not None else 0
+                if generation != current:
+                    return False
             if len(self._midi_queue) >= self._control_capacity:
                 raise BufferError("audio MIDI queue is full")
             self._midi_queue.append((slot_index, msg))
@@ -271,6 +272,21 @@ class AudioEngine:
     def _apply_control(self, control):
         operation = control.operation
         arguments = control.arguments
+        if operation == "publish_slot":
+            index, slot = arguments
+            with self._control_lock:
+                retired = self.slots[index]
+                self.slots[index] = slot
+                # Bounded, in-place filtering preserves other slots' MIDI and
+                # drops even backlog beyond this callback's MIDI budget.
+                for _ in range(len(self._midi_queue)):
+                    queued = self._midi_queue.popleft()
+                    if queued[0] != index:
+                        self._midi_queue.append(queued)
+                self._midi_lists[index].clear()
+            # Keep retirement with the synchronous acknowledgement; never
+            # close a child process or its shared memory on the callback.
+            return retired
         if operation == "parameter":
             slot_index, fx_index, name, value = arguments
             if slot_index is None:
@@ -279,6 +295,9 @@ class AudioEngine:
                 effects = self.master_effects
             else:
                 slot = self._control_slot(slot_index)
+                if self.isolated_slots:
+                    raise RuntimeError(
+                        "isolated slot parameters must be changed by the slot owner")
                 effects = slot.effects
             if fx_index is not None:
                 if not isinstance(fx_index, int) or not 0 <= fx_index < len(effects):
@@ -354,6 +373,21 @@ class AudioEngine:
             finally:
                 if control.done is not None:
                     control.done.set()
+
+    def publish_slot(self, index: int, slot: InstrumentSlot | None):
+        """Swap at a block boundary and return the retired slot to its owner.
+
+        Discard prior MIDI for this index. The caller owns retired worker
+        shutdown after acknowledgement; a stopped engine applies this directly
+        on its owner thread through the same control queue.
+        """
+        if not isinstance(index, int) or not 0 <= index < NUM_SLOTS:
+            raise ValueError(f"slot index must be 0-{NUM_SLOTS - 1}")
+        return self._submit_control("publish_slot", (index, slot), True)
+
+    def clear_slot(self, index: int):
+        """Clear at a block boundary, returning the slot for owner cleanup."""
+        return self.publish_slot(index, None)
 
     def set_parameter(self, slot_index: int | None, name: str, value,
                       fx_index: int | None = None):
@@ -443,6 +477,22 @@ class AudioEngine:
             self.render_errors += 1
             return None
 
+    def _render_remote_slot(self, slot, midi_msgs, frames):
+        """Consume/submit shared blocks without native slot access or waiting."""
+        try:
+            owner = slot.render_owner
+            if owner is None:
+                raise RuntimeError("isolated slot has no render owner")
+            rendered = owner.render(midi_msgs, frames)
+            if rendered is not None and (
+                    rendered.ndim != 2
+                    or rendered.shape != (frames, self.output_channels)):
+                raise ValueError("slot owner returned an incompatible audio block")
+            return rendered
+        except Exception:
+            self.render_errors += 1
+            return None
+
     # -- audio callback ------------------------------------------------------
 
     def _prepare_buffers(self, frames):
@@ -499,9 +549,13 @@ class AudioEngine:
         if status and status.output_underflow:
             self.underruns += 1
 
-        # Fixed block size is prepared before stream.start(). Accommodate an
-        # unexpected backend block size without retaining stale-sized scratch.
-        if self._mixed_buf is None or self._mixed_buf.shape[0] != frames:
+        # Shared worker rings have a fixed frame capacity. Never silently
+        # resize callback scratch and submit an incompatible shared block.
+        if self.isolated_slots:
+            if (frames != self.buffer_size or self._mixed_buf is None
+                    or self._mixed_buf.shape[0] != frames):
+                raise RuntimeError("isolated rendering requires the configured block size")
+        elif self._mixed_buf is None or self._mixed_buf.shape[0] != frames:
             self._prepare_buffers(frames)
         mixed = self._mixed_buf
         mixed.fill(0)
@@ -515,36 +569,52 @@ class AudioEngine:
         # Hold one block's slot references through rendering and mixing.
         # Muting/soloing affects eligibility, not the number of live threads.
         has_solo = self.any_solo()
-        active = 0
-        single_index = 0
-        for idx, slot in enumerate(self.slots):
-            if slot is not None and not slot.muted and (not has_solo or slot.solo):
+        if self.isolated_slots:
+            self.render_slots = 0
+            self.eligible_slots = 0
+            for idx, slot in enumerate(self.slots):
                 self._block_slots[idx] = slot
-                self._render_indices[active] = idx
-                active += 1
-                single_index = idx
-            else:
-                self._block_slots[idx] = None
-        self.render_slots = active
-        self.eligible_slots = active
-        if active == 1:
-            slot = self._block_slots[single_index]
-            rendered = self._render_slot(
-                single_index, slot, self._midi_lists[single_index], frames)
-            self._mix_slot(rendered, slot.gain)
-        elif active > 1:
-            self._job_cursor = 0
-            worker_count = min(active, len(self._workers))
-            for idx in range(worker_count):
-                self._workers[idx].submit(frames)
-            # Complete every job before reusing MIDI lists or processing a
-            # subsequent block. A timeout would allow overlapping plugin calls.
-            for idx in range(worker_count):
-                self._workers[idx].done.wait()
-            for idx, slot in enumerate(self._block_slots):
-                if slot is not None:
-                    self._mix_slot(self._rendered[idx], slot.gain)
-                    self._rendered[idx] = None
+                if slot is None:
+                    continue
+                self.render_slots += 1
+                # Always advance remote tails and drain MIDI, even for a
+                # muted or solo-excluded slot. Eligibility only affects mix.
+                rendered = self._render_remote_slot(
+                    slot, self._midi_lists[idx], frames)
+                if not slot.muted and (not has_solo or slot.solo):
+                    self.eligible_slots += 1
+                    self._mix_slot(rendered, slot.gain)
+        else:
+            active = 0
+            single_index = 0
+            for idx, slot in enumerate(self.slots):
+                if slot is not None and not slot.muted and (not has_solo or slot.solo):
+                    self._block_slots[idx] = slot
+                    self._render_indices[active] = idx
+                    active += 1
+                    single_index = idx
+                else:
+                    self._block_slots[idx] = None
+            self.render_slots = active
+            self.eligible_slots = active
+            if active == 1:
+                slot = self._block_slots[single_index]
+                rendered = self._render_slot(
+                    single_index, slot, self._midi_lists[single_index], frames)
+                self._mix_slot(rendered, slot.gain)
+            elif active > 1:
+                self._job_cursor = 0
+                worker_count = min(active, len(self._workers))
+                for idx in range(worker_count):
+                    self._workers[idx].submit(frames)
+                # Complete every job before reusing MIDI lists or processing a
+                # subsequent block. A timeout would allow overlapping plugin calls.
+                for idx in range(worker_count):
+                    self._workers[idx].done.wait()
+                for idx, slot in enumerate(self._block_slots):
+                    if slot is not None:
+                        self._mix_slot(self._rendered[idx], slot.gain)
+                        self._rendered[idx] = None
 
         board = self._master_board
         if board is not None:
@@ -601,7 +671,13 @@ class AudioEngine:
             self.stop()
             self.apply_pending_controls()
             self._prepare_buffers(self.buffer_size)
-            if not self._workers:
+            if self.isolated_slots:
+                # Switching a stopped native engine to remote ownership must
+                # not leave unused native render threads behind.
+                for worker in self._workers:
+                    worker.close()
+                self._workers.clear()
+            elif not self._workers:
                 self._workers = [
                     _RenderWorker(self, idx) for idx in range(self.render_workers)]
             stream = sd.OutputStream(
@@ -670,7 +746,7 @@ class AudioEngine:
             self._publish_health()
 
     def shutdown(self):
-        """Stop rendering and release plugins before interpreter teardown."""
+        """Stop native rendering; callers separately shut down slot processes."""
         with self._lock:
             self.stop()
             for worker in self._workers:
@@ -698,6 +774,15 @@ class AudioEngine:
             # while the interpreter and native libraries are still live.
             gc.collect()
         logger.info("[Audio] Render workers shut down")
+
+    @property
+    def render_workers(self):
+        """Process concurrency in isolated mode; native thread capacity otherwise."""
+        return NUM_SLOTS if self.isolated_slots else self._render_workers
+
+    @render_workers.setter
+    def render_workers(self, value):
+        self._render_workers = value
 
     @property
     def running(self) -> bool:

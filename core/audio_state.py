@@ -67,6 +67,8 @@ def _attr(obj, name, default=None):
 
 def capture_plugin(plugin, values, readers):
     """Inspect one native plugin on its owner's main thread with audio stopped."""
+    if isinstance(plugin, PluginSnapshot):
+        return plugin
     path = str(_attr(plugin, "_vcpi_path", _attr(plugin, "path_to_plugin_file", "")))
     snapshot = PluginSnapshot(
         token=id(plugin),
@@ -114,12 +116,12 @@ def capture_plugin(plugin, values, readers):
     return snapshot
 
 
-def capture_state(owner, generations, epoch, devices):
-    """Capture full metadata only while the audio owner is quiescent."""
+def capture_state(owner, generations, epoch, devices, cached_master_effects=None):
+    """Copy remote slot state; inspect native plugins only when stopped."""
     from core import audio_deps
 
     engine = owner.engine
-    if engine.running:
+    if engine.running and cached_master_effects is None:
         raise RuntimeError("native metadata capture requires stopped audio")
     values, readers = {}, {}
     slots = []
@@ -127,6 +129,8 @@ def capture_state(owner, generations, epoch, devices):
         if slot is None:
             slots.append(None)
             continue
+        if engine.running and slot.render_owner is None:
+            raise RuntimeError("native slot metadata capture requires stopped audio")
         slots.append({
             "name": slot.name,
             "path": slot.path,
@@ -140,10 +144,18 @@ def capture_state(owner, generations, epoch, devices):
             "source_type": slot.source_type,
             "vcv_patch_path": slot.vcv_patch_path,
             "generation": generations[index],
+            "worker_pid": slot.worker_pid,
+            "worker_failure": slot.worker_failure,
+            "worker_misses": slot.worker_misses,
+            "buffering_samples": slot.buffering_samples,
         })
-    master_effects = [capture_plugin(effect, values, readers) for effect in engine.master_effects]
-    engine.parameter_values = values
-    engine.parameter_readers = readers
+    master_effects = (
+        [capture_plugin(effect, values, readers) for effect in engine.master_effects]
+        if cached_master_effects is None else cached_master_effects
+    )
+    if cached_master_effects is None:
+        engine.parameter_values = values
+        engine.parameter_readers = readers
     return {
         "epoch": epoch,
         "slots": slots,

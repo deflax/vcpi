@@ -159,13 +159,14 @@ To override the display label, use `slot 1 vst Acid V --name Bass`.
 The same syntax applies to `slot <slot|master> fx`; trailing words without
 `--name` are part of the plugin name, not a custom label.
 
-`set` waits for the audio owner to apply the change at a render boundary and
-prints the actual applied value, including plugin clamping. Boolean values may
-use `true`/`false`; quote enum values containing spaces, for example
+`set` waits for the owning process to apply the change between render blocks
+and prints the actual applied value, including plugin clamping. Boolean values
+may use `true`/`false`; quote enum values containing spaces, for example
 `set 1 transpose_semitones "24 semitones"`. `params`, `info`, and `knobs`
-read cached snapshots and never call live plugin getters. Metadata is captured
-while audio is stopped during loading, chain edits, and session saves; owned
-parameter changes publish incremental value updates. Plugin-side changes
+read cached snapshots and never call live plugin getters. Slot metadata is
+captured sequentially with native rendering in that slot's process; master
+metadata capture requires the output stream stopped. Owned parameter changes
+publish applied value updates. Plugin-side changes
 between captures can therefore make a diagnostic snapshot temporarily stale.
 
 ### Mixer Commands
@@ -188,11 +189,13 @@ All audio operations are subcommands of `audio`:
 | `audio stop` | Stop audio engine |
 | `audio devices` | List available output devices |
 
-The daemon spawns a dedicated audio process; command parsing/display work,
-MIDI ports, Link, sequencing, and session-file I/O run in the control process.
-The callback never waits for command responses, IPC writes, display formatting,
-or filesystem operations. Python API entry points that construct `VcpiCore`
-must use the usual `if __name__ == "__main__":` guard for multiprocessing spawn.
+The daemon spawns an audio-output process and a persistent native process per
+loaded slot. Command parsing/display work, MIDI ports, Link, sequencing, and
+session-file I/O remain in the control process. Each slot owns its instrument
+and insert effects; the output process owns PortAudio, mixing, and master FX.
+The callback never waits for slot rendering, command responses, IPC writes,
+display formatting, or filesystem operations. Python API entry points that
+construct `VcpiCore` must use the usual `if __name__ == "__main__":` spawn guard.
 
 `audio devices` displays the cached device catalog, refreshed at audio-owner
 startup and while stopped during `audio start`/`audio stop`. After replugging
@@ -202,25 +205,35 @@ Running `audio start` again stops and closes the previous output stream before
 opening the new one, including when changing devices. If opening or starting
 the replacement fails, audio remains stopped.
 
-One eligible instrument slot renders inline on the audio callback; multiple
-slots use persistent workers started before audio opens, capped at the CPU
-count or eight workers. Gain/mix, sampler interpolation, and master-input
-buffers are reused for unchanged block sizes. Plugin processing still has to
-finish within the block deadline; Python and third-party plugins are not a
-hard-real-time environment.
+All slot audio uses preallocated shared-memory stereo buffers with sequence
+tags and nonblocking ownership checks. Each callback consumes the previous
+slot block and requests the next; this adds **one block** to note-to-sound
+latency: **512 samples / 11.610 ms** at the defaults, in addition to backend and
+plugin latency. The three handoff cells do not add three blocks of latency.
+An unavailable/late block silences only that slot for that block and increments
+its missing-block counter; old blocks are never replayed. Muted and solo-excluded
+slots still render so MIDI note-offs and plugin tails advance. Gain/mix, sampler,
+and master-input buffers are reused. Processes increase memory/scheduling cost;
+Python and third-party plugins still are not a hard-real-time environment.
 
-Each callback consumes at most 256 queued MIDI messages and 64 owner-applied
+Each callback consumes at most 256 queued MIDI messages and 64 mixer/master
 controls, retaining later entries for subsequent blocks. Input queues are
 bounded at 4096 entries; ordinary MIDI order and note-offs are preserved.
-Heavy traffic can increase control latency. Saturation is an explicit failure
-that stops the audio owner, not silent MIDI loss. Messages and scheduled
-note-offs for a retired instrument generation cannot affect its replacement.
+Heavy traffic can increase control latency. Global ingress saturation explicitly
+stops the output owner, rather than silently losing MIDI. Each slot also has a
+4096-message shared MIDI FIFO plus a bounded deferred-publication queue;
+overflow or a MIDI message exceeding 1024 encoded bytes explicitly fails only
+that slot. MIDI remains FIFO even when late audio jobs are skipped. Messages
+and scheduled note-offs for a retired generation cannot affect its replacement.
 
-Instrument loading/removal, Cardinal patch loading, slot/master chain edits,
-session-state capture, and restoration deliberately pause audio around native
-lifecycle work. New effects are warmed on the audio child's main thread;
-existing effects are not processed or reset during warmup. Chain construction
-or warmup failure retains the previous chain and resumes the same device.
+Instrument/WAV/Cardinal loads initialize and warm a new slot process while
+existing slots continue playing. A ready replacement switches at a callback
+boundary; only then is the old process retired. Failed loading leaves the old
+source playing. Removal stops only that slot. Insert-chain edits execute
+sequentially on that slot's native main thread and may interrupt that slot,
+not the output stream or other slots. Failed chain construction/warmup retains
+the previous chain. Master-chain edits and native master metadata capture still
+pause the output stream. Restoration deliberately stays paused until complete.
 If reopening fails, audio remains stopped; failed native stop/close is terminal
 because quiescence cannot be assumed.
 
@@ -359,11 +372,13 @@ Saved/restored session state includes:
 - Audio output device and MIDI connections
 
 Parameter snapshots preserve numeric, boolean, and enum/string values. Saving
-waits for prior controls/MIDI, pauses rendering for a fresh native parameter
-capture, resumes the selected device, then writes JSON in the control process.
+waits for prior controls/MIDI and captures each slot's native state between its
+render jobs. Without master effects it leaves the output stream running; native
+capture can delay the inspected slot. With master effects it also pauses the
+output stream for fresh master state. JSON is written in the control process.
 Restoration stays paused until plugin/control changes are complete. Read-only
-diagnostics do not perform this capture. If the owner has failed, saving fails
-explicitly rather than overwriting the last good session with unconfirmed state.
+diagnostics do not perform this capture. A failed slot or output owner makes
+saving fail explicitly rather than overwrite the last good session.
 
 On startup restore, vcpi attempts to reconnect audio and MIDI targets
 automatically.
@@ -456,32 +471,43 @@ knobs master      # first master bus effect (index defaults to 1)
 | `shutdown` | Shut down the vcpi daemon process |
 | `quit` / `exit` / `Ctrl-D` | Disconnect this client session |
 
-`status` reads shared callback health and cached metadata; it does not contact
-the audio owner or query PortAudio while rendering. `Audio owner` identifies
-the child PID, and `Audio failure` takes precedence over stale running flags.
-`Render` distinguishes maximum worker capacity from the eligible slot count
-in the last callback and reports `idle`, `inline`, `parallel`, or `serial`.
+`status` reads shared output-callback health and cached metadata; it does not
+contact native owners or query PortAudio while rendering. `Audio owner`
+identifies the output/mixer PID; `Audio failure` takes precedence over stale
+running flags. `Render` distinguishes maximum slot-process capacity from the
+eligible slot count in the last callback. `Slot buffering` states added latency.
+Each `Slot N worker` row shows its PID, failure, and cumulative missing blocks;
+these cached worker-health fields refresh approximately every 100 ms.
 
-`Callback time` shows last/peak execution time and the block deadline.
-`Deadline misses` counts callbacks whose execution exceeded that deadline;
-it does not measure every OS scheduling delay. `Underruns` counts reported
-output underflows; `Render errors` counts failed slot/MIDI/master processing.
-Counters are cumulative for the audio owner's lifetime, including stream
-restarts. The callback publishes fixed shared-memory fields instead of logging.
+`Callback time` shows mixer/master callback last/peak execution time and the
+block deadline, **not native instrument/insert rendering time**. A fast mixer
+with missing slot blocks is still audible trouble. `Deadline misses` counts
+output callbacks exceeding that deadline, not every OS scheduling delay.
+`Underruns` counts backend-reported output underflows; zero does not imply zero
+slot dropouts. `Render errors` counts output processing errors. Output counters
+are cumulative across stream restarts; a replacement slot starts new worker
+counters. Callback health uses fixed shared-memory fields instead of logging.
 
-If a running callback stops completing for two seconds (or eight block periods,
-whichever is longer), supervision stops the owner. Running-stream control
-acknowledgments have a two-second timeout; queued timed-out work is canceled,
-and an in-flight timeout terminates the owner rather than allowing late or
-overlapping plugin calls. Stopped-owner operations are bounded by their RPC
-timeout. Owner death/channel failure produces explicit stopped/error state while
+If a running output callback stops completing for two seconds (or eight block
+periods, whichever is longer), supervision stops the output owner. Mixer/master
+control acknowledgments retain a two-second timeout; canceled work cannot apply
+late, and in-flight native timeouts terminate that owner.
+
+A slot render stalled for two seconds is terminated locally. Slot initialization
+and insert lifecycle waits are bounded at 90 seconds; setters/native snapshot
+requests at five seconds. Lifecycle work is exempt from the render-stall timer.
+The output callback never waits for those deadlines. Slot failure leaves other
+slots playing; reload that slot to recover. No automatic restart hides lost
+plugin state. Children exit when their owning output process dies.
+
+Output-owner death/channel failure produces explicit stopped/error state while
 cached diagnostics and client disconnect remain usable. Restart the daemon
-after a terminal audio-owner failure; no automatic restart hides lost state.
+after a terminal output-owner failure.
 
 `shutdown` saves before teardown, stops MIDI/sequencing and joins pending
-note-off timers, disables Link, then shuts down the audio child and its workers.
-Plugin references/cyclic parameter caches are released on the child's main
-thread. Cleanup still runs after save failure. Unresponsive children are
+note-off timers, disables Link, then shuts down the output owner and slot children.
+Plugin references/cyclic parameter caches are released on their native owner's
+main thread. Cleanup still runs after save failure. Unresponsive children are
 terminated/killed with bounded waits, and signal handlers unwind pending RPCs
 instead of re-entering their locks.
 
