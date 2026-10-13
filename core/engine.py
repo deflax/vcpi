@@ -43,7 +43,7 @@ class AudioEngine:
 
         self._midi_queue: collections.deque = collections.deque()  # (slot_index, msg)
         self._param_queue: collections.deque = collections.deque()  # (slot_idx, name, val)
-        self._lock = threading.Lock()  # kept for potential external use
+        self._lock = threading.RLock()  # serialize stream start/stop
         self._stream = None
         self._mixed_buf: Optional[np.ndarray] = None  # pre-allocated mix buffer
         self._master_board = None  # cached Pedalboard for master effects
@@ -251,15 +251,25 @@ class AudioEngine:
     def start(self, output_device=None):
         if not HAS_SOUNDDEVICE:
             raise RuntimeError("sounddevice not installed")
-        self._stream = sd.OutputStream(
-            samplerate=self.sample_rate,
-            blocksize=self.buffer_size,
-            channels=self.output_channels,
-            dtype="float32",
-            callback=self._callback,
-            device=output_device,
-        )
-        self._stream.start()
+        with self._lock:
+            # PortAudio must stop using the old CFFI callback before its
+            # owning stream can be replaced and garbage-collected.
+            self.stop()
+            stream = sd.OutputStream(
+                samplerate=self.sample_rate,
+                blocksize=self.buffer_size,
+                channels=self.output_channels,
+                dtype="float32",
+                callback=self._callback,
+                device=output_device,
+            )
+            self._stream = stream
+            try:
+                stream.start()
+            except BaseException:
+                stream.close()
+                self._stream = None
+                raise
         logger.info(
             "[Audio] Started sr=%d buf=%d ch=%d",
             self.sample_rate,
@@ -268,11 +278,12 @@ class AudioEngine:
         )
 
     def stop(self):
-        if self._stream:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
-            logger.info("[Audio] Stopped")
+        with self._lock:
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream.close()
+                self._stream = None
+                logger.info("[Audio] Stopped")
 
     def shutdown(self):
         """Stop audio and release the render thread pool."""

@@ -173,6 +173,10 @@ All audio operations are subcommands of `audio`:
 | `audio stop` | Stop audio engine |
 | `audio devices` | List available output devices |
 
+Running `audio start` again stops and closes the previous output stream before
+opening the new one, including when changing devices. If opening or starting
+the replacement fails, audio remains stopped.
+
 ### MIDI Commands
 
 All MIDI operations are subcommands of `midi`:
