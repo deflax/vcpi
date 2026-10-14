@@ -1,7 +1,8 @@
 # vcpi
 
-vcpi is a Python VST3 host with Ableton Link tempo sync, designed for
-hardware-centric live setups (for example Arturia BeatStep Pro + Akai MIDI Mix).
+vcpi is a VST3 host with a native C++ audio engine, Python control plane, and
+Ableton Link tempo sync, designed for hardware-centric live setups (for example
+Arturia BeatStep Pro + Akai MIDI Mix).
 
 ## Quick Start (from repo root)
 
@@ -21,6 +22,7 @@ Manual setup:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python build_native.py
 
 # Terminal 1: start server
 python main.py serve
@@ -33,10 +35,12 @@ The daemon runs a control process, a spawned audio-output process, and a
 persistent process for each loaded slot; the CLI remains a separate client.
 Command parsing, formatting, session files, MIDI ports, the sequencer, and
 Ableton Link stay in the control process. Each slot process owns its
-VST3/Cardinal or WAV source and insert effects. The output process owns
-PortAudio, the mixer, and master effects. Slot audio crosses preallocated shared
-memory with one block of added buffering. Loading/replacing a slot does not
-stop unrelated slots; read-only commands use cached snapshots.
+VST3/Cardinal or WAV source and insert effects on a native render thread.
+The native PortAudio callback owns mixing and master effects; neither that
+callback nor slot DSP enters Python or acquires the GIL. Slot audio crosses
+preallocated, atomic-owned mapped memory with one block of added buffering.
+Loading/replacing a slot does not stop unrelated slots; read-only commands use
+cached snapshots.
 Saved-session parameters restore in bounded batches rather than repeatedly
 recapturing every plugin's metadata. Interrupted startup releases native owners
 without overwriting the saved session.
@@ -44,11 +48,34 @@ without overwriting the saved session.
 In server mode, vcpi does not start audio automatically. Start audio manually
 from `vcpi` with `audio start [device]`.
 
-If you are on Linux, you may also need:
+The server launcher builds the extension incrementally before starting audio
+owners. The first build downloads pinned JUCE, pybind11, and PortAudio sources;
+it requires network access, Git, CMake 3.22+, a C++17 compiler, and Python headers.
+
+On Debian/Ubuntu:
 
 ```bash
-sudo apt install libasound2-dev libjack-dev libportaudio2
+sudo apt install build-essential cmake pkg-config git python3-dev python3-venv \
+  libasound2-dev libfreetype6-dev libfontconfig1-dev libx11-dev libxext-dev
 ```
+
+On macOS, install Apple's command-line tools and CMake (for example with Homebrew):
+
+```bash
+xcode-select --install
+brew install cmake
+```
+
+Build on each target machine using its own virtual environment:
+
+```bash
+python build_native.py
+```
+
+Linux uses PortAudio's ALSA backend; macOS builds its CoreAudio backend. VST3
+bundles must match the target OS and CPU architecture. Do not copy `.venv`,
+`build/`, or compiled extensions between platforms. Set
+`CMAKE_BUILD_PARALLEL_LEVEL=1` on memory-constrained systems.
 
 ## Repository Layout
 
@@ -60,17 +87,17 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
     slot_process.py   # Persistent slot owners and shared-memory audio/MIDI
     plugin_host.py    # Native lifecycle helpers for output and slot children
     audio_state.py    # Plain plugin/parameter snapshots for control and display
-    audio_deps.py     # Native audio imports (native owners and sampler tools)
-    engine.py         # Shared-block mixer, controls, standalone native rendering
+    audio_deps.py     # Native extension availability for audio owners
+    engine.py         # Control-only facade for native audio
     cli.py            # Interactive command-line interface
     server.py         # Unix socket server for headless mode
     client.py         # CLI client (connects to server)
     link.py           # Ableton Link wrapper
     sequencer.py      # Internal step sequencer
     session.py        # Session save/restore
-  sampler/            # WAV sampler package
-    plugin.py         # WavSamplerPlugin (plugin-like API)
-    wav.py            # WAV file I/O and resampling
+  native/             # C++ VST3 hosting, sampler, transport, mixer and callback
+  build_native.py     # Per-platform/Python-ABI native build entrypoint
+  sampler/            # WAV sample assets
     samples/          # Built-in WAV sample packs (808, 909, piano, etc.)
   controllers/        # Hardware controller modules (generic MIDI input, MIDI Mix)
   graph/              # ASCII visualization renderers (signal flow, plugin info, knobs)
@@ -78,7 +105,7 @@ sudo apt install libasound2-dev libjack-dev libportaudio2
   patches/            # VCV/Cardinal .vcv patch files
   sessions/           # User-saved session files (save/load commands)
   main.py             # Top-level Python entry point
-  vcpid               # Server launcher (creates .venv on first run)
+  vcpid               # Server launcher (venv setup and incremental native build)
   vcpi                # Client launcher (creates .venv on first run)
   requirements.txt    # Python dependencies
   USAGE.md            # Full CLI and startup flag reference
@@ -358,8 +385,15 @@ sudo ./prepare-image.sh <raspios-image-url>
 
 ## License
 
-vcpi is licensed under the GNU General Public License v3.0 (GPL-3.0).
-See the [LICENSE](LICENSE) file for the full text.
+vcpi is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0),
+including the native JUCE 8 audio engine. See [LICENSE](LICENSE) for the full text.
 
-Several Python dependencies (`pedalboard`, `aalink`) and all bundled VST3
-plugins are also GPL-3.0 licensed.
+The native engine uses JUCE 8.0.6 under AGPL-3.0, pybind11 under BSD-3-Clause,
+and PortAudio under its permissive license. Third-party licenses and copyright
+notices remain unchanged; `aalink` and the bundled VST3 plugins retain their
+GPL-3.0 licenses. GPLv3 text is retained in [LICENSE.GPL-3.0](LICENSE.GPL-3.0).
+
+If you modify vcpi and let users interact with it remotely over a network,
+AGPLv3 requires offering those users the corresponding source for the version
+you run, including your modifications. An upstream source link alone does not
+cover unpublished local changes.

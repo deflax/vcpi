@@ -241,13 +241,12 @@ class HostShutdownTests(unittest.TestCase):
 
 
 class ShutdownTests(unittest.TestCase):
-    def test_engine_releases_plugin_cycles_before_returning(self):
+    def test_engine_releases_control_plugin_references_before_returning(self):
         released_on: list[int] = []
 
         class PluginProbe:
             def __init__(self):
-                # Model the plugin -> parameter cache -> plugin cycle.
-                self.parameter = SimpleNamespace(plugin=self)
+                self.parameter = SimpleNamespace(raw_value=0.0)
 
             def __del__(self):
                 released_on.append(threading.get_ident())
@@ -259,10 +258,8 @@ class ShutdownTests(unittest.TestCase):
         refs = [weakref.ref(plugin) for plugin in (instrument, effect, master)]
         engine.slots[0] = InstrumentSlot(
             "probe", "/tmp/probe.vst3", instrument, effects=[effect],
-            _effects_board=SimpleNamespace(plugin=effect),
         )
         engine.master_effects.append(master)
-        engine._master_board = SimpleNamespace(plugin=master)
         del instrument, effect, master
         try:
             engine.shutdown()

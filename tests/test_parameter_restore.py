@@ -3,8 +3,6 @@
 import unittest
 from types import SimpleNamespace
 
-import numpy as np
-from pedalboard import Gain, Pedalboard
 
 from core.audio_process import RemoteAudioEngine
 from core.engine import AudioEngine
@@ -15,14 +13,13 @@ from core.slot_process import (
 )
 
 
-class NativeInspectionForbidden(BaseException):
-    """Make accidental lifecycle inspection fail even through tolerant getters."""
-
-
 class ParameterReader:
     def __init__(self, plugin, name):
         self.plugin = plugin
         self.name = name
+        self.kind = "bool" if name == "bypass" else "enum" if name == "mode" else "float"
+        self.range = (False, True) if name == "bypass" else (0.0, 0.75)
+        self.valid_values = ("Normal", "Quiet Mode") if name == "mode" else ()
 
     @property
     def raw_value(self):
@@ -35,28 +32,17 @@ class ParameterReader:
 
 
 class ControlledInstrument:
-    __slots__ = ("_amplitude", "_bypass", "_mode", "inspection_forbidden")
+    __slots__ = ("_amplitude", "_bypass", "_mode")
 
     def __init__(self):
         self._amplitude = 0.25
         self._bypass = True
         self._mode = "Normal"
-        self.inspection_forbidden = False
 
     @property
     def parameters(self):
-        if self.inspection_forbidden:
-            raise NativeInspectionForbidden("setter inspected the parameter catalog")
-        return {
-            "amplitude": SimpleNamespace(type=float, range=(0.0, 0.75)),
-            "bypass": SimpleNamespace(type=bool, range=(False, True)),
-            "mode": SimpleNamespace(type=str, valid_values=("Normal", "Quiet Mode")),
-        }
-
-    def _get_parameter(self, name):
-        if self.inspection_forbidden:
-            raise NativeInspectionForbidden("setter rediscovered a native reader")
-        return ParameterReader(self, name)
+        return {name: ParameterReader(self, name)
+                for name in ("amplitude", "bypass", "mode")}
 
     @property
     def amplitude(self):
@@ -92,15 +78,10 @@ class ControlledInstrument:
             raise ValueError("disable bypass before selecting a mode")
         self._mode = value
 
-    def process(self, messages, *, num_channels, buffer_size, **kwargs):
-        amplitude = 0 if self.bypass else self.amplitude
-        if self.mode == "Quiet Mode":
-            amplitude *= 0.5
-        return np.full((num_channels, buffer_size), amplitude, dtype=np.float32)
 
 
 class LocalRemoteEngine(RemoteAudioEngine):
-    """Exercise production batching against the real stopped native engine."""
+    """Exercise production control batching using a protocol-only plugin mock."""
 
     def __init__(self, owner, worker):
         self.owner = owner
@@ -114,8 +95,7 @@ class LocalRemoteEngine(RemoteAudioEngine):
 
 class ParameterRestoreTests(unittest.TestCase):
     def setUp(self):
-        self.engine = AudioEngine(buffer_size=8)
-        self.engine._prepare_buffers(8)
+        self.engine = AudioEngine(buffer_size=8, slot_mode=True)
         self.addCleanup(self.engine.shutdown)
         self.instrument = ControlledInstrument()
         self.native_slot = InstrumentSlot("controls", "controls", self.instrument)
@@ -125,7 +105,6 @@ class ParameterRestoreTests(unittest.TestCase):
         self.worker.slot_index = 2
         self.worker.slot = None
         self.worker._accept({"ok": True, "state": _slot_state(self.owner, 2)})
-        self.instrument.inspection_forbidden = True
         self.remote = LocalRemoteEngine(self.owner, self.worker)
 
     def execute(self, operation, **arguments):
@@ -134,10 +113,6 @@ class ParameterRestoreTests(unittest.TestCase):
         self.worker._accept(reply)
         return reply
 
-    def assert_audio(self, amplitude):
-        rendered = self.engine._render_slot(2, self.native_slot, [], 8)
-        self.assertIsNotNone(rendered)
-        np.testing.assert_allclose(rendered, amplitude, atol=1e-6)
 
     def test_single_setter_returns_actual_value_and_live_reader_delta(self):
         self.instrument.bypass = False
@@ -148,7 +123,6 @@ class ParameterRestoreTests(unittest.TestCase):
         self.assertEqual(snapshot.values["amplitude"], 0.75)
         self.assertEqual(snapshot.parameters["amplitude"].raw_value, 0.75)
         self.assertEqual(snapshot.parameters["amplitude"].string_value, "applied:0.75")
-        self.assert_audio(0.75)
 
     def test_batch_preserves_types_order_partial_errors_and_mixer_cache(self):
         slot = self.worker.slot
@@ -175,36 +149,12 @@ class ParameterRestoreTests(unittest.TestCase):
         self.assertEqual((slot.gain, slot.generation, slot.midi_channels), (0.375, 42, {3}))
         self.assertTrue(slot.muted)
         self.assertTrue(slot.solo)
-        self.assert_audio(0.2)
 
-    def test_insert_delta_targets_only_selected_native_effect(self):
-        self.instrument.inspection_forbidden = False
-        first, second = Gain(gain_db=0), Gain(gain_db=0)
-        self.native_slot.effects = [first, second]
-        self.native_slot._effects_board = Pedalboard(self.native_slot.effects)
-        self.worker._accept({"ok": True, "state": _slot_state(self.owner, 2)})
-        self.instrument.inspection_forbidden = True
-        self.instrument.bypass = False
-        instrument_cache = self.worker.slot.plugin
-        effect_caches = tuple(self.worker.slot.effects)
-        reply = self.execute("set_parameters", fx_index=1, params={"gain_db": 6.0})
-        self.assertEqual(reply["result"], {"values": {"gain_db": 6.0}, "errors": {}})
-        self.assertIs(self.worker.slot.plugin, instrument_cache)
-        self.assertIs(self.worker.slot.effects[0], effect_caches[0])
-        self.assertIs(self.worker.slot.effects[1], effect_caches[1])
-        self.assertNotIn("gain_db", effect_caches[0].values)
-        self.assertEqual(effect_caches[1].values["gain_db"], 6.0)
-        self.assertEqual(first.gain_db, 0)
-        self.assertEqual(second.gain_db, 6)
-        self.assert_audio(0.25 * 10 ** (6 / 20))
 
     def test_insert_metadata_deltas_preserve_instrument_and_other_insert(self):
-        self.instrument.inspection_forbidden = False
         first, second = ControlledInstrument(), ControlledInstrument()
         self.native_slot.effects = [first, second]
         self.worker._accept({"ok": True, "state": _slot_state(self.owner, 2)})
-        for plugin in (self.instrument, first, second):
-            plugin.inspection_forbidden = True
         slot = self.worker.slot
         instrument_values = dict(slot.plugin.values)
         first_values = dict(slot.effects[0].values)
@@ -221,8 +171,6 @@ class ParameterRestoreTests(unittest.TestCase):
         self.assertEqual(second_cache.values["amplitude"], 0.4)
         self.assertEqual(second_cache.parameters["amplitude"].raw_value, 0.4)
         self.assertEqual(second_cache.parameters["amplitude"].string_value, "applied:0.4")
-        np.testing.assert_allclose(
-            second.process([], num_channels=2, buffer_size=8), 0.2)
 
     def test_oversized_batch_is_rejected_before_any_native_change(self):
         params = {"amplitude": 0.6}
@@ -243,7 +191,6 @@ class ParameterRestoreTests(unittest.TestCase):
                     })
                 self.assertEqual(self.instrument.amplitude, 0.5)
                 self.assertIs(self.instrument.bypass, False)
-                self.assert_audio(0.5)
                 self.engine._applied_updates.clear()
 
     def test_session_batch_applies_compatible_values_and_logs_individual_error(self):
@@ -258,7 +205,6 @@ class ParameterRestoreTests(unittest.TestCase):
         self.assertIs(self.worker.slot.plugin.values["bypass"], False)
         self.assertEqual(self.worker.slot.plugin.values["mode"], "Quiet Mode")
         self.assertEqual(self.worker.slot.plugin.values["amplitude"], 0.6)
-        self.assert_audio(0.3)
 
     def test_session_preserves_dependent_control_order_across_batch_boundary(self):
         params = {f"removed_{index}": index for index in range(PARAMETER_BATCH_LIMIT - 1)}
@@ -273,7 +219,6 @@ class ParameterRestoreTests(unittest.TestCase):
         self.assertIs(self.worker.slot.plugin.values["bypass"], False)
         self.assertEqual(self.worker.slot.plugin.values["mode"], "Quiet Mode")
         self.assertEqual(self.worker.slot.plugin.values["amplitude"], 0.6)
-        self.assert_audio(0.3)
 
 
 if __name__ == "__main__":

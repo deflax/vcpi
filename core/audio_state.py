@@ -1,4 +1,4 @@
-"""Plain audio-owner snapshots. Native inspection is restricted to stopped audio."""
+"""Plain metadata and parameter snapshots from native control owners."""
 
 from __future__ import annotations
 
@@ -50,10 +50,6 @@ def plain_value(value, value_type=None):
         return int(value)
     if isinstance(value, float):
         return float(value)
-    # bool cannot be subclassed; pedalboard exposes a boolean surrogate with
-    # its parameter's public type and __bool__, rather than a builtin bool.
-    if getattr(value, "type", None) is bool:
-        return bool(value)
     raise TypeError(f"unsupported parameter value type: {type(value).__name__}")
 
 
@@ -66,9 +62,12 @@ def _attr(obj, name, default=None):
 
 
 def capture_plugin(plugin, values, readers):
-    """Inspect one native plugin on its owner's main thread with audio stopped."""
+    """Inspect one plugin after its native owner's control barrier."""
     if isinstance(plugin, PluginSnapshot):
         return plugin
+    refresh_metadata = _attr(plugin, "_refresh_metadata")
+    if refresh_metadata is not None:
+        refresh_metadata()
     path = str(_attr(plugin, "_vcpi_path", _attr(plugin, "path_to_plugin_file", "")))
     snapshot = PluginSnapshot(
         token=id(plugin),
@@ -85,19 +84,15 @@ def capture_plugin(plugin, values, readers):
     raw_readers = {}
     for name, parameter in _attr(plugin, "parameters", {}).items():
         name = str(name)
-        value_type = _attr(parameter, "type", float)
-        raw = None
-        try:
-            raw = plugin._get_parameter(name)
-        except Exception:
-            pass
-        if raw is not None:
-            raw_readers[name] = raw
+        kind = _attr(parameter, "kind", "float")
+        value_type = bool if kind == "bool" else str if kind == "enum" else float
+        raw = parameter
+        raw_readers[name] = raw
         bounds = tuple(None if bound is None else plain_value(bound)
                        for bound in _attr(parameter, "range", ()))
         snapshot.parameters[name] = ParameterSnapshot(
             range=bounds,
-            kind="bool" if value_type is bool else "enum" if value_type is str else "float",
+            kind=kind,
             label=str(_attr(parameter, "label", "")),
             units=str(_attr(parameter, "units", "")),
             valid_values=tuple(str(value) for value in _attr(parameter, "valid_values", ())),
@@ -108,7 +103,9 @@ def capture_plugin(plugin, values, readers):
             is_discrete=bool(_attr(raw, "is_discrete", False)),
         )
         try:
-            snapshot.values[name] = plain_value(getattr(plugin, name), value_type)
+            value = (parameter.value if hasattr(parameter, "value")
+                     else getattr(plugin, name))
+            snapshot.values[name] = plain_value(value, value_type)
         except Exception:
             pass
     values[id(plugin)] = dict(snapshot.values)
@@ -167,10 +164,7 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
         "output_channels": engine.output_channels,
         "render_workers": engine.render_workers,
         "audio_devices": devices,
-        "native_dependencies": {
-            "pedalboard": audio_deps.HAS_PEDALBOARD,
-            "sounddevice": audio_deps.HAS_SOUNDDEVICE,
-        },
+        "native_dependencies": {"native": audio_deps.HAS_NATIVE},
     }
 
 

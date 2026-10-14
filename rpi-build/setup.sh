@@ -60,6 +60,15 @@ apt-get install htop \
 apt-get install \
   build-essential \
   cmake \
+  pkg-config \
+  python3-dev \
+  libx11-dev \
+  libxext-dev \
+  libxinerama-dev \
+  libxrandr-dev \
+  libxcursor-dev \
+  libfreetype6-dev \
+  libfontconfig1-dev \
   libjack-jackd2-dev \
   libsndfile1-dev \
   libavahi-client-dev \
@@ -97,6 +106,7 @@ git clone --branch "$VCPI_BRANCH" "$VCPI_REPO" "$PROJECT_DIR"
 python3 -m venv "$PROJECT_DIR/.venv"
 "$PROJECT_DIR/.venv/bin/pip" install --upgrade pip
 "$PROJECT_DIR/.venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt"
+"$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/build_native.py"
 
 chown -R pi:pi "$PROJECT_DIR"
 

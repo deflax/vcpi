@@ -11,10 +11,10 @@ The sentinel is a NUL byte on its own line (``\\x00\\n``).  The client reads
 lines until it sees the sentinel, then prints everything before it and
 prompts for the next command.
 
-Command execution happens on the **main thread** so that native libraries
-(e.g. pedalboard/JUCE VST3 hosting) which require main-thread access work
-correctly.  Per-client reader threads enqueue commands and block until the
-main thread has executed them and posted the result.
+Command execution happens on the **main thread** to preserve ordered control
+requests to the native audio ownership processes. Per-client reader threads
+enqueue commands and block until the main thread has executed them and posted
+the result.
 """
 
 from __future__ import annotations

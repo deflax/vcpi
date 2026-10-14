@@ -21,6 +21,10 @@ if ! cmp -s "$REQUIREMENTS" "$INSTALLED_REQUIREMENTS"; then
   cp "$REQUIREMENTS" "$INSTALLED_REQUIREMENTS"
 fi
 
+# CMake performs an incremental build for this Python ABI and host platform.
+# Build before spawning audio owners; never compile on the audio path.
+"$PYTHON_BIN" "$ROOT_DIR/build_native.py"
+
 export LOG_LEVEL="${LOG_LEVEL:-DEBUG}"
 
 exec "$PYTHON_BIN" "$ROOT_DIR/main.py" serve "$@"

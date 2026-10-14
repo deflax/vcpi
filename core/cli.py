@@ -1436,8 +1436,10 @@ class HostCLI(cmd.Cmd):
 
         self._print(VCPI_ASCII_LOGO)
         self._print()
-        self._print("vcpi - Python VST3 host with Ableton Link tempo sync")
-        self._print("License: GPL-3.0")
+        self._print("vcpi - Native VST3 host with Ableton Link tempo sync")
+        self._print("License: AGPL-3.0 (see LICENSE); no warranty.")
+        self._print("Redistribution is permitted under the license.")
+        self._print("Source: https://github.com/deflax/vcpi")
 
     def do_status(self, arg):
         """Overall status: status"""
@@ -1446,9 +1448,9 @@ class HostCLI(cmd.Cmd):
     def do_deps(self, arg):
         """Check dependencies."""
         native = self.host.engine.native_dependencies
-        for name, ok in [("pedalboard", native["pedalboard"]), ("aalink", HAS_LINK),
-                         ("python-rtmidi", HAS_RTMIDI), ("mido", HAS_MIDO),
-                         ("sounddevice", native["sounddevice"])]:
+        for name, ok in [("native audio (JUCE/PortAudio)", native["native"]),
+                         ("aalink", HAS_LINK), ("python-rtmidi", HAS_RTMIDI),
+                         ("mido", HAS_MIDO)]:
             self._print(f"  {name}: {'OK' if ok else 'MISSING'}")
 
     def do_quit(self, arg):

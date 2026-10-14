@@ -234,6 +234,9 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
             errors.append(f"slot {idx + 1} ({slot_kind}) '{plugin_path}': {e}")
 
     # -- Master effects ------------------------------------------------------
+    # A loaded session replaces the bus; retaining it doubles effects on reload.
+    for effect_index in reversed(range(len(host.engine.master_effects))):
+        host.remove_effect(None, effect_index)
     for fx_data in data.get("master_effects", []):
         try:
             host.load_effect(fx_data["path"], None, fx_data.get("name"))

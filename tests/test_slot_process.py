@@ -9,7 +9,6 @@ import threading
 import time
 import unittest
 import wave
-from collections import deque
 from pathlib import Path
 from multiprocessing.connection import wait as wait_connections
 from multiprocessing.reduction import DupFd
@@ -19,9 +18,10 @@ import mido
 import numpy as np
 
 from core.audio_state import PluginSnapshot
+from core.audio_deps import require_native
+from core.engine import AudioEngine
 from core.slot_process import (
-    MIDI_CAPACITY, RING_SIZE, SlotProcessError, SlotWorker,
-    _SharedBlocks, _next_job, _take_midi, _watch_parent,
+    MIDI_CAPACITY, SlotProcessError, SlotWorker, _watch_parent,
 )
 
 
@@ -53,141 +53,45 @@ def _watch_lifeline_for_cleanup_test(connection, lifeline, shared):
         connection.close()
 
 
-class SlotHandoffTests(unittest.TestCase):
+class NativeTransportTests(unittest.TestCase):
     def setUp(self):
-        # Exercise the real callback and shared storage independently of native
-        # scheduling. No production fallback or injected process mode is used.
-        worker = SlotWorker.__new__(SlotWorker)
-        worker.buffer_size = 8
-        worker._closed = False
-        worker.failure = None
-        worker.misses = 0
-        worker._sequence = 0
-        worker._submitted = 0
-        worker._published_midi = 0
-        worker._pending_midi = deque()
-        worker._progress_time = time.monotonic()
-        worker._callback_time = worker._progress_time
-        worker._shared = _SharedBlocks(mp.get_context("spawn"), 8)
-        worker._audio = np.frombuffer(worker._shared.audio, dtype=np.float32).reshape(
-            RING_SIZE, 8, 2)
-        worker._output = np.empty((8, 2), dtype=np.float32)
-        self.worker = worker
+        directory = tempfile.TemporaryDirectory(prefix="vcpi-transport-test-")
+        self.addCleanup(directory.cleanup)
+        self.path = str(Path(directory.name) / "audio.mmap")
+        backend = require_native()
+        self.transport = backend.Transport(self.path, 64, True)
+        self.peer = backend.Transport(self.path, 64, False)
+        self.addCleanup(self.close)
 
-    def publish(self, sequence, value):
-        cell = sequence % RING_SIZE
-        with self.worker._shared.output_locks[cell]:
-            self.worker._audio[cell].fill(value)
-            self.worker._shared.outputs[cell] = sequence
+    def close(self):
+        for transport in (self.peer, self.transport):
+            if hasattr(transport, "close"):
+                transport.close()
 
-    def test_exact_previous_block_and_reusable_parent_owned_copy(self):
-        worker = self.worker
-        self.assertIsNone(worker.render([], 8))
-        self.publish(1, 0.25)
-        first = worker.render([], 8)
-        self.assertIs(first, worker._output)
-        np.testing.assert_array_equal(first, np.full((8, 2), 0.25))
-        # A child's subsequent cell reuse cannot mutate the parent copy.
-        self.publish(1 + RING_SIZE, 0.75)
-        np.testing.assert_array_equal(first, np.full((8, 2), 0.25))
-        self.publish(2, 0.5)
-        self.assertIs(worker.render([], 8), first)
-        np.testing.assert_array_equal(first, np.full((8, 2), 0.5))
+    def test_midi_is_shared_and_full_fifo_reports_overflow(self):
+        self.transport.send_midi(bytes((0x90, 60, 127)))
+        self.assertEqual(self.peer.stats()["midi_pending"], 1)
+        for _ in range(MIDI_CAPACITY - 1):
+            self.transport.send_midi(bytes((0x80, 60, 0)))
+        with self.assertRaises((BufferError, RuntimeError)):
+            self.transport.send_midi(bytes((0x80, 60, 0)))
+        self.assertEqual(self.peer.stats()["midi_pending"], MIDI_CAPACITY)
 
-    def test_late_blocks_never_reappear_on_ring_wrap(self):
-        worker = self.worker
-        worker.render([], 8)
-        self.assertIsNone(worker.render([], 8))  # block 1 missed its deadline
-        self.publish(1, 0.75)
-        for _ in range(RING_SIZE + 1):
-            self.assertIsNone(worker.render([], 8))
-        self.assertEqual(worker.misses, RING_SIZE + 2)
+    def test_unconsumed_native_requests_are_silent_not_stale(self):
+        engine = AudioEngine(buffer_size=64)
+        self.addCleanup(engine.shutdown)
+        engine._native.attach(0, self.transport, 1.0, False, False)
+        for _ in range(8):
+            np.testing.assert_array_equal(engine.render_block(), 0)
+        stats = self.transport.stats()
+        self.assertEqual(stats["sequence"], 8)
+        self.assertGreaterEqual(stats["misses"], 7)
 
-    def test_busy_output_and_request_cells_are_nonblocking(self):
-        worker = self.worker
-        worker.render([], 8)
-        output_lock = worker._shared.output_locks[1]
-        request_locks = worker._shared.request_locks
-        output_lock.acquire()
-        for lock in request_locks:
-            lock.acquire()
-        try:
-            self.assertIsNone(worker.render([], 8))
-            self.assertEqual(worker._submitted, 1)
-            self.assertEqual(worker.misses, 1)
-        finally:
-            output_lock.release()
-            for lock in request_locks:
-                lock.release()
+    def test_oversized_midi_is_rejected_before_publication(self):
+        with self.assertRaises((ValueError, BufferError, RuntimeError)):
+            self.transport.send_midi(bytes((0xf0,)) + bytes(1023) + bytes((0xf7,)))
+        self.assertEqual(self.peer.stats()["midi_pending"], 0)
 
-    def test_busy_request_cell_does_not_lose_a_timely_audio_job(self):
-        worker = self.worker
-        worker.render([], 8)
-        lock = worker._shared.request_locks[2]
-        lock.acquire()
-        try:
-            worker.render([mido.Message("note_off", note=60)], 8)
-        finally:
-            lock.release()
-        sequence, endpoint = _next_job(worker._shared, 0)
-        self.assertEqual(sequence, 2)
-        messages = _take_midi(worker._shared, endpoint, mido)
-        self.assertEqual([(message.type, message.note) for message in messages],
-                         [("note_off", 60)])
-
-    def test_skipped_jobs_keep_note_on_note_off_order(self):
-        worker = self.worker
-        worker.render([mido.Message("note_on", note=60, velocity=90)], 8)
-        worker.render([mido.Message("note_off", note=60)], 8)
-        worker.render([mido.Message("note_on", note=62, velocity=80)], 8)
-        # The native owner takes only the newest audio job, but all MIDI.
-        sequence, endpoint = _next_job(worker._shared, 0)
-        self.assertEqual(sequence, 3)
-        messages = _take_midi(worker._shared, endpoint, mido)
-        self.assertEqual([(message.type, message.note) for message in messages],
-                         [("note_on", 60), ("note_off", 60), ("note_on", 62)])
-        self.assertIsNone(_next_job(worker._shared, sequence))
-        self.assertEqual(_take_midi(worker._shared, 1, mido), [])
-
-    def test_busy_midi_lock_defers_without_losing_note_off(self):
-        worker = self.worker
-        lock = worker._shared.midi_lock
-        lock.acquire()
-        try:
-            worker.render([mido.Message("note_off", note=60)], 8)
-            self.assertEqual(worker._published_midi, 0)
-            self.assertEqual(len(worker._pending_midi), 1)
-        finally:
-            lock.release()
-        worker.render([], 8)
-        self.assertEqual(worker._published_midi, 1)
-        messages = _take_midi(worker._shared, 1, mido)
-        self.assertEqual(messages[0].type, "note_off")
-
-    def test_midi_wrap_preserves_fifo_order(self):
-        worker = self.worker
-        with worker._shared.midi_lock:
-            worker._shared.midi_cursors[0] = MIDI_CAPACITY - 1
-            worker._shared.midi_cursors[1] = MIDI_CAPACITY - 1
-        worker.render([mido.Message("note_on", note=60),
-                       mido.Message("note_off", note=60)], 8)
-        messages = _take_midi(worker._shared, MIDI_CAPACITY + 1, mido)
-        self.assertEqual([message.type for message in messages], ["note_on", "note_off"])
-
-    def test_shared_midi_overflow_is_explicit_local_failure(self):
-        worker = self.worker
-        worker.render([mido.Message("note_on")] * MIDI_CAPACITY, 8)
-        self.assertIsNone(worker.render([mido.Message("note_off")], 8))
-        self.assertIn("FIFO is full", worker.failure)
-        self.assertIsNone(worker.render([], 8))
-
-    def test_oversized_sysex_and_changed_block_size_fail_locally(self):
-        worker = self.worker
-        self.assertIsNone(worker.render([mido.Message("sysex", data=[1] * 1024)], 8))
-        self.assertIn("bounded storage", worker.failure)
-        worker.failure = None
-        self.assertIsNone(worker.render([], 16))
-        self.assertIn("block size changed", worker.failure)
 
 
 class SpawnedSlotTests(unittest.TestCase):
@@ -205,15 +109,29 @@ class SpawnedSlotTests(unittest.TestCase):
     def worker(self, **kwargs):
         worker = SlotWorker(44100, 64, 2, "load_wav",
                             {"wav_path": str(self.sample), "name": "remote"}, **kwargs)
-        self.addCleanup(worker.shutdown)
+        engine = AudioEngine(buffer_size=64)
+        engine.publish_slot(2, worker.slot)
+        engine.set_slot_state(2, gain=1.0)
+        worker.test_engine = engine
+
+        def close():
+            engine.clear_slot(2)
+            worker.shutdown()
+            engine.shutdown()
+
+        self.addCleanup(close)
         return worker
+
+    def render(self, worker, messages=()):
+        for message in messages:
+            worker.test_engine.enqueue_midi(2, message)
+        return worker.test_engine.render_block()
 
     def await_render(self, worker, sequence):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            with worker._shared.progress_lock:
-                if worker._shared.progress[0] >= sequence:
-                    return
+            if worker.transport.stats()["submitted"] >= sequence:
+                return
             if worker.poll_failure():
                 self.fail(worker.failure)
             time.sleep(0.001)
@@ -225,9 +143,10 @@ class SpawnedSlotTests(unittest.TestCase):
         self.assertFalse(worker._process.daemon)
         self.assertIsInstance(worker.slot.plugin, PluginSnapshot)
         self.assertIs(worker.slot.render_owner, worker)
-        self.assertIsNone(worker.render([mido.Message("note_on", note=60, velocity=127)], 64))
+        np.testing.assert_array_equal(
+            self.render(worker, [mido.Message("note_on", note=60, velocity=127)]), 0)
         self.await_render(worker, 1)
-        audio = worker.render([], 64)
+        audio = self.render(worker)
         self.assertIsNotNone(audio)
         self.assertEqual(audio.shape, (64, 2))
         np.testing.assert_array_equal(audio, np.full((64, 2), 0.125, dtype=np.float32))
@@ -236,6 +155,7 @@ class SpawnedSlotTests(unittest.TestCase):
         reply = worker.request("sync_state")
         self.assertEqual(worker.pid, pid)
         self.assertIsInstance(reply["state"]["plugin"], PluginSnapshot)
+        worker.test_engine.clear_slot(2)
         worker.shutdown()
         worker.shutdown()
         self.assertFalse(worker._process.is_alive())
@@ -247,17 +167,19 @@ class SpawnedSlotTests(unittest.TestCase):
         os.kill(worker.pid, signal.SIGINT)
         reply = worker.request("sync_state")
         self.assertEqual(reply["state"]["name"], "remote")
-        worker.render([mido.Message("note_on", note=60, velocity=127)], 64)
+        self.render(worker, [mido.Message("note_on", note=60, velocity=127)])
         self.await_render(worker, 1)
         np.testing.assert_array_equal(
-            worker.render([], 64), np.full((64, 2), 0.125, dtype=np.float32))
+            self.render(worker), np.full((64, 2), 0.125, dtype=np.float32))
+        worker.test_engine.clear_slot(2)
         worker.shutdown()
         self.assertEqual(worker._process.exitcode, 0)
         self.assertFalse(worker._io_thread.is_alive())
 
     def test_lifeline_eof_before_parent_exit_allows_cleanup_to_complete(self):
         context = mp.get_context("spawn")
-        shared = _SharedBlocks(context, 8)
+        shared = str(self.root / "lifeline.mmap")
+        Path(shared).touch()
         connection, child_connection = context.Pipe()
         lifeline, writer = context.Pipe(duplex=False)
         child = context.Process(target=_watch_lifeline_for_cleanup_test,
@@ -297,14 +219,14 @@ class SpawnedSlotTests(unittest.TestCase):
         resume = threading.Timer(0.05, os.kill, args=(worker.pid, signal.SIGCONT))
         resume.start()
         self.addCleanup(resume.join)
-        worker.render([mido.Message("note_on", note=60, velocity=127)], 64)
+        self.render(worker, [mido.Message("note_on", note=60, velocity=127)])
         worker.request("sync_state")
-        first = worker.render([], 64)
+        first = self.render(worker)
         expected = ramp[:64].astype(np.float32) / 32768.0
         np.testing.assert_array_equal(first[:, 0], expected)
         self.await_render(worker, 2)
         worker.request("sync_state")
-        second = worker.render([], 64)
+        second = self.render(worker)
         expected = ramp[64:128].astype(np.float32) / 32768.0
         np.testing.assert_array_equal(second[:, 0], expected)
 
@@ -332,7 +254,6 @@ class SpawnedSlotTests(unittest.TestCase):
         worker._process.terminate()
         worker._process.join(2)
         self.assertIsNotNone(worker.poll_failure())
-        self.assertIsNone(worker.render([mido.Message("note_off")], 64))
         with self.assertRaises(SlotProcessError):
             worker.request("sync_state")
 
@@ -386,12 +307,11 @@ class SpawnedSlotTests(unittest.TestCase):
     def test_rpc_timeout_remains_slot_local_and_cleanup_is_bounded(self):
         worker = self.worker()
         os.kill(worker.pid, signal.SIGSTOP)
-        with patch("core.slot_process.REQUEST_TIMEOUT", 0.02):
+        with patch("core.slot_process.PARAMETER_TIMEOUT", 0.02):
             with self.assertRaises(SlotProcessError):
                 worker.request("sync_state")
         self.assertIsNotNone(worker.failure)
         self.assertFalse(worker._process.is_alive())
-        self.assertIsNone(worker.render([], 64))
 
 
 if __name__ == "__main__":

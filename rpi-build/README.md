@@ -65,6 +65,7 @@ sudo USERCONF_PATH=/secure/userconf.txt WPA_CONF_PATH=/secure/wpa_supplicant.con
 - `NetworkManager-wait-online.service` is enabled so first boot waits for connectivity
 - The vcpi repo is cloned from GitHub into `/home/pi/vcpi`
 - Python venv is created at `/home/pi/vcpi/.venv`
+- The native C++ audio extension is built with the Pi's Python interpreter
 - Cardinal VST3 is installed at `/usr/local/lib/vst3/Cardinal.vst3`
 - `payload.service` sets `LOG_LEVEL=DEBUG`
 - journald forwards logs to `/dev/tty1` at `debug` level
@@ -82,6 +83,7 @@ SSH into the Pi and pull the latest changes:
 cd /home/pi/vcpi
 git pull
 .venv/bin/pip install -r requirements.txt   # if dependencies changed
+.venv/bin/python build_native.py            # rebuild native code for this Pi
 sudo systemctl restart payload
 ```
 

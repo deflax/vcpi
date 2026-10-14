@@ -29,7 +29,6 @@ class InstrumentSlot:
     worker_failure: str | None = None
     worker_misses: int = 0
     buffering_samples: int = 0
-    _effects_board: object = field(default=None, repr=False, compare=False)
 
     @property
     def display_label(self) -> str:

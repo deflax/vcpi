@@ -192,11 +192,12 @@ All audio operations are subcommands of `audio`:
 
 The daemon spawns an audio-output process and a persistent native process per
 loaded slot. Command parsing/display work, MIDI ports, Link, sequencing, and
-session-file I/O remain in the control process. Each slot owns its instrument
-and insert effects; the output process owns PortAudio, mixing, and master FX.
-The callback never waits for slot rendering, command responses, IPC writes,
-display formatting, or filesystem operations. Python API entry points that
-construct `VcpiCore` must use the usual `if __name__ == "__main__":` spawn guard.
+session-file I/O remain in Python. Each slot's C++ render thread owns its
+instrument and insert effects; the C++ PortAudio callback owns mixing and
+master FX. Neither rendering path calls Python or acquires the GIL. The callback
+never waits for slot rendering, command responses, display work, or filesystem
+operations. Python API entry points constructing `VcpiCore` must use the usual
+`if __name__ == "__main__":` spawn guard.
 
 `audio devices` displays the cached device catalog, refreshed at audio-owner
 startup and while stopped during `audio start`/`audio stop`. After replugging
@@ -214,33 +215,36 @@ plugin latency. The three handoff cells do not add three blocks of latency.
 An unavailable/late block silences only that slot for that block and increments
 its missing-block counter; old blocks are never replayed. Muted and solo-excluded
 slots still render so MIDI note-offs and plugin tails advance. Gain/mix, sampler,
-and master-input buffers are reused. Processes increase memory/scheduling cost;
-Python and third-party plugins still are not a hard-real-time environment.
+and event storage are preallocated. Processes increase memory/scheduling cost;
+native rendering removes interpreter contention but does not guarantee hard
+real-time behavior from the OS, device backend, or third-party plugins.
 
-Each callback consumes at most 256 queued MIDI messages and 64 mixer/master
-controls, retaining later entries for subsequent blocks. Input queues are
-bounded at 4096 entries; ordinary MIDI order and note-offs are preserved.
-Heavy traffic can increase control latency. Global ingress saturation explicitly
-stops the output owner, rather than silently losing MIDI. Each slot also has a
-4096-message shared MIDI FIFO plus a bounded deferred-publication queue;
-overflow or a MIDI message exceeding 1024 encoded bytes explicitly fails only
-that slot. MIDI remains FIFO even when late audio jobs are skipped. Messages
-and scheduled note-offs for a retired generation cannot affect its replacement.
+Native output controls use a bounded 128-entry FIFO. Each slot has a fixed
+4096-message MIDI FIFO with a maximum encoded message size of 1024 bytes.
+MIDI order and note-offs are preserved even when late audio jobs are skipped.
+Heavy traffic can increase rendering/control latency. Global ingress saturation
+explicitly stops the output owner; slot MIDI overflow or oversized messages
+explicitly fail only that slot. Events for a retired generation cannot affect
+its replacement.
 
 Instrument/WAV/Cardinal loads initialize and warm a new slot process while
 existing slots continue playing. A ready replacement switches at a callback
 boundary; only then is the old process retired. Failed loading leaves the old
-source playing. Removal stops only that slot. Insert-chain edits execute
-sequentially on that slot's native main thread and may interrupt that slot,
-not the output stream or other slots. Failed chain construction/warmup retains
-the previous chain. Master-chain edits and native master metadata capture still
-pause the output stream. Restoration deliberately stays paused until complete.
-If reopening fails, audio remains stopped; failed native stop/close is terminal
-because quiescence cannot be assumed.
+source playing. Removal stops only that slot. Insert edits and parameter
+inspection/setters use native plugin ownership and may briefly interrupt that
+slot, not the output stream or other slots. Failed chain construction/warmup
+retains the previous chain. Master-chain edits and native master metadata capture
+still pause the output stream. Restoration deliberately stays paused until
+complete. If reopening fails, audio remains stopped; failed native teardown is
+terminal when callback quiescence cannot be established.
 
 For persistent underruns, restart the daemon with `./vcpid --buf 1024` (or
 `2048`), reconnect, and issue `audio start`. Larger buffers provide more
 scheduling headroom at the cost of note-to-sound latency.
+
+There is no built-in real-time-priority flag. Native rendering is not itself
+OS real-time scheduling; elevated scheduling remains a separate platform-specific
+configuration. Build the extension on each platform as described in `README.md`.
 
 ### MIDI Commands
 
@@ -357,6 +361,8 @@ All Ableton Link operations are subcommands of `ableton`:
 
 Sessions are saved to the `sessions/` directory in the repo root. Tab
 completion lists available session names.
+Loading a session replaces the current master-effects chain rather than
+appending another copy of the saved effects.
 
 `save` always requires a name. The automatic session at
 `~/.config/vcpi/session.json` is only written on shutdown (not by the
@@ -396,8 +402,11 @@ before unlinking orphaned shared semaphore resources.
 
 ### Visualization Commands
 
-The `flow`, `info`, and `knobs` commands render ASCII diagrams using metadata
-exposed by the pedalboard VST3 host library.
+The `flow`, `info`, and `knobs` commands render ASCII diagrams using cached
+metadata from the native JUCE VST3 host. Numeric parameters retain display
+values and unit-qualified names (kHz displays use Hz values). Text choices and
+boolean switches are inferred at load even when a plugin omits VST3 step counts.
+`raw_value` remains normalized.
 
 **`flow`** shows the full signal chain across all 8 slots:
 
@@ -497,12 +506,13 @@ output callbacks exceeding that deadline, not every OS scheduling delay.
 `Underruns` counts backend-reported output underflows; zero does not imply zero
 slot dropouts. `Render errors` counts output processing errors. Output counters
 are cumulative across stream restarts; a replacement slot starts new worker
-counters. Callback health uses fixed shared-memory fields instead of logging.
+counters. The control tick copies native callback counters into shared health
+fields; the audio callback does not log or call Python.
 
 If a running output callback stops completing for two seconds (or eight block
-periods, whichever is longer), supervision stops the output owner. Mixer/master
-control acknowledgments retain a two-second timeout; canceled work cannot apply
-late, and in-flight native timeouts terminate that owner.
+periods, whichever is longer), supervision stops the output owner. Native output
+control acknowledgments have a five-second deadline. A timeout permanently
+fails/silences the owner; queued work cannot later produce an audible success.
 
 A slot render stalled for two seconds is terminated locally. Slot initialization
 and insert lifecycle waits are bounded at 90 seconds; setters/native snapshot

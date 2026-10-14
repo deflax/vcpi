@@ -59,14 +59,15 @@ def _encode(message, limit):
 def _discover_devices():
     from core import audio_deps
 
-    if not audio_deps.HAS_SOUNDDEVICE:
+    if not audio_deps.HAS_NATIVE:
         return []
     devices = []
-    for index, info in enumerate(audio_deps.sd.query_devices()):
+    apis = audio_deps.native.hostapis()
+    for index, info in enumerate(audio_deps.native.devices()):
         entry = dict(info)
-        entry["index"] = index
+        entry.setdefault("index", index)
         try:
-            entry["hostapi_name"] = str(audio_deps.sd.query_hostapis(entry["hostapi"])["name"])
+            entry["hostapi_name"] = str(apis[entry["hostapi"]]["name"])
         except Exception:
             entry["hostapi_name"] = "unknown"
         devices.append(entry)
@@ -134,8 +135,8 @@ class _OwnerRuntime:
         deadline = time.monotonic() + 5
         while self.received_input < sequence:
             self.check_cancelled()
-            if not self.engine.running:
-                self.engine.apply_pending_controls()
+            self.engine.apply_pending_controls()
+            self.engine.refresh_health()
             self.send_updates()
             self.apply_slot_parameters()
             if self.pending() >= INPUT_CAPACITY:
@@ -196,8 +197,8 @@ class _OwnerRuntime:
     def service_wait(self):
         """Keep MIDI and mixer controls moving while another slot initializes."""
         self.check_cancelled()
-        if not self.engine.running:
-            self.engine.apply_pending_controls()
+        self.engine.apply_pending_controls()
+        self.engine.refresh_health()
         self.send_updates()
         for _ in range(64):
             if self.pending() >= INPUT_CAPACITY or not self.inputs.poll():
@@ -236,6 +237,7 @@ class _OwnerRuntime:
 
     def publish_slot_health(self):
         now = time.monotonic()
+        self.engine.refresh_health()
         if now - self._last_slot_health < 0.1:
             return
         self._last_slot_health = now
@@ -255,6 +257,7 @@ class _OwnerRuntime:
                 self.engine._applied_updates.append(("slot", index, changed))
 
     def snapshot(self, inspect_master=False):
+        self.engine.refresh_health()
         state = capture_state(
             self.owner, self.generations, self.epoch, self.devices,
             cached_master_effects=None if inspect_master else self.master_snapshots)
@@ -270,9 +273,10 @@ class _OwnerRuntime:
                         "update_serial": self.update_serial}, STATE_LIMIT)
 
     def shutdown_slots(self):
-        for slot in self.engine.slots:
+        for index, slot in enumerate(self.engine.slots):
             if slot is not None and slot.render_owner is not None:
                 try:
+                    self.engine.clear_slot(index)
                     slot.render_owner.shutdown()
                 except Exception:
                     logger.exception("slot worker shutdown failed")
@@ -436,8 +440,8 @@ class _OwnerRuntime:
         self.control.send_bytes(_encode({"ok": True, "state": state}, STATE_LIMIT))
         while True:
             self.check_cancelled()
-            if not self.engine.running:
-                self.engine.apply_pending_controls()
+            self.engine.apply_pending_controls()
+            self.engine.refresh_health()
             self.send_updates()
             self.apply_slot_parameters()
             self.publish_slot_health()
@@ -484,7 +488,7 @@ def _audio_owner(sample_rate, buffer_size, health, control, inputs, updates, can
         owner = PluginHost(sample_rate=sample_rate, buffer_size=buffer_size)
         owner.engine.health_buffer = health
         owner.engine.isolated_slots = True
-        owner.engine._publish_health()
+        owner.engine.refresh_health()
         runtime = _OwnerRuntime(owner, control, inputs, updates, cancelled)
         runtime.run()
     except _OwnerCancelled:

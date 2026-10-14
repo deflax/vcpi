@@ -1,20 +1,18 @@
-"""Native dependencies imported only by the audio owner and sampler tools."""
+"""Native audio backend, imported only in audio ownership processes."""
 
 from __future__ import annotations
 
 import numpy as np
 
 try:
-    from pedalboard import Pedalboard, load_plugin
-    HAS_PEDALBOARD = True
+    from core import _vcpi_native as native
 except ImportError:
-    Pedalboard = None
-    load_plugin = None
-    HAS_PEDALBOARD = False
+    native = None
 
-try:
-    import sounddevice as sd
-    HAS_SOUNDDEVICE = True
-except (ImportError, OSError):
-    sd = None
-    HAS_SOUNDDEVICE = False
+HAS_NATIVE = native is not None
+
+
+def require_native():
+    if native is None:
+        raise RuntimeError("native audio backend is not built; run python build_native.py")
+    return native

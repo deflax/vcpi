@@ -149,7 +149,7 @@ def _cmd_cli(args):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="vcpi - Python VST3 Host + Ableton Link")
+        description="vcpi - Native VST3 Host + Ableton Link")
     sub = ap.add_subparsers(dest="command")
 
     # -- serve ---------------------------------------------------------------

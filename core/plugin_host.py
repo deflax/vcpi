@@ -12,10 +12,59 @@ from typing import Optional
 from core import audio_deps as deps
 from core.engine import AudioEngine
 from core.models import InstrumentSlot, NUM_SLOTS
-from sampler import WavSamplerPlugin
 
 
 logger = logging.getLogger(__name__)
+
+class NativePlugin:
+    """Metadata/parameter adapter; no Python audio-processing entrypoint."""
+
+    def __init__(self, path, sample_rate, frames, kind):
+        from types import SimpleNamespace
+
+        path = Path(path).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"plugin or WAV not found: {path}")
+        object.__setattr__(self, "native", deps.require_native().Plugin(
+            str(path), sample_rate, frames, kind))
+        object.__setattr__(self, "_descriptor_type", SimpleNamespace)
+        object.__setattr__(self, "_parameter_names", frozenset(self.native.parameters()))
+        self._refresh_metadata()
+        object.__setattr__(self, "_vcpi_path", str(path))
+
+    def _refresh_metadata(self):
+        for key, value in self.native.metadata().items():
+            object.__setattr__(self, key, value)
+
+    @property
+    def parameters(self):
+        return {name: self._descriptor_type(**descriptor)
+                for name, descriptor in self.native.parameters().items()}
+
+    def parameter_descriptor(self, name):
+        return self._descriptor_type(**self.native.parameter(name))
+
+    def __getattr__(self, name):
+        if name in self._parameter_names:
+            return self.native.get_parameter(name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        if name in self._parameter_names:
+            self.native.set_parameter(name, value)
+        else:
+            object.__setattr__(self, name, value)
+
+    def load_preset(self, path):
+        result = self.native.load_preset(path)
+        object.__setattr__(self, "_parameter_names", frozenset(self.native.parameters()))
+        return result
+
+    def load_state(self, state):
+        result = self.native.load_state(state)
+        object.__setattr__(self, "_parameter_names", frozenset(self.native.parameters()))
+        return result
+
 
 CARDINAL_VST3_ENV = "CARDINAL_VST3_PATH"
 CARDINAL_VST3_CANDIDATES = (
@@ -29,13 +78,14 @@ DEFAULT_PATCHES_DIR = "patches"
 
 
 class PluginHost:
-    def __init__(self, sample_rate: int = 44100, buffer_size: int = 512):
+    def __init__(self, sample_rate: int = 44100, buffer_size: int = 512,
+                 *, slot_mode=False):
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
         self.patches_dir = Path(
             os.environ.get(PATCHES_DIR_ENV, DEFAULT_PATCHES_DIR)
         ).expanduser()
-        self.engine = AudioEngine(sample_rate, buffer_size)
+        self.engine = AudioEngine(sample_rate, buffer_size, slot_mode=slot_mode)
         self._shutdown = False
 
     @property
@@ -201,66 +251,11 @@ class PluginHost:
         )
         return slot, patch_result, used_cardinal, patch_path
 
-    # -- plugin warmup --------------------------------------------------------
-
-    def _warmup_plugin(self, plugin, num_blocks: int = 2) -> None:
-        """Render a few silent blocks at the runtime sample rate / buffer
-        size so any remaining lazy init (FFT plans, JIT) is paid here
-        rather than inside the real-time audio callback.
-        """
-        if deps.np is None:
-            return
-        sr = self.sample_rate
-        buf = self.engine.buffer_size
-        channels = self.engine.output_channels
-        duration = buf / sr
-        silence_midi: list[object] = []
-        for _ in range(num_blocks):
-            try:
-                plugin.process(
-                    silence_midi,
-                    duration=duration,
-                    sample_rate=sr,
-                    num_channels=channels,
-                    buffer_size=buf,
-                    reset=False,
-                )
-            except Exception:
-                break
-
-    def _warmup_effect(self, plugin, num_blocks: int = 2) -> None:
-        """Prime only a new effect with silent audio; propagate init failures.
-
-        Call while engine.edit_effects() has stopped audio so existing effects
-        retain their processing state and the new plugin uses runtime settings.
-        """
-        silence = deps.np.zeros(
-            (self.engine.output_channels, self.engine.buffer_size),
-            dtype=deps.np.float32,
-        )
-        for _ in range(num_blocks):
-            silence.fill(0)
-            plugin.process(
-                silence,
-                sample_rate=self.engine.sample_rate,
-                buffer_size=self.engine.buffer_size,
-                reset=False,
-            )
-
     # -- instrument loading ---------------------------------------------------
 
     def load_instrument(self, slot_index: int, path: str,
                         name: Optional[str] = None) -> InstrumentSlot:
-        """Load a VST3 instrument into a slot.
-
-        The plugin is warmed up (a few silent render passes) *before*
-        being assigned to the slot so the audio callback never sees the
-        expensive first-render cost that causes underflow warnings.
-        """
-        if not deps.HAS_PEDALBOARD:
-            raise RuntimeError("pedalboard not installed")
-        if deps.load_plugin is None:
-            raise RuntimeError("pedalboard loader unavailable")
+        """Load and warm a native VST3 instrument on its control owner."""
         if not 0 <= slot_index < NUM_SLOTS:
             raise ValueError(f"slot must be 1-{NUM_SLOTS}")
 
@@ -269,17 +264,8 @@ class PluginHost:
         logger.info("[INST] loading slot %d '%s' from %s …",
                     slot_index + 1, slot_name, path)
 
-        # Skip pedalboard's internal warmup (attemptToWarmUp) which can
-        # block for up to 10 s sending MIDI and pumping the JUCE message
-        # loop.  Our own lightweight _warmup_plugin() below primes the
-        # plugin at the actual runtime sample-rate / buffer-size instead.
-        plugin = deps.load_plugin(path, initialization_timeout=0)
-        if not plugin.is_instrument:
-            raise ValueError(f"{path} is not an instrument")
+        plugin = NativePlugin(path, self.sample_rate, self.buffer_size, "instrument")
         self._set_plugin_info_type(plugin, "Instrument")
-
-        # Light warmup at the correct sr / buffer size.
-        self._warmup_plugin(plugin)
 
         slot = InstrumentSlot(
             name=slot_name,
@@ -313,17 +299,7 @@ class PluginHost:
                 path = cwd_candidate
 
         resolved = str(path)
-        plugin = WavSamplerPlugin.from_file(
-            resolved,
-            target_sample_rate=self.sample_rate,
-            output_channels=self.engine.output_channels,
-        )
-        # Allocate reusable sampler scratch before publishing to the callback.
-        plugin.process(
-            deps.np.zeros((self.engine.output_channels, self.engine.buffer_size),
-                          dtype=deps.np.float32),
-            self.engine.sample_rate,
-        )
+        plugin = NativePlugin(resolved, self.sample_rate, self.buffer_size, "wav")
         self._set_plugin_info_type(plugin, "Sample")
 
         slot = InstrumentSlot(
@@ -351,22 +327,14 @@ class PluginHost:
 
     def load_effect(self, path: str, slot_index: Optional[int] = None,
                     name: Optional[str] = None):
-        """Warm and publish a replacement insert/master chain with audio stopped."""
-        if not deps.HAS_PEDALBOARD:
-            raise RuntimeError("pedalboard not installed")
-        if deps.load_plugin is None:
-            raise RuntimeError("pedalboard loader unavailable")
-        if deps.Pedalboard is None:
-            raise RuntimeError("pedalboard chain unavailable")
+        """Publish a native insert/master chain; warmup happens in Plugin."""
         if slot_index is not None:
             if not 0 <= slot_index < NUM_SLOTS:
                 raise ValueError(f"slot must be 1-{NUM_SLOTS}")
             if self.engine.slots[slot_index] is None:
                 raise ValueError(f"Slot {slot_index + 1} is empty")
 
-        plugin = deps.load_plugin(path, initialization_timeout=0)
-        if self._plugin_is_instrument(plugin):
-            raise ValueError(f"{path} is an instrument, not an effect")
+        plugin = NativePlugin(path, self.sample_rate, self.buffer_size, "effect")
         plugin._vcpi_path = path  # stash load path for session save
         self._set_plugin_info_type(plugin, "Effect")
         label = name or Path(path).stem
@@ -380,39 +348,12 @@ class PluginHost:
                 *(slot.effects if slot is not None else self.engine.master_effects),
                 plugin,
             ]
-            board = deps.Pedalboard(effects)
-            self._warmup_effect(plugin)
-            # Publish only after construction and warmup both succeed.
-            if slot is not None:
-                slot.effects = effects
-                slot._effects_board = board
-            else:
-                self.engine.master_effects = effects
-                self.engine._master_board = board
+            self.engine.set_effects(effects, slot_index)
         if slot is not None:
             logger.info("[FX] '%s' -> slot %d (%s)", label, slot_index + 1, slot.name)
         else:
             logger.info("[FX] '%s' -> master bus", label)
 
-    @staticmethod
-    def _plugin_is_instrument(plugin: object) -> bool:
-        try:
-            is_instrument = getattr(plugin, "is_instrument", None)
-        except Exception:
-            is_instrument = None
-        if is_instrument is True:
-            return True
-
-        try:
-            category = getattr(plugin, "category", None)
-        except Exception:
-            category = None
-        if isinstance(category, str):
-            tokens = {token.strip().lower() for token in re.split(r"[|,;/]", category)}
-            if "instrument" in tokens:
-                return True
-
-        return False
 
     def remove_effect(self, slot_index: Optional[int], effect_index: int):
         """Publish a replacement chain without mutating or processing the old one."""
@@ -428,13 +369,7 @@ class PluginHost:
                 slot.effects if slot is not None else self.engine.master_effects
             )
             del effects[effect_index]
-            board = deps.Pedalboard(effects) if effects else None
-            if slot is not None:
-                slot.effects = effects
-                slot._effects_board = board
-            else:
-                self.engine.master_effects = effects
-                self.engine._master_board = board
+            self.engine.set_effects(effects, slot_index)
 
     def _resolve_audio_device_by_name(self, name: str):
         """Resolve an audio output device name to a device index.
@@ -443,11 +378,11 @@ class PluginHost:
         that saved names like "IQaudIODAC: DAC HiFi pcm512x-hifi-0 (hw:0,0)"
         survive reboots where the hw index changes.
         """
-        if not deps.HAS_SOUNDDEVICE or deps.sd is None:
+        if not deps.HAS_NATIVE:
             return name
 
         try:
-            devices = deps.sd.query_devices()
+            devices = deps.native.devices()
         except Exception:
             return name
 
@@ -463,7 +398,7 @@ class PluginHost:
             dev_name = str(info.get("name", "")).strip()
             if dev_name:
                 out_names.append(dev_name)
-                out_indices.append(i)
+                out_indices.append(int(info.get("index", i)))
 
         if not out_names:
             return name

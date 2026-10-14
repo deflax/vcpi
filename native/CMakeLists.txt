@@ -1,0 +1,73 @@
+cmake_minimum_required(VERSION 3.22)
+project(vcpi_native LANGUAGES C CXX)
+if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "vcpi native audio supports Linux and macOS")
+endif()
+if(APPLE)
+    enable_language(OBJC OBJCXX)
+endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# PortAudio 19.7 retains an older minimum; permit it under CMake 4 as well.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+include(FetchContent)
+set(PYBIND11_FINDPYTHON ON)
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+FetchContent_Declare(pybind11 GIT_REPOSITORY https://github.com/pybind/pybind11.git GIT_TAG v2.13.6 GIT_SHALLOW TRUE GIT_SUBMODULES "")
+FetchContent_Declare(portaudio GIT_REPOSITORY https://github.com/PortAudio/portaudio.git GIT_TAG v19.7.0 GIT_SHALLOW TRUE GIT_SUBMODULES "")
+# Only consume JUCE module sources: no juceaide, application, editor, or plugin binaries.
+# JUCE 8 includes the ScreenCaptureKit fix for current macOS deployment targets.
+FetchContent_Declare(juce GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 8.0.6 GIT_SHALLOW TRUE GIT_SUBMODULES "" SOURCE_SUBDIR vcpi-unused)
+set(PA_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(PA_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(PA_USE_JACK OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(pybind11 portaudio juce)
+
+set(juce_sources)
+foreach(module IN ITEMS juce_core juce_events juce_data_structures juce_graphics juce_gui_basics juce_gui_extra juce_audio_basics juce_audio_formats juce_audio_processors)
+    file(GLOB sources CONFIGURE_DEPENDS "${juce_SOURCE_DIR}/modules/${module}/${module}*.cpp" "${juce_SOURCE_DIR}/modules/${module}/${module}*.c")
+    if(APPLE)
+        file(GLOB objc_sources CONFIGURE_DEPENDS "${juce_SOURCE_DIR}/modules/${module}/${module}*.mm")
+        foreach(objc IN LISTS objc_sources)
+            string(REGEX REPLACE "\\.mm$" ".cpp" replaced "${objc}")
+            list(REMOVE_ITEM sources "${replaced}")
+        endforeach()
+        list(APPEND sources ${objc_sources})
+    endif()
+    list(APPEND juce_sources ${sources})
+endforeach()
+add_library(vcpi_juce STATIC ${juce_sources})
+set_target_properties(vcpi_juce PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+target_include_directories(vcpi_juce PUBLIC
+    "${juce_SOURCE_DIR}/modules"
+    "${juce_SOURCE_DIR}/modules/juce_audio_processors/format_types/VST3_SDK")
+target_compile_definitions(vcpi_juce PUBLIC
+    JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_STANDALONE_APPLICATION=0
+    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_VST=0 JUCE_PLUGINHOST_AU=0
+    JUCE_PLUGINHOST_LADSPA=0 JUCE_PLUGINHOST_LV2=0 JUCE_PLUGINHOST_ARA=0
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_USE_FLAC=0 JUCE_USE_OGGVORBIS=0 JUCE_USE_MP3AUDIOFORMAT=0
+    JUCE_USE_XRANDR=0 JUCE_USE_XINERAMA=0 JUCE_USE_XCURSOR=0
+    JUCE_REPORT_APP_USAGE=0)
+find_package(Threads REQUIRED)
+target_link_libraries(vcpi_juce PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+if(APPLE)
+    foreach(framework IN ITEMS Cocoa Foundation CoreAudio CoreMIDI AudioToolbox QuartzCore CoreGraphics CoreText IOKit Metal MetalKit Accelerate Security)
+        find_library(framework_path_${framework} ${framework} REQUIRED)
+        target_link_libraries(vcpi_juce PUBLIC "${framework_path_${framework}}")
+    endforeach()
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(JUCE_SYSTEM REQUIRED IMPORTED_TARGET freetype2 fontconfig x11 xext)
+    target_link_libraries(vcpi_juce PUBLIC PkgConfig::JUCE_SYSTEM)
+endif()
+pybind11_add_module(_vcpi_native NO_EXTRAS bindings.cpp plugin.cpp transport.cpp runtime.cpp)
+target_link_libraries(_vcpi_native PRIVATE vcpi_juce portaudio_static)
+target_include_directories(_vcpi_native PRIVATE "${portaudio_SOURCE_DIR}/include")
+set_target_properties(_vcpi_native PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../core")
+foreach(config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_target_properties(_vcpi_native PROPERTIES LIBRARY_OUTPUT_DIRECTORY_${config} "${CMAKE_CURRENT_SOURCE_DIR}/../core")
+endforeach()

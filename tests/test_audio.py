@@ -1,411 +1,142 @@
-"""Offline audio regressions: scheduling transitions, queue boundaries, and FX rollback."""
+"""Consumer-visible native audio rendering, without opening an output device."""
 
-import unittest
-import threading
+import struct
+import tempfile
 import time
+import unittest
+import wave
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
+import mido
 import numpy as np
-from pedalboard import Gain, Pedalboard
 
-from core.engine import AudioEngine, _RenderWorker
-from core.plugin_host import PluginHost
-from core.models import InstrumentSlot, NUM_SLOTS
-from sampler.plugin import WavSamplerPlugin
-
-
-def note(kind="note_on", note=60, velocity=127):
-    return SimpleNamespace(type=kind, note=note, velocity=velocity, time=0)
+from core.audio_deps import require_native
+from core.engine import AudioEngine
+from core.models import InstrumentSlot
+from core.plugin_host import NativePlugin
+from core.audio_state import capture_plugin
 
 
-class HeldNoteInstrument:
-    def __init__(self):
-        self.held = set()
-        self.amplitude = 0.2
-
-    def process(self, messages, *, duration, sample_rate, num_channels, buffer_size, reset):
-        for message in messages:
-            if message.type == "note_on" and message.velocity:
-                self.held.add(message.note)
-            elif message.type in ("note_off", "note_on"):
-                self.held.discard(message.note)
-        return np.full((num_channels, buffer_size),
-                       self.amplitude if self.held else 0, dtype=np.float32)
-
-
-class AudioTests(unittest.TestCase):
+class NativeAudioTests(unittest.TestCase):
     def setUp(self):
-        self.engine = AudioEngine(buffer_size=8)
-        self.engine.render_workers = 2
-        self.engine._prepare_buffers(8)
-        self.engine._workers = [
-            _RenderWorker(self.engine, idx) for idx in range(self.engine.render_workers)]
+        self.backend = require_native()
+        self.directory = tempfile.TemporaryDirectory(prefix="vcpi-native-test-")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.sample = self.root / "sample.wav"
+        with wave.open(str(self.sample), "wb") as sample:
+            sample.setnchannels(1)
+            sample.setsampwidth(2)
+            sample.setframerate(44100)
+            sample.writeframes(struct.pack("<h", 8192) * 65536)
+        self.engine = AudioEngine(buffer_size=64)
         self.addCleanup(self.engine.shutdown)
+        self.runners = []
+        self.addCleanup(self.close_runners)
 
-    def block(self, frames=8):
-        out = np.empty((frames, 2), dtype=np.float32)
-        self.engine._callback(out, frames, None, None)
-        return out
+    def close_runners(self):
+        for index, runner, transport in self.runners:
+            self.engine.clear_slot(index)
+            runner.shutdown()
+            if hasattr(transport, "close"):
+                transport.close()
 
-    def slot(self, index, amplitude=0.2):
-        instrument = HeldNoteInstrument()
-        instrument.amplitude = amplitude
-        slot = InstrumentSlot("held", "held", instrument, gain=1)
-        self.engine.slots[index] = slot
-        self.engine.enqueue_midi(index, note())
-        return slot
-
-    def test_inline_parallel_and_solo_transitions_preserve_sound(self):
-        first = self.slot(0)
-        np.testing.assert_allclose(self.block(), 0.2)
-        second = self.slot(1, 0.3)
-        np.testing.assert_allclose(self.block(), 0.5)
-        first.solo = True
-        np.testing.assert_allclose(self.block(), 0.2)
-        first.solo = False
-        second.muted = True
-        np.testing.assert_allclose(self.block(), 0.2)
-        second.muted = False
-        first.gain = 0.5
-        self.engine.master_gain = 0.5
-        np.testing.assert_allclose(self.block(5), 0.2)
-
-    def test_more_slots_than_workers_and_sparse_high_slots(self):
-        for idx in range(NUM_SLOTS):
-            self.slot(idx, amplitude=(idx + 1) / 100)
-        np.testing.assert_allclose(self.block(), 0.36, atol=1e-6)
-        for slot in self.engine.slots[:6]:
-            slot.muted = True
-        np.testing.assert_allclose(self.block(), 0.15, atol=1e-6)
-
-    def test_failed_slot_does_not_interrupt_other_slots_or_next_block(self):
-        class BrokenInstrument(HeldNoteInstrument):
-            def process(self, *args, **kwargs):
-                raise RuntimeError("instrument failure")
-
-        self.slot(0)
-        self.engine.slots[7] = InstrumentSlot("broken", "broken", BrokenInstrument())
-        np.testing.assert_allclose(self.block(), 0.2)
-        np.testing.assert_allclose(self.block(), 0.2)
-        self.assertEqual(self.engine.render_errors, 2)
-
-    def test_queue_budget_defers_but_does_not_lose_note_off(self):
-        self.slot(0)
-        for _ in range(self.engine._midi_budget - 1):
-            self.engine.enqueue_midi(0, note())
-        self.engine.enqueue_midi(0, note("note_off"))
-        np.testing.assert_allclose(self.block(), 0.2)
-        np.testing.assert_array_equal(self.block(), 0)
-        np.testing.assert_array_equal(self.block(), 0)
-
-    def test_parameter_budget_preserves_last_value_in_each_block(self):
-        self.slot(0)
-        for _ in range(self.engine._control_budget):
-            self.engine.enqueue_param_change(0, "amplitude", 0.3)
-        self.engine.enqueue_param_change(0, "amplitude", 0.4)
-        np.testing.assert_allclose(self.block(), 0.3)
-        np.testing.assert_allclose(self.block(), 0.4)
-
-    def test_timeout_cannot_apply_a_control_in_a_later_block(self):
-        self.slot(0)
-        self.engine._running = True
-        self.engine._control_timeout = 0.01
-        with self.assertRaises(TimeoutError):
-            self.engine.set_parameter(0, "amplitude", 0.9)
-        np.testing.assert_allclose(self.block(), 0.2)
-
-    def test_bool_surrogate_and_enum_controls_change_audio_with_acknowledgments(self):
-        class BooleanValue:
-            type = bool
-
-            def __init__(self, value):
-                self.value = value
-
-            def __bool__(self):
-                return self.value
-
-        class Instrument(HeldNoteInstrument):
-            def __init__(self):
-                super().__init__()
-                self._bypass = False
-                self.mode = "Normal"
-
-            @property
-            def bypass(self):
-                return BooleanValue(self._bypass)
-
-            @bypass.setter
-            def bypass(self, value):
-                self._bypass = bool(value)
-
-            def process(self, *args, **kwargs):
-                audio = super().process(*args, **kwargs)
-                audio *= 0 if self._bypass else 0.5 if self.mode == "Quiet Mode" else 1
-                return audio
-
-        self.engine.slots[0] = InstrumentSlot("controls", "controls", Instrument(), gain=1)
-        self.engine.enqueue_midi(0, note())
-        np.testing.assert_allclose(self.block(), 0.2)
-        self.engine.set_parameter(0, "mode", "Quiet Mode")
-        np.testing.assert_allclose(self.block(), 0.1)
-        self.assertIs(self.engine.set_parameter(0, "bypass", True), True)
-        np.testing.assert_array_equal(self.block(), 0)
-        self.engine.set_parameter(0, "bypass", False)
-        np.testing.assert_allclose(self.block(), 0.1)
-
-    def test_old_generation_note_off_cannot_silence_a_replacement(self):
-        self.slot(0).generation = 1
-        np.testing.assert_allclose(self.block(), 0.2)
-        replacement = self.slot(0)
-        replacement.generation = 2
-        self.engine.enqueue_midi(0, note("note_off"), generation=1)
-        np.testing.assert_allclose(self.block(), 0.2)
-        self.engine.enqueue_midi(0, note("note_off"), generation=2)
-        np.testing.assert_array_equal(self.block(), 0)
-
-    def test_gain_update_waits_for_the_next_render_boundary(self):
-        slot = self.slot(0)
-        np.testing.assert_allclose(self.block(), 0.2)
-        entered, release = threading.Event(), threading.Event()
-        original_process = slot.plugin.process
-        outputs, errors = [], []
-
-        def render(*args, **kwargs):
-            entered.set()
-            if not release.wait(2):
-                raise TimeoutError("test render gate timed out")
-            return original_process(*args, **kwargs)
-
-        def update():
-            try:
-                self.engine.set_slot_state(0, gain=0.5)
-            except Exception as error:
-                errors.append(error)
-
-        slot.plugin.process = render
-        self.engine._running = True
-        callback = threading.Thread(target=lambda: outputs.append(self.block()))
-        setter = threading.Thread(target=update)
-        try:
-            callback.start()
-            self.assertTrue(entered.wait(2))
-            setter.start()
-            deadline = time.monotonic() + 2
-            while not self.engine.pending_control_count and time.monotonic() < deadline:
-                time.sleep(0.001)
-            self.assertEqual(slot.gain, 1)
-            release.set()
-            callback.join(timeout=2)
-            self.assertFalse(callback.is_alive())
-            np.testing.assert_allclose(outputs[0], 0.2)
-            np.testing.assert_allclose(self.block(), 0.1)
-            setter.join(timeout=2)
-            self.assertFalse(setter.is_alive())
-            self.assertEqual(errors, [])
-        finally:
-            release.set()
-            callback.join(timeout=2)
-            if setter.ident is not None:
-                setter.join(timeout=2)
-
-    def test_mono_insert_master_and_clipping(self):
-        sample = np.ones((1, 24), dtype=np.float32)
-        sampler = WavSamplerPlugin("mono", sample, output_channels=1)
-        slot = InstrumentSlot("mono", "mono", sampler, gain=0.8)
-        slot._effects_board = Pedalboard([Gain(gain_db=-6.020599913279624)])
-        self.engine.slots[0] = slot
-        self.engine._master_board = Pedalboard([Gain(gain_db=6.020599913279624)])
-        self.engine.enqueue_midi(0, note())
-        np.testing.assert_allclose(self.block(), 0.8, atol=1e-6)
-        self.engine.master_gain = 2
-        np.testing.assert_array_equal(self.block(), 1)
-        np.testing.assert_array_equal(self.block(), 1)
-        np.testing.assert_array_equal(self.block(), 0)
-
-    def test_failed_fx_warmup_preserves_old_audible_chain(self):
-        class FailingGain(Gain):
-            is_instrument = False
-
-            def process(self, *args, **kwargs):
-                raise RuntimeError("warmup failed")
-
-        host = PluginHost(buffer_size=8)
-        host.engine.shutdown()
-        host.engine = self.engine
-        slot = self.slot(0)
-        slot.effects = [Gain(gain_db=-6.020599913279624)]
-        slot._effects_board = Pedalboard(slot.effects)
-        with patch("core.plugin_host.deps.load_plugin", return_value=FailingGain()):
-            with self.assertRaisesRegex(RuntimeError, "warmup failed"):
-                host.load_effect("failure", slot_index=0)
-        np.testing.assert_allclose(self.block(), 0.1, atol=1e-6)
-        host.remove_effect(0, 0)
-        np.testing.assert_allclose(self.block(), 0.2)
-
-
-class IsolatedAudioTests(unittest.TestCase):
-    class RemoteRenderer:
-        def __init__(self, amplitude):
-            self.amplitude = amplitude
-            self.held = set()
-            self.calls = []
-            self.output = np.empty((8, 2), dtype=np.float32)
-            self.shutdown_calls = 0
-
-        def render(self, messages, frames):
-            self.calls.append(tuple(messages))
-            for message in messages:
-                if message.type == "note_on" and message.velocity:
-                    self.held.add(message.note)
-                elif message.type in ("note_off", "note_on"):
-                    self.held.discard(message.note)
-            self.output.fill(self.amplitude if self.held else 0)
-            return self.output
-
-        def shutdown(self):
-            self.shutdown_calls += 1
-
-    def setUp(self):
-        self.engine = AudioEngine(buffer_size=8)
-        self.engine.isolated_slots = True
-        self.engine._prepare_buffers(8)
-        self.addCleanup(self.engine.shutdown)
-
-    def block(self, frames=8):
-        out = np.empty((frames, 2), dtype=np.float32)
-        self.engine._callback(out, frames, None, None)
-        return out
-
-    def slot(self, index, amplitude=0.2):
-        remote = self.RemoteRenderer(amplitude)
-        # Snapshot stand-ins deliberately have no native render interface.
-        slot = InstrumentSlot("remote", "remote", object(), gain=1,
-                              effects=[object()], render_owner=remote)
-        slot._effects_board = object()
+    def slot(self, index, velocity=127):
+        plugin = NativePlugin(str(self.sample), 44100, 64, "wav")
+        transport = self.backend.Transport(str(self.root / f"slot-{index}.mmap"), 64, True)
+        runner = self.backend.SlotRunner(transport, plugin.native, 44100, 64)
+        self.runners.append((index, runner, transport))
+        slot = InstrumentSlot("sample", str(self.sample), plugin, gain=1.0,
+                              render_owner=SimpleNamespace(transport=transport))
         self.engine.publish_slot(index, slot)
-        self.engine.enqueue_midi(index, note())
+        self.engine.enqueue_midi(index, mido.Message("note_on", note=60, velocity=velocity))
         return slot
 
-    def test_muted_and_solo_excluded_slots_drain_noteoffs_and_advance(self):
-        first = self.slot(0)
-        second = self.slot(1, 0.3)
-        np.testing.assert_allclose(self.block(), 0.5)
-        second.muted = True
-        self.engine.enqueue_midi(1, note("note_off"))
-        np.testing.assert_allclose(self.block(), 0.2)
-        second.muted = False
-        np.testing.assert_allclose(self.block(), 0.2)
-        first.solo = True
-        self.engine.enqueue_midi(1, note())
-        np.testing.assert_allclose(self.block(), 0.2)
-        self.engine.enqueue_midi(1, note("note_off"))
-        np.testing.assert_allclose(self.block(), 0.2)
-        first.solo = False
-        np.testing.assert_allclose(self.block(), 0.2)
-        self.assertEqual(len(second.render_owner.calls), 6)
-        self.assertEqual(self.engine.render_slots, 2)
-        self.assertEqual(self.engine.eligible_slots, 2)
-        self.assertEqual(self.engine.render_workers, NUM_SLOTS)
-        self.assertEqual(self.engine._workers, [])
-        self.assertEqual(self.engine.render_errors, 0)
-
-    def test_publication_clears_consumed_and_backlogged_midi_at_boundary(self):
-        old = self.slot(0)
-        other = self.slot(1, 0.1)
-        np.testing.assert_allclose(self.block(), 0.3)
-        replacement_owner = self.RemoteRenderer(0.4)
-        replacement_owner.held.add(60)
-        replacement = InstrumentSlot("new", "new", object(), gain=1,
-                                     render_owner=replacement_owner)
-        self.engine.enqueue_midi(1, note("note_off"))
-        for _ in range(self.engine._midi_budget + 10):
-            self.engine.enqueue_midi(0, note("note_off"))
-        retired, errors = [], []
-
-        def publish():
-            try:
-                retired.append(self.engine.publish_slot(0, replacement))
-            except Exception as error:
-                errors.append(error)
-
-        self.engine._running = True
-        setter = threading.Thread(target=publish)
-        try:
-            setter.start()
-            deadline = time.monotonic() + 2
-            while not self.engine.pending_control_count and time.monotonic() < deadline:
+    def block(self):
+        result = self.engine.render_block()
+        deadline = time.monotonic() + 5
+        for _, _, transport in self.runners:
+            sequence = transport.stats()["sequence"]
+            while transport.stats()["submitted"] < sequence:
+                if time.monotonic() >= deadline:
+                    self.fail("native slot failed to finish offline block")
                 time.sleep(0.001)
-            self.assertEqual(self.engine.pending_control_count, 1)
-            np.testing.assert_allclose(self.block(), 0.4)
-            setter.join(timeout=2)
-            self.assertFalse(setter.is_alive())
-            self.assertEqual(errors, [])
-            self.assertEqual(retired, [old])
-            self.assertEqual(replacement_owner.calls, [()])
-            self.assertEqual(len(old.render_owner.calls), 1)
-            self.assertEqual(other.render_owner.held, set())
-            self.assertEqual(len(self.engine._midi_queue), 0)
-            self.assertEqual(old.render_owner.shutdown_calls, 0)
-            np.testing.assert_allclose(self.block(), 0.4)
-        finally:
-            self.engine._running = False
-            setter.join(timeout=2)
-        self.assertIs(self.engine.clear_slot(0), replacement)
-        self.assertIsNone(self.engine.slots[0])
-        self.assertEqual(replacement_owner.shutdown_calls, 0)
+        return result
 
-    def test_frame_mismatch_silences_without_resizing_or_consuming_midi(self):
-        slot = self.slot(0)
-        mixed = self.engine._mixed_buf
-        np.testing.assert_array_equal(self.block(5), 0)
-        self.assertIs(self.engine._mixed_buf, mixed)
-        self.assertEqual(slot.render_owner.calls, [])
-        self.assertEqual(len(self.engine._midi_queue), 1)
-        self.assertEqual(self.engine.render_errors, 1)
-        np.testing.assert_allclose(self.block(), 0.2)
-
-    def test_failed_remote_does_not_interrupt_other_slots(self):
+    def test_first_block_silent_then_stereo_sampler_audio(self):
         self.slot(0)
-        failed = self.slot(1, 0.3)
+        np.testing.assert_array_equal(self.block(), np.zeros((64, 2), np.float32))
+        np.testing.assert_allclose(self.block(), 0.25, atol=1e-6)
+        self.assertEqual(self.engine.callback_count, 2)
 
-        def render(messages, frames):
-            raise RuntimeError("remote failure")
+    def test_gain_mute_solo_master_and_sparse_slots(self):
+        self.slot(0)
+        self.slot(7)
+        self.block()
+        np.testing.assert_allclose(self.block(), 0.5, atol=1e-6)
+        self.engine.set_slot_state(0, gain=0.5)
+        np.testing.assert_allclose(self.block(), 0.375, atol=1e-6)
+        self.engine.set_slot_state(7, solo=True)
+        np.testing.assert_allclose(self.block(), 0.25, atol=1e-6)
+        self.engine.set_slot_state(7, muted=True)
+        np.testing.assert_array_equal(self.block(), 0)
+        self.engine.set_slot_state(7, muted=False, solo=False)
+        self.engine.set_master_gain(8)
+        np.testing.assert_allclose(self.block(), 1, atol=1e-6)
 
-        failed.render_owner.render = render
-        np.testing.assert_allclose(self.block(), 0.2)
-        np.testing.assert_allclose(self.block(), 0.2)
-        self.assertEqual(self.engine.render_errors, 2)
+    def test_muted_slot_still_consumes_midi_and_advances(self):
+        self.slot(0, velocity=64)
+        self.engine.set_slot_state(0, muted=True)
+        self.block()
+        np.testing.assert_array_equal(self.block(), 0)
+        self.engine.set_slot_state(0, muted=False)
+        np.testing.assert_allclose(self.block(), 0.25 * 64 / 127, atol=1e-6)
 
+    def test_generation_filter_and_retirement_discard_stopped_midi(self):
+        slot = self.slot(0)
+        slot.generation = 4
+        self.assertFalse(self.engine.enqueue_midi(0, mido.Message("note_on"), generation=3))
+        self.assertEqual(len(self.engine._midi_queue), 1)
+        retired = self.engine.clear_slot(0)
+        self.assertIs(retired, slot)
+        self.assertFalse(self.engine._midi_queue)
+        np.testing.assert_array_equal(self.block(), 0)
 
-class SamplerTests(unittest.TestCase):
-    def test_interpolation_pitch_tail_and_empty_blocks(self):
-        for channels in (1, 2):
-            for midi_note, rate in ((48, 0.5), (60, 1), (72, 2)):
-                with self.subTest(channels=channels, note=midi_note):
-                    sample = np.array([[0.0, 0.2, 0.4, 0.6, 0.8]], dtype=np.float32)
-                    sampler = WavSamplerPlugin("ramp", sample, channels)
-                    sampler.send_midi(note(note=midi_note, velocity=64))
-                    position = 0.0
-                    for frames in (0, 3, 2, 7, 3):
-                        expected = np.zeros(frames, dtype=np.float32)
-                        for idx in range(frames):
-                            pos = position + idx * rate
-                            if pos < 5:
-                                left = int(pos)
-                                right = min(left + 1, 4)
-                                expected[idx] = ((1 - (pos - left)) * sample[0, left]
-                                                 + (pos - left) * sample[0, right]) * (64 / 127)
-                        output = sampler.process(np.zeros((channels, frames), dtype=np.float32), 44100)
-                        np.testing.assert_allclose(output, np.broadcast_to(expected, output.shape), atol=1e-7)
-                        position += frames * rate
+    def test_control_fifo_and_plain_sampler_metadata(self):
+        slot = self.slot(0)
+        self.engine.enqueue_slot_change(0, gain=0.5)
+        self.engine.enqueue_slot_change(0, gain=0.25, muted=True)
+        self.engine.flush_controls()
+        self.assertEqual(slot.gain, 0.25)
+        self.assertTrue(slot.muted)
+        snapshot = capture_plugin(slot.plugin, {}, {})
+        self.assertEqual(snapshot.info_type, "Sample")
+        self.assertEqual(snapshot.path_to_plugin_file, str(self.sample))
+        self.assertEqual(snapshot.parameters, {})
+        self.assertEqual(snapshot.values, {})
 
-    def test_voice_limit_retires_oldest_voice(self):
-        sampler = WavSamplerPlugin("ones", np.ones((1, 4), dtype=np.float32), 1, max_voices=1)
-        sampler.send_midi(note(velocity=127))
-        sampler.send_midi(note(velocity=32))
-        np.testing.assert_allclose(sampler.process(np.zeros((1, 4), dtype=np.float32), 44100), 32 / 127)
-        np.testing.assert_array_equal(sampler.process(np.zeros((1, 4), dtype=np.float32), 44100), 0)
+    def test_midi_overflow_is_explicit(self):
+        transport = self.backend.Transport(str(self.root / "overflow.mmap"), 64, True)
+        try:
+            for _ in range(4096):
+                transport.send_midi(bytes((0x90, 60, 127)))
+            with self.assertRaises((BufferError, RuntimeError)):
+                transport.send_midi(bytes((0x80, 60, 0)))
+        finally:
+            if hasattr(transport, "close"):
+                transport.close()
+
+    def test_slot_midi_overflow_does_not_silence_other_slots(self):
+        failed = self.slot(0)
+        self.slot(1)
+        for _ in range(4096):
+            failed.render_owner.transport.send_midi(bytes((0x90, 60, 127)))
+        # Flushing the queued first note exceeds only slot zero's FIFO.
+        np.testing.assert_array_equal(self.block(), 0)
+        self.assertIsNotNone(failed.render_owner.failure)
+        np.testing.assert_allclose(self.block(), 0.25, atol=1e-6)
+        self.assertEqual(self.engine.render_errors, 0)
 
 
 if __name__ == "__main__":
