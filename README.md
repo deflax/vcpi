@@ -41,8 +41,11 @@ callback nor slot DSP enters Python or acquires the GIL. Slot audio crosses
 preallocated, atomic-owned mapped memory with one block of added buffering.
 Loading/replacing a slot does not stop unrelated slots; read-only commands use
 cached snapshots.
-Saved-session parameters restore in bounded batches rather than repeatedly
-recapturing every plugin's metadata. Interrupted startup releases native owners
+Session format 2 saves native VST3 state chunks rather than replaying every
+exposed parameter, which can trigger MIDI helpers and action controls. This
+includes instruments, slot inserts, and master effects; WAV slots remain
+path-based. Legacy format 1 restores only known automatable parameters, with
+warnings for skipped controls. Interrupted startup releases native owners
 without overwriting the saved session.
 
 In server mode, vcpi does not start audio automatically. Start audio manually

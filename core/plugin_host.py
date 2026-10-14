@@ -27,6 +27,7 @@ class NativePlugin:
             raise FileNotFoundError(f"plugin or WAV not found: {path}")
         object.__setattr__(self, "native", deps.require_native().Plugin(
             str(path), sample_rate, frames, kind))
+        object.__setattr__(self, "_kind", kind)
         object.__setattr__(self, "_descriptor_type", SimpleNamespace)
         object.__setattr__(self, "_parameter_names", frozenset(self.native.parameters()))
         self._refresh_metadata()
@@ -60,8 +61,18 @@ class NativePlugin:
         object.__setattr__(self, "_parameter_names", frozenset(self.native.parameters()))
         return result
 
+    def get_state(self) -> bytes | None:
+        """Capture a native VST3 chunk; WAV instruments persist only their path."""
+        return None if self._kind == "wav" else self.native.get_state()
+
     def load_state(self, state):
         result = self.native.load_state(state)
+        object.__setattr__(self, "_parameter_names", frozenset(self.native.parameters()))
+        return result
+
+    def load_saved_state(self, state: bytes):
+        """Restore a captured JUCE VST3 chunk, rejecting malformed state."""
+        result = self.native.load_saved_state(state)
         object.__setattr__(self, "_parameter_names", frozenset(self.native.parameters()))
         return result
 

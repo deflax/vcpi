@@ -435,24 +435,45 @@ auto-save session so that shutdown preserves the loaded state.
 
 Saved/restored session state includes:
 
-- Per-slot instruments, effects, parameters, gain, mute/solo
-- Master effects and master gain
+- Per-slot instruments, native VST3 state, effects, gain, mute/solo
+- Native master-effect state and master gain
 - MIDI channel routing
 - BPM and Ableton Link state
 - Sequencer banks and links
 - Audio output device and MIDI connections
 
-Parameter snapshots preserve numeric, boolean, and enum/string values. Saving
-waits for prior controls/MIDI and captures each slot's native state between its
-render jobs. Without master effects it leaves the output stream running; native
-capture can delay the inspected slot. With master effects it also pauses the
-output stream for fresh master state. JSON is written in the control process.
-Restoration stays paused until plugin/control changes are complete. Parameters
-are applied in ordered batches of at most 64 values, preserving numeric,
-boolean, and enum types. Individual incompatible parameters are reported while
-other entries continue; a terminal native-owner failure aborts that plugin's
-restore. Read-only diagnostics do not perform native capture. A failed slot or
-output owner makes saving fail rather than overwrite the last good session.
+New saves use session format **2**: each VST3 instrument, slot insert, and master
+effect stores a base64-encoded native state chunk. This preserves plugin-owned
+settings, including settings not exposed as parameters, without replaying MIDI
+helpers or action controls. WAV slots remain path-based.
+
+Saving waits for prior controls/MIDI and captures each slot between render jobs.
+Pending VST3 parameter edits require one MIDI-free processing block before
+serialization; ordinary captures without pending edits do not advance DSP, and
+WAV capture never renders an extra block. Capture can delay the inspected slot.
+Without master effects, saving leaves the output stream running. With master
+effects, it also pauses the output stream for native master-state capture.
+Read-only diagnostics never capture chunks; ordinary updates do not carry them.
+
+Restoration stays paused until plugin/control changes are complete. Native state
+is validated before loading; deferred plugin loads are prerolled without MIDI
+before metadata refresh and subsequent notes. A state chunk takes precedence
+over any parameter dictionary. Invalid/missing format-2 chunks are reported,
+not silently replaced by parameter replay. State transfers retain the ordinary
+metadata limits and allow at most 128 MiB per chunk and 512 MiB per transfer,
+with finite control-operation deadlines.
+
+Existing format-1 sessions remain readable. Only parameters present in the
+newly loaded plugin and marked automatable are restored, in batches of at most
+64; skipped unknown/nonautomatable controls produce warnings. This conservative
+migration may lose nonautomatable settings, and automation flags cannot identify
+every vendor-specific action. Back up old sessions before migration; reselect a
+preset if its original non-parameter state was never saved. Reloaded slots
+replace already-corrupted live instances; saving a silent instance alone does
+not repair its state.
+
+JSON is written in the control process. A failed native owner or state capture
+makes saving fail rather than overwrite the last good session.
 
 On startup restore, vcpi attempts to reconnect audio and MIDI targets
 automatically.

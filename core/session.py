@@ -2,8 +2,8 @@
 
 Saved state includes:
   - Per-slot: source kind (plugin/wav/vcv), instrument path, name, gain,
-    enabled, muted, solo, insert effect paths/names, and all plugin parameter values
-  - Master effects: paths, names, and parameter values
+    enabled, muted, solo, insert effect paths/names, and opaque native VST3 state
+  - Master effects: paths, names, and opaque native VST3 state
   - Master gain
   - MIDI channel -> slot routing
   - Link BPM and enabled state
@@ -14,6 +14,8 @@ The session file is human-readable JSON so it can be hand-edited if needed.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 import time
@@ -21,6 +23,7 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from core.models import NUM_SLOTS
+from core.state_transport import NATIVE_STATE_LIMIT, validate_native_state
 
 if TYPE_CHECKING:
     from core.host import VcpiCore
@@ -40,9 +43,11 @@ def _fx_path(plugin) -> str:
     return plugin.path_to_plugin_file
 
 
-def _plugin_params(plugin) -> dict[str, bool | str | int | float]:
-    """Copy cached parameter values without touching native plugin objects."""
-    return dict(plugin.values) if plugin is not None else {}
+def _saved_plugin_state(plugin) -> str:
+    """Encode only a chunk captured by the explicit native save barrier."""
+    if plugin is None or plugin.native_state is None:
+        raise RuntimeError("native plugin state was not captured; refusing parameter-only save")
+    return base64.b64encode(validate_native_state(plugin.native_state)).decode("ascii")
 
 
 def _apply_plugin_params(
@@ -51,13 +56,53 @@ def _apply_plugin_params(
     params: dict[str, bool | str | int | float],
     fx_index: int | None = None,
 ):
-    """Restore one plugin through bounded, acknowledged parameter batches."""
-    result = host.engine.set_parameters(slot_index, params, fx_index=fx_index)
+    """Conservatively migrate v1 values using freshly loaded live descriptors."""
+    if slot_index is None:
+        plugin = host.engine.master_effects[fx_index]
+    else:
+        slot = host.engine.slots[slot_index]
+        plugin = slot.plugin if fx_index is None else slot.effects[fx_index]
+    descriptors = plugin.parameters if plugin is not None else {}
+    safe_params = {}
+    for name, value in params.items():
+        descriptor = descriptors.get(name)
+        if descriptor is None or not descriptor.is_automatable:
+            logger.warning(
+                "[session] skipped legacy param '%s': %s", name,
+                "unavailable in live metadata" if descriptor is None else "not automatable",
+            )
+        else:
+            safe_params[name] = value
+    if not safe_params:
+        return
+    result = host.engine.set_parameters(slot_index, safe_params, fx_index=fx_index)
     for name, error in result["errors"].items():
         logger.warning(
             "[session] could not restore param '%s' = %s: %s",
             name, params[name], error,
         )
+
+
+def _restore_plugin_state(host, slot_index, entry, version, fx_index=None, *, wav=False):
+    """Native chunks take precedence; parameter replay is legacy-v1-only."""
+    if wav:
+        return
+    if "native_state" in entry:
+        encoded = entry["native_state"]
+        if not isinstance(encoded, str):
+            raise ValueError("native_state must be a base64 string")
+        if len(encoded) > 4 * ((NATIVE_STATE_LIMIT + 2) // 3):
+            raise ValueError("native_state exceeds the bounded state allowance")
+        try:
+            state = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise ValueError("native_state is not valid base64") from error
+        host.engine.load_plugin_state(
+            slot_index, validate_native_state(state), fx_index=fx_index)
+    elif version == 1:
+        _apply_plugin_params(host, slot_index, entry.get("params", {}), fx_index)
+    else:
+        raise ValueError("version 2 VST3 entry is missing native_state")
 
 
 def snapshot(host: VcpiCore) -> dict:
@@ -79,7 +124,7 @@ def _snapshot_cached(host: VcpiCore) -> dict:
             effects_data.append({
                 "path": fxp,
                 "name": Path(fxp).stem if fxp else "unknown",
-                "params": _plugin_params(fx),
+                "native_state": _saved_plugin_state(fx),
             })
         slot_entry = {
             "kind": slot.source_type,
@@ -89,9 +134,10 @@ def _snapshot_cached(host: VcpiCore) -> dict:
             "enabled": slot.enabled,
             "muted": slot.muted,
             "solo": slot.solo,
-            "params": _plugin_params(slot.plugin),
             "effects": effects_data,
         }
+        if slot.source_type != "wav":
+            slot_entry["native_state"] = _saved_plugin_state(slot.plugin)
         if slot.source_type == "vcv" and slot.vcv_patch_path:
             slot_entry["vcv_patch_path"] = slot.vcv_patch_path
         slots_data.append(slot_entry)
@@ -102,7 +148,7 @@ def _snapshot_cached(host: VcpiCore) -> dict:
         master_fx_data.append({
             "path": fxp,
             "name": Path(fxp).stem if fxp else "unknown",
-            "params": _plugin_params(fx),
+            "native_state": _saved_plugin_state(fx),
         })
 
     # Routing: store as 1-based for readability in the JSON file
@@ -116,7 +162,7 @@ def _snapshot_cached(host: VcpiCore) -> dict:
     }
 
     return {
-        "version": 1,
+        "version": 2,
         "sample_rate": host.sample_rate,
         "buffer_size": host.buffer_size,
         "bpm": host.link.bpm,
@@ -143,7 +189,7 @@ def save(host: VcpiCore, path: Optional[Path] = None):
 def restore(host: VcpiCore, path: Optional[Path] = None):
     """Restore a session from a JSON file.
 
-    Loads instruments, effects, parameters, routing, gains, tempo,
+    Loads instruments, effects, native plugin state, routing, gains, tempo,
     and previously connected audio/MIDI device targets.
     """
     path = Path(path) if path else DEFAULT_SESSION_PATH
@@ -153,7 +199,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
 
     data = json.loads(path.read_text())
     version = data.get("version", 0)
-    if version != 1:
+    if version not in (1, 2):
         logger.warning("[Session] Unknown session version %s, skipping", version)
         return
 
@@ -198,7 +244,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                     slot = host.load_wav(idx, plugin_path, slot_data.get("name"))
                 case "vcv":
                     vcv_patch = slot_data.get("vcv_patch_path", "")
-                    if vcv_patch:
+                    if version == 1 and vcv_patch:
                         slot, _, _ = host.load_vcv(
                             idx, vcv_patch,
                             cardinal_path=plugin_path,
@@ -217,16 +263,16 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                 source_type=slot_kind,
                 vcv_patch_path=slot_data.get("vcv_patch_path", ""),
             )
-            _apply_plugin_params(host, idx, slot_data.get("params", {}))
+            _restore_plugin_state(
+                host, idx, slot_data, version, wav=slot_kind == "wav")
             logger.info("[session] slot %d: %s", idx + 1, slot.name)
 
             for fx_data in slot_data.get("effects", []):
                 try:
                     host.load_effect(fx_data["path"], idx, fx_data.get("name"))
                     slot = host.engine.slots[idx]
-                    _apply_plugin_params(
-                        host, idx, fx_data.get("params", {}), len(slot.effects) - 1,
-                    )
+                    _restore_plugin_state(
+                        host, idx, fx_data, version, len(slot.effects) - 1)
                 except Exception as e:
                     errors.append(f"slot {idx + 1} fx '{fx_data.get('path')}': {e}")
 
@@ -240,10 +286,8 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
     for fx_data in data.get("master_effects", []):
         try:
             host.load_effect(fx_data["path"], None, fx_data.get("name"))
-            _apply_plugin_params(
-                host, None, fx_data.get("params", {}),
-                len(host.engine.master_effects) - 1,
-            )
+            _restore_plugin_state(
+                host, None, fx_data, version, len(host.engine.master_effects) - 1)
         except Exception as e:
             errors.append(f"master fx '{fx_data.get('path')}': {e}")
 

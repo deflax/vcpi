@@ -59,6 +59,22 @@ bool trueText(const std::string& text) {
     const auto value = juce::String(text).trim().toLowerCase();
     return value == "on" || value == "yes" || value == "true" || value == "enabled";
 }
+void validateSavedState(const void* data, std::size_t size) {
+    if (size == 0 || size > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument("Invalid VST3 saved state size");
+    const auto xml = juce::AudioProcessor::getXmlFromBinary(data, static_cast<int>(size));
+    if (!xml || !xml->hasTagName("VST3PluginState"))
+        throw std::invalid_argument("Invalid JUCE VST3 saved state");
+    const auto* component = xml->getChildByName("IComponent");
+    juce::MemoryBlock componentState;
+    if (!component || !componentState.fromBase64Encoding(component->getAllSubText()) || componentState.getSize() == 0)
+        throw std::invalid_argument("VST3 saved state has no valid component state");
+    if (const auto* controller = xml->getChildByName("IEditController")) {
+        juce::MemoryBlock controllerState;
+        if (!controllerState.fromBase64Encoding(controller->getAllSubText()))
+            throw std::invalid_argument("VST3 saved state has invalid controller state");
+    }
+}
 }
 Plugin::Plugin(const std::string& path, double rate, int size, const std::string& kind)
     : sampleRate(rate), frames(size) {
@@ -341,6 +357,7 @@ Scalar Plugin::setParameter(const std::string& key, const Scalar& value) {
     }
     if (!std::isfinite(normalized)) throw std::invalid_argument("Plugin could not parse parameter value");
     info.parameter->setValueNotifyingHost(std::clamp(normalized, 0.0f, 1.0f));
+    parametersPending = true;
     return parameterValue(info);
 }
 void Plugin::loadPreset(const std::string& path) {
@@ -367,11 +384,67 @@ void Plugin::loadPreset(const std::string& path) {
     }
     discoverParameters();
 }
+juce::MemoryBlock Plugin::getState() {
+    ControlOwnership lock(ownership);
+    if (!instance) throw std::invalid_argument("WAV instruments do not support state chunks");
+    // Commit acknowledged edits before serialization. Some VST3s ignore
+    // parameter flushes with zero samples, so pending edits need one block.
+    // Ordinary captures don't advance DSP; WAV captures never render.
+    if (parametersPending) {
+        audio.clear();
+        juce::MidiBuffer midi;
+        instance->processBlock(audio, midi);
+        parametersPending = false;
+    }
+    juce::MemoryBlock data;
+    instance->getStateInformation(data);
+    // JUCE always emits an XML envelope, even if the VST3 returned no state.
+    // A nonempty envelope alone is not a restorable instrument.
+    validateSavedState(data.getData(), data.getSize());
+    return data;
+}
 void Plugin::loadState(const std::string& data) {
     ControlOwnership lock(ownership);
     if (!instance) throw std::invalid_argument("WAV instruments do not support state chunks");
     if (data.empty() || data.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) throw std::invalid_argument("Invalid state chunk size");
+    applyState(data);
+}
+void Plugin::loadSavedState(const std::string& data) {
+    ControlOwnership lock(ownership);
+    if (!instance) throw std::invalid_argument("WAV instruments do not support state chunks");
+    validateSavedState(data.data(), data.size());
+    applyState(data);
+}
+void Plugin::applyState(const std::string& data) {
+    // Some instruments defer streamed state while processing is active.
+    // Deactivate under ownership so their state is applied before restarting.
+    instance->releaseResources();
+    try {
+        instance->setStateInformation(data.data(), static_cast<int>(data.size()));
+    } catch (...) {
+        instance->prepareToPlay(sampleRate, frames);
+        throw;
+    }
+    instance->prepareToPlay(sampleRate, frames);
+    // Instruments may apply an enqueued patch only on their next audio block.
+    // Preroll the new state without MIDI, then deliver deferred VST3 restart
+    // notifications before capturing parameter metadata.
+    auto preroll = [&] {
+        juce::MidiBuffer midi;
+        for (int block = 0; block < 2; ++block) {
+            audio.clear();
+            midi.clear();
+            instance->processBlock(audio, midi);
+        }
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
+    };
+    preroll();
+    // JUCE resets its host parameter cache before a deferred processor load
+    // has landed. Its public state API must synchronize the controller again
+    // after preroll; otherwise getters keep the pre-load values.
     instance->setStateInformation(data.data(), static_cast<int>(data.size()));
+    preroll();
+    parametersPending = false;
     discoverParameters();
 }
 void Plugin::renderWav(float* left, float* right, const juce::MidiBuffer& midi) noexcept {
@@ -416,6 +489,7 @@ void Plugin::process(float* left, float* right, juce::MidiBuffer& midi) {
         }
     }
     instance->processBlock(audio, midi);
+    parametersPending = false;
     std::copy_n(audio.getReadPointer(0), frames, left);
     std::copy_n(audio.getReadPointer(instance->getTotalNumOutputChannels() == 1 ? 0 : 1), frames, right);
 }

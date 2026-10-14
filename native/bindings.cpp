@@ -124,10 +124,20 @@ PYBIND11_MODULE(_vcpi_native, module) {
             return pythonScalar(result);
         }, py::arg("name"), py::arg("value"))
         .def("load_preset", &Plugin::loadPreset, py::arg("path"), py::call_guard<py::gil_scoped_release>())
+        .def("get_state", [](Plugin& plugin) {
+            juce::MemoryBlock result;
+            { py::gil_scoped_release release; result = plugin.getState(); }
+            return py::bytes(static_cast<const char*>(result.getData()), result.getSize());
+        })
         .def("load_state", [](Plugin& plugin, const py::bytes& state) {
             const std::string data = state;
             py::gil_scoped_release release;
             plugin.loadState(data);
+        }, py::arg("state"))
+        .def("load_saved_state", [](Plugin& plugin, const py::bytes& state) {
+            const std::string data = state;
+            py::gil_scoped_release release;
+            plugin.loadSavedState(data);
         }, py::arg("state"));
     py::class_<Transport, std::shared_ptr<Transport>>(module, "Transport")
         .def(py::init<const std::string&, int, bool>(), py::arg("path"), py::arg("frames"), py::arg("create"), py::call_guard<py::gil_scoped_release>())

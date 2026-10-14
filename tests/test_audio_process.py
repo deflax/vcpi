@@ -1,15 +1,19 @@
 """Real spawned-owner regressions without opening audio or MIDI hardware."""
 
 import json
+import math
 import multiprocessing
 import os
 import signal
+import platform
 import struct
+import sys
 import tempfile
 import threading
 import unittest
 import wave
 from pathlib import Path
+from unittest.mock import patch
 
 from core.audio_process import AudioProcessError
 from core.host import VcpiCore
@@ -38,6 +42,9 @@ class AudioProcessTests(unittest.TestCase):
         host.engine.enqueue_master_gain(0.7)
         host.save_session()
         saved = json.loads(host.session_path.read_text())
+        self.assertEqual(saved["version"], 2)
+        self.assertNotIn("params", saved["slots"][0])
+        self.assertNotIn("native_state", saved["slots"][0])
         self.assertEqual(saved["slots"][0]["gain"], 0.25)
         self.assertFalse(saved["slots"][0]["muted"])
         self.assertTrue(saved["slots"][0]["solo"])
@@ -53,6 +60,57 @@ class AudioProcessTests(unittest.TestCase):
         self.assertEqual(restored.channel_map, {3: 0})
         self.assertEqual(restored.engine.master_gain, 0.7)
         self.assertIsNone(restored.audio_output_name)
+
+    def test_native_session_chunks_round_trip_all_rpc_targets_without_parameter_replay(self):
+        fixture_root = Path(__file__).resolve().parents[1] / "vst3"
+        instrument_path = fixture_root / "Surge XT.vst3"
+        effect_path = fixture_root / "DragonflyRoomReverb.vst3"
+        if sys.platform == "darwin":
+            binary_suffix = Path("Contents/MacOS")
+        elif sys.platform.startswith("linux"):
+            architecture = {"arm64": "aarch64", "amd64": "x86_64"}.get(
+                platform.machine(), platform.machine())
+            binary_suffix = Path("Contents") / f"{architecture}-linux"
+        else:
+            self.skipTest("native audio supports Linux and macOS")
+        if not all((bundle / binary_suffix).is_dir()
+                   for bundle in (instrument_path, effect_path)):
+            self.skipTest("fetch native Surge XT and DragonflyRoomReverb bundles")
+        host = self.host
+        host.load_instrument(0, str(instrument_path))
+        host.load_effect(str(effect_path), 0)
+        host.load_effect(str(effect_path), None)
+        targets = ((0, None), (0, 0), (None, 0))
+        expected = {}
+        for slot_index, fx_index in targets:
+            plugin = host.engine._plugin(slot_index, fx_index)
+            name = next(
+                name for name, parameter in plugin.parameters.items()
+                if parameter.kind == "float" and parameter.is_automatable
+                and len(parameter.range) == 2
+                and all(math.isfinite(value) for value in parameter.range)
+                and parameter.range[0] < parameter.range[1])
+            low, high = plugin.parameters[name].range
+            actual = host.engine.set_parameter(
+                slot_index, name, low + (high - low) * 0.3, fx_index)
+            expected[(slot_index, fx_index)] = (name, actual)
+        host.save_session()
+        saved = json.loads(host.session_path.read_text())
+        entries = (saved["slots"][0], saved["slots"][0]["effects"][0],
+                   saved["master_effects"][0])
+        for entry, target in zip(entries, targets):
+            # A conflicting, valid legacy value must never override the chunk.
+            name, actual = expected[target]
+            parameter = host.engine._plugin(*target).parameters[name]
+            entry["params"] = {name: parameter.range[1]}
+        host.session_path.write_text(json.dumps(saved))
+        host.load_wav(1, str(self.sample))
+        restored = VcpiCore(session_path=str(host.session_path))
+        self.addCleanup(restored.engine.shutdown)
+        restored.restore_session()
+        for (slot_index, fx_index), (name, actual) in expected.items():
+            plugin = restored.engine._plugin(slot_index, fx_index)
+            self.assertAlmostEqual(plugin.values[name], actual)
 
     def test_retired_instance_inputs_cannot_change_replacement_state(self):
         host = self.host
@@ -172,6 +230,21 @@ class AudioProcessTests(unittest.TestCase):
         self.assertTrue(all(not thread.is_alive() for thread in host.engine._threads))
         with self.assertRaises(ProcessLookupError):
             os.kill(slot.worker_pid, 0)
+
+    @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "requires POSIX suspension")
+    def test_large_state_send_timeout_is_terminal_and_releases_transfer_thread(self):
+        engine = self.host.engine
+        os.kill(engine.owner_pid, signal.SIGSTOP)
+        with self.assertRaises(AudioProcessError):
+            engine._rpc("load_plugin_state", {
+                "slot_index": 0, "fx_index": None,
+                "state": b"x" * (1024 * 1024),
+            }, timeout=0.05)
+        with self.assertRaises(AudioProcessError):
+            engine.set_master_gain(0.4)
+        engine.shutdown()
+        self.assertFalse(engine._process.is_alive())
+        self.assertTrue(all(not thread.is_alive() for thread in engine._threads))
 
     @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "requires POSIX process suspension")
     def test_timed_out_rpc_is_terminal_not_a_late_accepted_change(self):

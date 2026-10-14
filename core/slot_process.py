@@ -19,6 +19,9 @@ from multiprocessing.connection import wait as wait_connections
 from core.audio_state import capture_plugin
 from core.audio_deps import require_native
 from core.models import InstrumentSlot, NUM_SLOTS
+from core.state_transport import (
+    encode_native_message, receive_frame, send_frame, validate_native_message,
+)
 
 
 MIDI_CAPACITY = 4096
@@ -52,22 +55,26 @@ def _encode(value, limit):
 
 
 
-def _capture_native_plugin(plugin, values, readers):
-    snapshot = capture_plugin(plugin, values, readers)
+def _capture_native_plugin(plugin, values, readers, *, capture_native_state=False):
+    snapshot = capture_plugin(plugin, values, readers,
+                              capture_native_state=capture_native_state)
     # Native object addresses are unique only within a process. Snapshot
     # identities must not collide with another slot or the owner's master FX.
     snapshot.token = (os.getpid() << 64) | snapshot.token
     return snapshot
 
 
-def _slot_state(owner, index):
+def _slot_state(owner, index, *, capture_native_state=False):
     slot = owner.engine.slots[index]
     values, readers = {}, {}
     state = {
         "name": slot.name,
         "path": slot.path,
-        "plugin": _capture_native_plugin(slot.plugin, values, readers),
-        "effects": [_capture_native_plugin(effect, values, readers) for effect in slot.effects],
+        "plugin": _capture_native_plugin(slot.plugin, values, readers,
+                                         capture_native_state=capture_native_state),
+        "effects": [_capture_native_plugin(effect, values, readers,
+                                           capture_native_state=capture_native_state)
+                    for effect in slot.effects],
         "midi_channels": set(slot.midi_channels),
         "gain": float(slot.gain),
         "muted": bool(slot.muted),
@@ -154,6 +161,9 @@ def _execute(owner, index, operation, arguments):
         if arguments:
             raise TypeError("sync_state takes no arguments")
         result = None
+    elif operation == "load_plugin_state":
+        owner.engine.load_plugin_state(slot_index=index, **arguments)
+        result = None
     elif operation in ("load_effect", "remove_effect"):
         getattr(owner, operation)(slot_index=index, **arguments)
         result = None
@@ -168,7 +178,12 @@ def _execute(owner, index, operation, arguments):
     owner.engine._applied_updates.clear()
     reply = {"ok": True, "result": result, "updates": updates}
     if operation not in {"set_parameter", "set_parameters"}:
-        reply["state"] = _slot_state(owner, index)
+        reply["state"] = _slot_state(
+            owner, index, capture_native_state=operation == "sync_state")
+        if operation == "load_plugin_state":
+            fx_index = arguments.get("fx_index")
+            reply["result"] = (reply["state"]["plugin"] if fx_index is None
+                               else reply["state"]["effects"][fx_index])
     return reply
 
 
@@ -201,8 +216,12 @@ def _slot_owner(sample_rate, frames, index, operation, arguments,
         while True:
             if not control.poll(0.05):
                 continue
-            request = pickle.loads(control.recv_bytes(CONTROL_LIMIT))
+            request = receive_frame(control, CONTROL_LIMIT, native_state=True)
             operation = request["operation"]
+            if operation == "load_plugin_state":
+                validate_native_message(request, CONTROL_LIMIT)
+            else:
+                _encode(request, CONTROL_LIMIT)
             try:
                 # DSP/control ownership is serialized by the native Plugin.
                 # The barrier also orders snapshots after already-issued MIDI.
@@ -210,7 +229,8 @@ def _slot_owner(sample_rate, frames, index, operation, arguments,
                 if operation == "shutdown":
                     stopping.set()
                 reply = _execute(owner, index, operation, request["arguments"])
-                data = _encode(reply, STATE_LIMIT)
+                data = (encode_native_message(reply, STATE_LIMIT)
+                        if operation == "sync_state" else _encode(reply, STATE_LIMIT))
             except Exception as error:
                 fatal = isinstance(error, (TimeoutError, BufferError, SlotProcessError))
                 data = _encode({"ok": False, "error": str(error),
@@ -220,7 +240,7 @@ def _slot_owner(sample_rate, frames, index, operation, arguments,
                 if fatal:
                     return
             else:
-                control.send_bytes(data)
+                send_frame(control, data, STATE_LIMIT)
                 if operation == "shutdown":
                     return
     except (EOFError, BrokenPipeError):
@@ -332,8 +352,8 @@ class SlotWorker:
             data, done, outcome = job
             try:
                 if data is not None:
-                    self._control.send_bytes(data)
-                outcome.append(pickle.loads(self._control.recv_bytes(STATE_LIMIT)))
+                    send_frame(self._control, data, CONTROL_LIMIT)
+                outcome.append(receive_frame(self._control, STATE_LIMIT, native_state=True))
             except Exception as error:
                 outcome.append(error)
             finally:
@@ -401,7 +421,9 @@ class SlotWorker:
             raise SlotProcessError(self.failure or "slot process is shut down")
         if self._rpc_active:
             raise RuntimeError("slot requests cannot be nested")
-        data = _encode({"operation": operation, "arguments": arguments}, CONTROL_LIMIT)
+        message = {"operation": operation, "arguments": arguments}
+        data = (encode_native_message(message, CONTROL_LIMIT)
+                if operation == "load_plugin_state" else _encode(message, CONTROL_LIMIT))
         timeout = (PARAMETER_TIMEOUT if operation in {
             "set_parameter", "set_parameters", "sync_state"} else REQUEST_TIMEOUT)
         self._rpc_active = True

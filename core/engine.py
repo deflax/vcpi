@@ -264,6 +264,34 @@ class AudioEngine:
     def set_parameter(self, slot_index, name, value, fx_index=None):
         return self._submit_control("parameter", (slot_index, fx_index, name, value), True)
 
+    def load_plugin_state(self, slot_index, state, fx_index=None):
+        """Restore an opaque chunk on its native control owner."""
+        from core.state_transport import validate_native_state
+
+        validate_native_state(state)
+        if threading.get_ident() != self._owner_thread:
+            raise RuntimeError("plugin state must be loaded by the audio owner")
+        if slot_index is None:
+            if self.running:
+                raise RuntimeError("master plugin state requires stopped audio")
+            effects = self.master_effects
+            if fx_index is None:
+                raise ValueError("master plugin state requires an effect index")
+        else:
+            slot = self._control_slot(slot_index)
+            if self.isolated_slots:
+                raise RuntimeError("isolated plugin state must be loaded by the slot owner")
+            effects = slot.effects
+        if fx_index is not None:
+            if not isinstance(fx_index, int) or not 0 <= fx_index < len(effects):
+                raise ValueError("effect index out of range")
+            plugin = effects[fx_index]
+        else:
+            plugin = slot.plugin
+        if self.runner is not None:
+            self.runner.barrier()
+        plugin.load_saved_state(state)
+
     def set_slot_state(self, slot_index, **fields):
         return self._submit_control("slot", (slot_index, fields), True)
 

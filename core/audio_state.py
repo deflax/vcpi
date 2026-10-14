@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from core.models import InstrumentSlot
@@ -36,6 +36,7 @@ class PluginSnapshot:
     path_to_plugin_file: str = ""
     parameters: dict[str, ParameterSnapshot] = field(default_factory=dict)
     values: dict = field(default_factory=dict)
+    native_state: bytes | None = None
 
 
 def plain_value(value, value_type=None):
@@ -61,10 +62,11 @@ def _attr(obj, name, default=None):
         return default
 
 
-def capture_plugin(plugin, values, readers):
-    """Inspect one plugin after its native owner's control barrier."""
+def capture_plugin(plugin, values, readers, *, capture_native_state=False):
+    """Inspect metadata; capture opaque state only at an explicit save barrier."""
     if isinstance(plugin, PluginSnapshot):
-        return plugin
+        return (plugin if capture_native_state or plugin.native_state is None
+                else replace(plugin, native_state=None))
     refresh_metadata = _attr(plugin, "_refresh_metadata")
     if refresh_metadata is not None:
         refresh_metadata()
@@ -81,6 +83,11 @@ def capture_plugin(plugin, values, readers):
         info_type=str(_attr(plugin, "info_type", "Unknown")),
         path_to_plugin_file=path,
     )
+    if capture_native_state:
+        from core.state_transport import validate_native_state
+
+        state = plugin.get_state()
+        snapshot.native_state = None if state is None else validate_native_state(state)
     raw_readers = {}
     for name, parameter in _attr(plugin, "parameters", {}).items():
         name = str(name)
@@ -113,7 +120,8 @@ def capture_plugin(plugin, values, readers):
     return snapshot
 
 
-def capture_state(owner, generations, epoch, devices, cached_master_effects=None):
+def capture_state(owner, generations, epoch, devices, cached_master_effects=None,
+                  *, capture_native_state=False):
     """Copy remote slot state; inspect native plugins only when stopped."""
     from core import audio_deps
 
@@ -131,8 +139,11 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
         slots.append({
             "name": slot.name,
             "path": slot.path,
-            "plugin": capture_plugin(slot.plugin, values, readers),
-            "effects": [capture_plugin(effect, values, readers) for effect in slot.effects],
+            "plugin": capture_plugin(slot.plugin, values, readers,
+                                     capture_native_state=capture_native_state),
+            "effects": [capture_plugin(effect, values, readers,
+                                       capture_native_state=capture_native_state)
+                        for effect in slot.effects],
             "midi_channels": set(slot.midi_channels),
             "gain": float(slot.gain),
             "muted": bool(slot.muted),
@@ -147,8 +158,11 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
             "buffering_samples": slot.buffering_samples,
         })
     master_effects = (
-        [capture_plugin(effect, values, readers) for effect in engine.master_effects]
-        if cached_master_effects is None else cached_master_effects
+        [capture_plugin(effect, values, readers, capture_native_state=capture_native_state)
+         for effect in engine.master_effects]
+        if cached_master_effects is None else
+        [capture_plugin(effect, values, readers, capture_native_state=capture_native_state)
+         for effect in cached_master_effects]
     )
     if cached_master_effects is None:
         engine.parameter_values = values

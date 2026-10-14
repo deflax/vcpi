@@ -58,7 +58,9 @@ public:
     Scalar getParameter(const std::string& key);
     Scalar setParameter(const std::string& key, const Scalar& value);
     void loadPreset(const std::string& path);
+    juce::MemoryBlock getState();
     void loadState(const std::string& data);
+    void loadSavedState(const std::string& data);
     bool isEffect() const noexcept { return effect; }
     bool compatible(double rate, int size) const noexcept { return sampleRate == rate && frames == size; }
     bool tryAcquire() noexcept { return ownership.tryAcquire(); }
@@ -78,6 +80,7 @@ private:
     Scalar parameterValue(const ParameterInfo& info) const;
     ParameterInfo& parameter(const std::string& key);
     void discoverParameters();
+    void applyState(const std::string& data);
     void loadWav(const juce::File& path);
     void renderWav(float* left, float* right, const juce::MidiBuffer& midi) noexcept;
     // Declared first, destroyed last. JUCE's own scoped reference count keeps
@@ -88,6 +91,7 @@ private:
     const double sampleRate;
     const int frames;
     bool effect = false, wav = false;
+    bool parametersPending = false;
     PluginMetadata description;
     std::unique_ptr<juce::AudioPluginInstance> instance;
     juce::AudioBuffer<float> audio;

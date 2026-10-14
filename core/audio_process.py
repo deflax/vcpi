@@ -20,6 +20,10 @@ from multiprocessing.connection import wait as wait_connections
 
 from core.audio_state import capture_state, hydrate_slots
 from core.models import NUM_SLOTS
+from core.state_transport import (
+    encode_native_message, receive_frame, send_frame, validate_native_message,
+    validate_native_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -256,21 +260,24 @@ class _OwnerRuntime:
                     setattr(slot, key, value)
                 self.engine._applied_updates.append(("slot", index, changed))
 
-    def snapshot(self, inspect_master=False):
+    def snapshot(self, inspect_master=False, *, capture_native_state=False):
         self.engine.refresh_health()
         state = capture_state(
             self.owner, self.generations, self.epoch, self.devices,
-            cached_master_effects=None if inspect_master else self.master_snapshots)
+            cached_master_effects=None if inspect_master else self.master_snapshots,
+            capture_native_state=capture_native_state)
         if inspect_master:
             self.master_snapshots = state["master_effects"]
         return state
 
-    def state_reply(self, result=None, inspect_master=False):
+    def state_reply(self, result=None, inspect_master=False, *, capture_native_state=False):
         self.send_updates()
         self.epoch += 1
-        state = self.snapshot(inspect_master)
-        return _encode({"ok": True, "result": result, "state": state,
-                        "update_serial": self.update_serial}, STATE_LIMIT)
+        state = self.snapshot(inspect_master, capture_native_state=capture_native_state)
+        reply = {"ok": True, "result": result, "state": state,
+                 "update_serial": self.update_serial}
+        return (encode_native_message(reply, STATE_LIMIT) if capture_native_state
+                else _encode(reply, STATE_LIMIT))
 
     def shutdown_slots(self):
         for index, slot in enumerate(self.engine.slots):
@@ -364,6 +371,20 @@ class _OwnerRuntime:
             forwarded = {key: value for key, value in arguments.items() if key != "slot_index"}
             self.slot_request(index, operation, **forwarded)
             return self.state_reply()
+        if operation == "load_plugin_state":
+            index = arguments.get("slot_index")
+            if index is not None:
+                forwarded = {key: value for key, value in arguments.items()
+                             if key != "slot_index"}
+                result = self.slot_request(index, operation, **forwarded)
+                return self.state_reply(result)
+            with self.engine.edit_effects():
+                self.engine.apply_pending_controls()
+                self.send_updates()
+                self.engine.load_plugin_state(**arguments)
+                state = self.snapshot(inspect_master=True)
+                result = state["master_effects"][arguments["fx_index"]]
+                return self.state_reply(result)
         if operation == "sync_state":
             if self.engine.running:
                 self.engine.flush_controls()
@@ -378,7 +399,7 @@ class _OwnerRuntime:
                 if slot is not None:
                     self.slot_request(index, "sync_state")
             if not self.engine.master_effects:
-                return self.state_reply()
+                return self.state_reply(capture_native_state=True)
         if operation in LIFECYCLE_OPERATIONS or operation == "sync_state":
             # Only native master-bus inspection/chain edits still need the
             # entire device stopped. Slot native work lives in its own child.
@@ -387,7 +408,8 @@ class _OwnerRuntime:
                 self.send_updates()
                 if operation != "sync_state":
                     getattr(self.owner, operation)(**arguments)
-                return self.state_reply(inspect_master=True)
+                return self.state_reply(
+                    inspect_master=True, capture_native_state=operation == "sync_state")
         if operation == "start_audio":
             self.engine.stop()
             self.engine.apply_pending_controls()
@@ -469,8 +491,12 @@ class _OwnerRuntime:
             self.apply_slot_parameters()
             self.publish_slot_health()
             if self.control.poll():
-                request = pickle.loads(self.control.recv_bytes(CONTROL_LIMIT))
+                request = receive_frame(self.control, CONTROL_LIMIT, native_state=True)
                 operation = request["operation"]
+                if operation == "load_plugin_state":
+                    validate_native_message(request, CONTROL_LIMIT)
+                else:
+                    _encode(request, CONTROL_LIMIT)
                 try:
                     self.await_inputs(request["after"])
                     while self.pending_parameters:
@@ -490,7 +516,7 @@ class _OwnerRuntime:
                         # its ownership process instead of allowing late writes.
                         os._exit(1)
                     continue
-                self.control.send_bytes(reply)
+                send_frame(self.control, reply, STATE_LIMIT)
                 if operation == "shutdown":
                     return
             for _ in range(64):
@@ -835,16 +861,54 @@ class RemoteAudioEngine:
         finally:
             self._rpc_lock.release()
 
+    def _exchange_native(self, message, operation, timeout):
+        # Large pipe writes and multipart reads can block after initial
+        # readiness. Keep the entire transfer under the caller's deadline.
+        done, outcome = threading.Event(), []
+
+        def transfer():
+            try:
+                send_frame(self._control, message, CONTROL_LIMIT)
+                outcome.append(receive_frame(
+                    self._control, STATE_LIMIT,
+                    native_state=operation == "sync_state"))
+            except Exception as error:
+                outcome.append(error)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=transfer, daemon=True,
+                                  name="vcpi-native-state-transfer")
+        self._threads.append(thread)
+        thread.start()
+        try:
+            if not done.wait(timeout):
+                raise TimeoutError(f"audio operation '{operation}' timed out")
+            result = outcome[0]
+            if isinstance(result, Exception):
+                raise result
+            return result
+        finally:
+            if done.is_set():
+                thread.join(timeout=1)
+                if not thread.is_alive():
+                    self._threads.remove(thread)
+
     def _exchange(self, operation, arguments, timeout):
         self._check_owner(allow_closing=operation == "shutdown")
         with self._input_lock:
             after = self._last_input
-        message = _encode({"operation": operation, "arguments": arguments, "after": after}, CONTROL_LIMIT)
+        request = {"operation": operation, "arguments": arguments, "after": after}
+        message = (encode_native_message(request, CONTROL_LIMIT)
+                   if operation == "load_plugin_state" else _encode(request, CONTROL_LIMIT))
         try:
-            self._control.send_bytes(message)
-            if not self._control.poll(timeout):
-                raise TimeoutError(f"audio operation '{operation}' timed out")
-            reply = pickle.loads(self._control.recv_bytes(STATE_LIMIT))
+            if operation in {"sync_state", "load_plugin_state"}:
+                reply = self._exchange_native(message, operation, timeout)
+            else:
+                send_frame(self._control, message, CONTROL_LIMIT)
+                if not self._control.poll(timeout):
+                    raise TimeoutError(f"audio operation '{operation}' timed out")
+                reply = receive_frame(self._control, STATE_LIMIT)
         except (EOFError, OSError, TimeoutError, pickle.UnpicklingError) as error:
             self._fail(f"audio operation '{operation}' failed: {error}", terminate=True)
             raise AudioProcessError(self._failure) from error
@@ -874,7 +938,7 @@ class RemoteAudioEngine:
 
     def request(self, operation, **arguments):
         timeout = (120 if operation in LIFECYCLE_OPERATIONS
-                   or operation in {"start_audio", "sync_state"} else 10)
+                   or operation in {"start_audio", "sync_state", "load_plugin_state"} else 10)
         result = self._rpc(operation, arguments, timeout)
         if operation in {"route", "unroute"}:
             with self._state_condition:
@@ -886,6 +950,12 @@ class RemoteAudioEngine:
 
     def set_parameter(self, slot_index, name, value, fx_index=None):
         return self.request("set_parameter", slot_index=slot_index, name=name, value=value, fx_index=fx_index)
+
+    def load_plugin_state(self, slot_index, state, fx_index=None):
+        """Load one saved native chunk and return refreshed lightweight metadata."""
+        validate_native_state(state)
+        return self.request("load_plugin_state", slot_index=slot_index,
+                            state=state, fx_index=fx_index)
 
     def set_parameters(self, slot_index, params, fx_index=None):
         """Restore bounded ordered batches, returning applied values and errors."""
