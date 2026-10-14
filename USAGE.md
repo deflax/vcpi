@@ -189,6 +189,7 @@ All audio operations are subcommands of `audio`:
 | `audio start [device]` | Start audio engine |
 | `audio stop` | Stop audio engine |
 | `audio devices` | List audio devices and their input/output channel capacities |
+| `audio diagnose` | Show selected output, mixer controls, MIDI delivery counters, and lifetime signal peaks |
 
 The daemon spawns an audio-output process and a persistent native process per
 loaded slot. Command parsing/display work, MIDI ports, Link, sequencing, and
@@ -209,6 +210,66 @@ device metadata, including CoreAudio devices on macOS.
 Running `audio start` again stops and closes the previous output stream before
 opening the new one, including when changing devices. If opening or starting
 the replacement fails, audio remains stopped.
+
+#### Diagnosing a running but silent engine
+
+`audio diagnose` reads native engine/slot transport counters and cached slot
+metadata through the audio owner's control channel. It does not inspect plugins,
+refresh the device catalog, or stop rendering. The output includes the selected
+output name/backend, running state, master gain, callback errors/underruns, and
+each loaded slot's gain, mute/solo state, worker failure, missing blocks, and:
+
+- **MIDI sent / consumed / pending:** messages published to that slot's native
+  MIDI FIFO, messages dequeued by its renderer, and messages still queued.
+  Consumption establishes delivery to the renderer, not that the instrument
+  accepted the note or produced sound.
+- **Slot audio peak:** highest absolute rendered sample after slot inserts,
+  before mixer gain/mute/solo.
+- **Output peak:** highest absolute final sample submitted to the output
+  callback's device buffer, after mixing, master FX/gain, clipping, and failure
+  silencing. This does not measure what the physical speakers play.
+
+Peaks are **cumulative high-water marks**, not current meters: the output peak
+is retained since audio-owner creation, and each slot peak since that slot's
+transport was created. A short test note remains visible after its note-off.
+Stopping/restarting audio or changing gain does not reset them. Replacing a slot
+starts that slot's peak anew; restarting the daemon creates a new output owner.
+An already nonzero peak cannot prove that a later note produced sound, and an
+unchanged peak may simply mean that the later signal was quieter.
+
+For a concrete test, use an already loaded instrument slot and take before/after
+snapshots (replace `1` with its slot number):
+
+```text
+vcpi> audio diagnose
+vcpi> note 1 60 100 1000
+# Wait at least a second for the note and note-off to reach the renderer.
+vcpi> audio diagnose
+```
+
+Compare the MIDI counters and inspect the signal chain in order:
+
+1. If output is not running or a worker failure is reported, address that
+   failure first. Zero render errors alone do not establish an audible signal.
+2. If that slot's sent count does not advance, the test did not reach its native
+   MIDI FIFO. If sent advances but consumed does not catch up and pending
+   remains nonzero, delivery is stalled before the slot renderer.
+3. If consumed advances but the slot peak is still zero, the rendered slot has
+   not produced a nonzero sample during its lifetime. Inspect the instrument's
+   preset/note range and slot insert chain; correct MIDI delivery is not enough.
+4. If the slot peak is nonzero but output peak is still zero, inspect slot gain,
+   mute, other slots' solo flags, master gain, and master FX. A solo on another
+   slot can exclude this slot even when its own `solo` flag is false.
+5. If output peak is nonzero but playback remains inaudible, native output has
+   produced signal at some point. Check the displayed selected device against
+   the intended speakers/headphones, then macOS/device volume, output routing,
+   and physical connections. This result does not certify the current note or
+   hardware playback.
+
+When reporting silence, include both `audio diagnose` snapshots and the exact
+test-note command. If old peaks obscure a fresh test, use a newly loaded slot
+for its peak, or restart the daemon to reset the output owner's peak.
+
 
 All slot audio uses preallocated shared-memory stereo buffers with sequence
 tags and nonblocking ownership checks. Each callback consumes the previous

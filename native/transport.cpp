@@ -14,7 +14,7 @@ static_assert(std::atomic<std::uint32_t>::is_always_lock_free, "Cross-process 32
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free, "Cross-process 64-bit atomic must be lock free");
 namespace {
 constexpr std::uint64_t transportMagic = 0x5643504941554431ULL;
-constexpr std::uint32_t transportVersion = 1;
+constexpr std::uint32_t transportVersion = 2;
 std::runtime_error systemError(const char* operation) {
     return std::runtime_error(std::string(operation) + ": " + std::strerror(errno));
 }
@@ -81,9 +81,12 @@ TransportStats Transport::stats() const {
     result.submitted = header->submitted.load(std::memory_order_acquire);
     result.progress = header->progress.load(std::memory_order_acquire);
     result.misses = header->misses.load(std::memory_order_relaxed);
+    result.audioPeak = detail::loadPeak(header->audioPeakBits);
     // Read consumer first, so a racing dequeue can't make pending underflow.
     const auto read = header->midiRead.load(std::memory_order_acquire);
     const auto write = header->midiWrite.load(std::memory_order_acquire);
+    result.midiSent = write;
+    result.midiConsumed = read;
     result.midiPending = std::min<std::uint32_t>(write - read, midiCapacity);
     if (header->failureState.load(std::memory_order_acquire) == 2) result.failure = header->failure.data();
     return result;
@@ -142,18 +145,29 @@ bool Transport::takeRequest(std::uint64_t& sequence, std::uint32_t& midiEnd) noe
 }
 bool Transport::submit(std::uint64_t sequence, const float* left, const float* right) noexcept {
     bool published = false;
+    float peak = 0.0f;
     for (std::size_t i = 0; i < handoffCells; ++i) {
         auto& cell = header->audio[i];
         std::uint32_t free = 0;
         if (!cell.state.compare_exchange_strong(free, 1, std::memory_order_acquire, std::memory_order_relaxed)) continue;
         auto* samples = cellAudio(i);
-        std::copy_n(left, frames, samples);
-        std::copy_n(right, frames, samples + frames);
+        for (int frame = 0; frame < frames; ++frame) {
+            const auto l = left[frame], r = right[frame];
+            samples[frame] = l;
+            samples[frames + frame] = r;
+            peak = detail::peakSample(detail::peakSample(peak, l), r);
+        }
         cell.sequence = sequence;
         cell.state.store(2, std::memory_order_release);
         published = true;
         break;
     }
+    if (!published) {
+        // A rendered block still supplies evidence even when the handoff is full.
+        for (int frame = 0; frame < frames; ++frame)
+            peak = detail::peakSample(detail::peakSample(peak, left[frame]), right[frame]);
+    }
+    detail::storePeak(header->audioPeakBits, peak);
     header->progress.fetch_add(1, std::memory_order_relaxed);
     header->submitted.store(sequence, std::memory_order_release);
     return published;

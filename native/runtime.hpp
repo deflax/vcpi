@@ -48,6 +48,7 @@ struct EngineStats {
     int eligibleSlots = 0;
     std::uint64_t underruns = 0, renderErrors = 0, callbackCount = 0, deadlineMisses = 0;
     double lastCallbackMs = 0.0, peakCallbackMs = 0.0, blockPeriodMs = 0.0;
+    float outputPeak = 0.0f;
     std::string backendLabel, outputName;
 };
 class Engine {
@@ -115,6 +116,7 @@ private:
     bool closed = false;
     std::atomic<int> eligibleSlots{0};
     std::atomic<std::uint64_t> underruns{0}, renderErrors{0}, callbackCount{0}, deadlineMisses{0}, lastCallbackNs{0}, peakCallbackNs{0};
+    std::atomic<std::uint32_t> outputPeakBits{0};
     std::string backendLabel, outputName;
 };
 } // namespace vcpi

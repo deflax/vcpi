@@ -176,10 +176,13 @@ std::vector<float> SlotRunner::renderOnce() {
     collectMidi(transport->shared().midiWrite.load(std::memory_order_acquire));
     process();
     std::vector<float> result(static_cast<std::size_t>(frames) * 2);
+    float peak = 0.0f;
     for (int frame = 0; frame < frames; ++frame) {
         result[static_cast<std::size_t>(frame) * 2] = left[frame];
         result[static_cast<std::size_t>(frame) * 2 + 1] = right[frame];
+        peak = detail::peakSample(detail::peakSample(peak, left[frame]), right[frame]);
     }
+    detail::storePeak(transport->shared().audioPeakBits, peak);
     transport->shared().progress.fetch_add(1, std::memory_order_relaxed);
     return result;
 }
@@ -473,15 +476,21 @@ void Engine::render(float* output) noexcept {
             }
         }
     }
+    float peak = 0.0f;
     for (int frame = 0; frame < frames; ++frame) {
         const auto l = left[frame] * masterGain, r = right[frame] * masterGain;
-        output[static_cast<std::size_t>(frame) * 2] = std::isfinite(l) ? std::clamp(l, -1.0f, 1.0f) : 0.0f;
-        output[static_cast<std::size_t>(frame) * 2 + 1] = std::isfinite(r) ? std::clamp(r, -1.0f, 1.0f) : 0.0f;
+        const auto finalLeft = std::isfinite(l) ? std::clamp(l, -1.0f, 1.0f) : 0.0f;
+        const auto finalRight = std::isfinite(r) ? std::clamp(r, -1.0f, 1.0f) : 0.0f;
+        output[static_cast<std::size_t>(frame) * 2] = finalLeft;
+        output[static_cast<std::size_t>(frame) * 2 + 1] = finalRight;
+        peak = std::max(peak, std::max(std::abs(finalLeft), std::abs(finalRight)));
     }
     // A control timeout may arrive while third-party master DSP is executing.
     // Its result must never be published as a late audible control success.
     if (failure.load(std::memory_order_acquire) != Failure::None)
         std::fill_n(output, static_cast<std::size_t>(frames) * 2, 0.0f);
+    else
+        detail::storePeak(outputPeakBits, peak);
     recordTiming(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - started).count()));
 }
 void Engine::recordTiming(std::uint64_t elapsed) noexcept {
@@ -511,6 +520,7 @@ EngineStats Engine::stats() {
     result.lastCallbackMs = lastCallbackNs.load(std::memory_order_relaxed) / 1.0e6;
     result.peakCallbackMs = peakCallbackNs.load(std::memory_order_relaxed) / 1.0e6;
     result.blockPeriodMs = frames / sampleRate * 1000.0;
+    result.outputPeak = detail::loadPeak(outputPeakBits);
     result.backendLabel = backendLabel;
     result.outputName = outputName;
     return result;

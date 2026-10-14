@@ -304,6 +304,27 @@ class _OwnerRuntime:
             "audio_devices": self.devices,
         }
 
+    def diagnose(self):
+        """Read native signal counters and cached mixer metadata without plugin IPC."""
+        output = dict(self.engine.stats())
+        output["master_gain"] = float(self.engine.master_gain)
+        slots = []
+        for index, slot in enumerate(self.engine.slots):
+            if slot is None:
+                continue
+            worker = slot.render_owner
+            stats = dict(worker.transport.stats())
+            stats.update({
+                "index": index + 1,
+                "name": slot.name,
+                "gain": float(slot.gain),
+                "muted": bool(slot.muted),
+                "solo": bool(slot.solo),
+                "worker_failure": worker.failure,
+            })
+            slots.append(stats)
+        return {"output": output, "slots": slots}
+
     def execute(self, operation, arguments):
         if operation in {"load_instrument", "load_wav", "load_vcv", "load_vcv_patch"}:
             from core.slot_process import SlotWorker
@@ -417,6 +438,8 @@ class _OwnerRuntime:
         elif operation == "unroute":
             self.engine.unroute(**arguments)
             result = dict(self.engine.channel_map)
+        elif operation == "diagnose":
+            result = self.diagnose()
         elif operation == "shutdown":
             if self.engine.running:
                 self.engine.flush_controls()

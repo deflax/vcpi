@@ -58,6 +58,9 @@ py::dict transportDict(const TransportStats& info) {
     result["misses"] = info.misses;
     result["failure"] = info.failure;
     result["midi_pending"] = info.midiPending;
+    result["midi_sent"] = info.midiSent;
+    result["midi_consumed"] = info.midiConsumed;
+    result["audio_peak"] = info.audioPeak;
     return result;
 }
 py::dict engineDict(const EngineStats& info) {
@@ -73,6 +76,7 @@ py::dict engineDict(const EngineStats& info) {
     result["block_period_ms"] = info.blockPeriodMs;
     result["backend_label"] = info.backendLabel;
     result["output_name"] = info.outputName.empty() ? py::object(py::none()) : py::object(py::str(info.outputName));
+    result["output_peak"] = info.outputPeak;
     return result;
 }
 py::array_t<float> audioArray(std::vector<float> samples) {
@@ -201,7 +205,7 @@ PYBIND11_MODULE(_vcpi_native, module) {
         py::dict result;
         result["engine"] = "native C++17 / PortAudio";
         result["plugin_host"] = "JUCE 8.0.6 VST3";
-        result["transport_version"] = 1;
+        result["transport_version"] = 2;
         return result;
     });
 }

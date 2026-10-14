@@ -84,6 +84,7 @@ class NativeAudioTests(unittest.TestCase):
         self.engine.set_slot_state(7, muted=False, solo=False)
         self.engine.set_master_gain(8)
         np.testing.assert_allclose(self.block(), 1, atol=1e-6)
+        self.assertAlmostEqual(self.engine.stats()["output_peak"], 1.0)
 
     def test_muted_slot_still_consumes_midi_and_advances(self):
         self.slot(0, velocity=64)
@@ -92,6 +93,60 @@ class NativeAudioTests(unittest.TestCase):
         np.testing.assert_array_equal(self.block(), 0)
         self.engine.set_slot_state(0, muted=False)
         np.testing.assert_allclose(self.block(), 0.25 * 64 / 127, atol=1e-6)
+
+    def test_brief_negative_signal_peaks_survive_later_silent_blocks(self):
+        with wave.open(str(self.sample), "wb") as sample:
+            sample.setnchannels(1)
+            sample.setsampwidth(2)
+            sample.setframerate(44100)
+            sample.writeframes(struct.pack("<h", -16384) + bytes(2 * 65535))
+        slot = self.slot(0)
+        self.engine.set_master_gain(0.5)
+        np.testing.assert_array_equal(self.block(), 0)
+        self.assertAlmostEqual(slot.render_owner.transport.stats()["audio_peak"], 0.5)
+        self.assertEqual(self.engine.stats()["output_peak"], 0)
+        audible = self.block()
+        self.assertAlmostEqual(float(audible[0, 0]), -0.25)
+        self.assertAlmostEqual(float(audible[0, 1]), -0.25)
+        np.testing.assert_array_equal(audible[1:], 0)
+        self.assertAlmostEqual(self.engine.stats()["output_peak"], 0.25)
+        for _ in range(3):
+            np.testing.assert_array_equal(self.block(), 0)
+        self.assertAlmostEqual(slot.render_owner.transport.stats()["audio_peak"], 0.5)
+        self.assertAlmostEqual(self.engine.stats()["output_peak"], 0.25)
+
+    def test_muted_slot_has_signal_peak_without_output_peak(self):
+        slot = self.slot(0)
+        self.engine.set_slot_state(0, muted=True)
+        np.testing.assert_array_equal(self.block(), 0)
+        np.testing.assert_array_equal(self.block(), 0)
+        self.assertAlmostEqual(slot.render_owner.transport.stats()["audio_peak"], 0.25)
+        self.assertEqual(self.engine.stats()["output_peak"], 0)
+
+    def test_midi_counters_track_publication_and_render_consumption(self):
+        plugin = NativePlugin(str(self.sample), 44100, 64, "wav")
+        transport = self.backend.Transport(str(self.root / "midi.mmap"), 64, True)
+        peer = self.backend.Transport(str(self.root / "midi.mmap"), 64, False)
+        runner = self.backend.SlotRunner(transport, plugin.native, 44100, 64)
+        self.runners.append((0, runner, transport))
+        stats = peer.stats()
+        self.assertEqual((stats["midi_sent"], stats["midi_consumed"], stats["midi_pending"]), (0, 0, 0))
+        transport.send_midi(bytes((0x90, 60, 127)))
+        stats = peer.stats()
+        self.assertEqual((stats["midi_sent"], stats["midi_consumed"], stats["midi_pending"]), (1, 0, 1))
+        runner.barrier()
+        stats = peer.stats()
+        self.assertEqual((stats["midi_sent"], stats["midi_consumed"], stats["midi_pending"]), (1, 0, 1))
+        np.testing.assert_allclose(runner.render_once(), 0.25, atol=1e-6)
+        stats = peer.stats()
+        self.assertEqual((stats["midi_sent"], stats["midi_consumed"], stats["midi_pending"]), (1, 1, 0))
+        self.assertAlmostEqual(stats["audio_peak"], 0.25)
+        transport.send_midi(bytes((0x80, 60, 0)))
+        stats = peer.stats()
+        self.assertEqual((stats["midi_sent"], stats["midi_consumed"], stats["midi_pending"]), (2, 1, 1))
+        runner.render_once()
+        stats = peer.stats()
+        self.assertEqual((stats["midi_sent"], stats["midi_consumed"], stats["midi_pending"]), (2, 2, 0))
 
     def test_generation_filter_and_retirement_discard_stopped_midi(self):
         slot = self.slot(0)

@@ -961,16 +961,17 @@ class HostCLI(cmd.Cmd):
     # -- audio ---------------------------------------------------------------
 
     def do_audio(self, arg):
-        """Audio commands: audio start [device] | audio stop | audio devices
+        """Audio commands: audio start [device] | audio stop | audio devices | audio diagnose
 
         Subcommands:
           audio start [device]  -- start audio engine
           audio stop            -- stop audio engine
           audio devices         -- list available output devices
+          audio diagnose        -- inspect MIDI delivery and lifetime signal peaks
         """
         parts = arg.strip().split()
         if not parts:
-            self._print("Usage: audio start [device] | audio stop | audio devices")
+            self._print("Usage: audio start [device] | audio stop | audio devices | audio diagnose")
             return
 
         sub = parts[0]
@@ -997,6 +998,49 @@ class HostCLI(cmd.Cmd):
                     f"({device['max_input_channels']} in, "
                     f"{device['max_output_channels']} out)"
                 )
+
+        elif sub == "diagnose":
+            try:
+                diagnosis = self.host.engine.request("diagnose")
+            except Exception as e:
+                self._print(f"Error: {e}")
+                return
+            output = diagnosis["output"]
+            self._print(
+                f"  Output: {output['output_name'] or '(not opened)'} "
+                f"| backend={output['backend_label']} "
+                f"| running={output['running']} "
+                f"| master gain={output['master_gain']:.3f}"
+            )
+            self._print(
+                f"  Callbacks={output['callback_count']} "
+                f"| render errors={output['render_errors']} "
+                f"| underruns={output['underruns']} "
+                f"| deadline misses={output['deadline_misses']}"
+            )
+            self._print("  Peaks are absolute-sample high-water marks, not current levels.")
+            self._print(
+                f"  Output peak since audio-owner creation "
+                f"(final device samples): {output['output_peak']:.6g}"
+            )
+            if not diagnosis["slots"]:
+                self._print("  No loaded slots.")
+            for slot in diagnosis["slots"]:
+                self._print(
+                    f"  Slot {slot['index']}: {slot['name']} "
+                    f"| gain={slot['gain']:.3f} "
+                    f"| muted={slot['muted']} | solo={slot['solo']}"
+                )
+                self._print(
+                    f"    MIDI sent={slot['midi_sent']} "
+                    f"consumed={slot['midi_consumed']} pending={slot['midi_pending']} "
+                    f"| missing blocks={slot['misses']}"
+                )
+                self._print(
+                    f"    Audio peak since slot creation "
+                    f"(before mixer gain/mute/solo): {slot['audio_peak']:.6g}"
+                )
+                self._print(f"    Worker failure: {slot['worker_failure'] or 'none'}")
 
         else:
             self._print(f"Unknown audio subcommand: {sub}")
