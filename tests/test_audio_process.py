@@ -149,6 +149,8 @@ class AudioProcessTests(unittest.TestCase):
         with self.assertRaises(AudioProcessError):
             host.engine.set_master_gain(0.9)
         with self.assertRaises(AudioProcessError):
+            host.save_session()
+        with self.assertLogs("core.host", level="WARNING"):
             host.shutdown()
         self.assertEqual(host.session_path.read_bytes(), previous)
         self.assertFalse(process.is_alive())

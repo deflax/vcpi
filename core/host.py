@@ -13,7 +13,7 @@ from typing import Optional
 from core import deps
 from controllers.akai_midimix import MidiMixController
 from controllers.midi_input import MidiInputController
-from core.audio_process import RemoteAudioEngine
+from core.audio_process import AudioProcessError, RemoteAudioEngine
 from core.link import LinkSync
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import InstrumentSlot, NUM_SLOTS
@@ -384,6 +384,14 @@ class VcpiCore:
             if save:
                 try:
                     self.save_session()
+                except AudioProcessError as exc:
+                    if self.engine.failure is None:
+                        save_error = exc
+                    else:
+                        logger.warning(
+                            "[Host] Skipping shutdown session save; preserving %s: %s",
+                            self.session_path, exc,
+                        )
                 except BaseException as exc:
                     save_error = exc
             cleanup_error = self._close_resources()

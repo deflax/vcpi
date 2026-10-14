@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core import deps
+from core.audio_process import AudioProcessError
 from core.engine import AudioEngine
 from core.models import InstrumentSlot
 from core.host import VcpiCore
@@ -29,6 +30,7 @@ class _ControlEngine(AudioEngine):
         self.control, self.owner_control = socket.socketpair()
         self.restore_interrupt = None
         self.snapshot_error = None
+        self.failure = None
         self.cleanup_error = None
 
     def add_state_listener(self, listener):
@@ -167,6 +169,20 @@ class HostShutdownTests(unittest.TestCase):
             failure = RuntimeError("native snapshot failed")
             host.engine.snapshot_error = failure
             with self.assertRaises(RuntimeError) as raised:
+                host.shutdown()
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(path.read_bytes(), original)
+            self._assert_closed(host)
+
+    def test_audio_save_error_is_not_ignored_without_terminal_owner_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.json"
+            original = b'{"version": 1}\n'
+            path.write_bytes(original)
+            host = self._host(path)
+            failure = AudioProcessError("audio control channel is busy")
+            host.engine.snapshot_error = failure
+            with self.assertRaises(AudioProcessError) as raised:
                 host.shutdown()
             self.assertIs(raised.exception, failure)
             self.assertEqual(path.read_bytes(), original)

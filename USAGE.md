@@ -612,6 +612,11 @@ after a terminal output-owner failure.
 
 `shutdown` saves before teardown, stops MIDI/sequencing and joins pending
 note-off timers, disables Link, then shuts down the output owner and slot children.
+If the output owner has terminally failed, shutdown warns that it cannot capture
+native state and preserves the existing session file instead of overwriting it
+with cached state. Changes since the last successful save are not persisted.
+Explicit `save` commands still fail when the owner is unavailable; unrelated
+save errors and cleanup failures remain errors.
 Aborted startup uses the Python API `host.shutdown(save=False)` instead, avoiding
 a session capture/write while still releasing resources. Plugin references and
 cyclic parameter caches are released on their native owner's main thread.
