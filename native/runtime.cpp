@@ -197,7 +197,7 @@ std::vector<DeviceInfo> devices() {
     result.reserve(static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i) {
         const auto* info = Pa_GetDeviceInfo(i);
-        if (info) result.push_back({info->name, info->maxOutputChannels, info->hostApi, i});
+        if (info) result.push_back({info->name, info->maxOutputChannels, info->hostApi, i, info->maxInputChannels});
     }
     return result;
 }

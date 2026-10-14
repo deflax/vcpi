@@ -39,7 +39,7 @@ private:
 };
 struct DeviceInfo {
     std::string name;
-    int maxOutputChannels = 0, hostapi = 0, index = 0;
+    int maxOutputChannels = 0, hostapi = 0, index = 0, maxInputChannels = 0;
 };
 std::vector<DeviceInfo> devices();
 std::vector<std::string> hostapis();

@@ -182,6 +182,7 @@ PYBIND11_MODULE(_vcpi_native, module) {
         for (const auto& info : result) {
             py::dict item;
             item["name"] = info.name;
+            item["max_input_channels"] = info.maxInputChannels;
             item["max_output_channels"] = info.maxOutputChannels;
             item["hostapi"] = info.hostapi;
             item["index"] = info.index;

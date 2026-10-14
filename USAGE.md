@@ -188,7 +188,7 @@ All audio operations are subcommands of `audio`:
 |---|---|
 | `audio start [device]` | Start audio engine |
 | `audio stop` | Stop audio engine |
-| `audio devices` | List available output devices |
+| `audio devices` | List audio devices and their input/output channel capacities |
 
 The daemon spawns an audio-output process and a persistent native process per
 loaded slot. Command parsing/display work, MIDI ports, Link, sequencing, and
@@ -202,6 +202,9 @@ operations. Python API entry points constructing `VcpiCore` must use the usual
 `audio devices` displays the cached device catalog, refreshed at audio-owner
 startup and while stopped during `audio start`/`audio stop`. After replugging
 devices, stop audio before using the catalog's current indexes.
+The catalog includes input-only devices; choose an entry with at least two
+output channels for stereo playback. Channel capacities come from PortAudio's
+device metadata, including CoreAudio devices on macOS.
 
 Running `audio start` again stops and closes the previous output stream before
 opening the new one, including when changing devices. If opening or starting
