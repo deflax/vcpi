@@ -189,7 +189,7 @@ All audio operations are subcommands of `audio`:
 | `audio start [device]` | Start audio engine |
 | `audio stop` | Stop audio engine |
 | `audio devices` | List audio devices and their input/output channel capacities |
-| `audio diagnose` | Show selected output, mixer controls, MIDI delivery counters, and lifetime signal peaks |
+| `audio diagnose` | Show selected output, mixer controls, realtime scheduling, MIDI delivery counters, and lifetime signal peaks |
 
 The daemon spawns an audio-output process and a persistent native process per
 loaded slot. Command parsing/display work, MIDI ports, Link, sequencing, and
@@ -216,8 +216,9 @@ the replacement fails, audio remains stopped.
 `audio diagnose` reads native engine/slot transport counters and cached slot
 metadata through the audio owner's control channel. It does not inspect plugins,
 refresh the device catalog, or stop rendering. The output includes the selected
-output name/backend, running state, master gain, callback errors/underruns, and
-each loaded slot's gain, mute/solo state, worker failure, missing blocks, and:
+output name/backend, running state, master gain, callback errors/underruns,
+output and slot realtime scheduling, and each loaded slot's gain, mute/solo
+state, worker failure, missing blocks, and:
 
 - **MIDI sent / consumed / pending:** messages published to that slot's native
   MIDI FIFO, messages dequeued by its renderer, and messages still queued.
@@ -306,9 +307,61 @@ For persistent underruns, restart the daemon with `./vcpid --buf 1024` (or
 `2048`), reconnect, and issue `audio start`. Larger buffers provide more
 scheduling headroom at the cost of note-to-sound latency.
 
-There is no built-in real-time-priority flag. Native rendering is not itself
-OS real-time scheduling; elevated scheduling remains a separate platform-specific
-configuration. Build the extension on each platform as described in `README.md`.
+#### Selective realtime scheduling
+
+On Linux, native rendering attempts `SCHED_FIFO` priority **20** for the output
+callback thread and **10** for each slot DSP thread by default. Promotion is
+attempted once per render-thread lifetime: at the output's first actual callback
+after stream startup, and at slot-runner startup. Python and process-control
+threads retain normal `SCHED_OTHER` scheduling; process isolation is unchanged.
+There is no whole-daemon realtime-priority flag. On macOS and other non-Linux
+platforms, this feature reports `unsupported` and changes no scheduling policy.
+Build the extension on each platform as described in `README.md`.
+
+`status` displays cached output/slot scheduling health, without RPC to native
+owners. `audio diagnose` requests fresh native stats through the control
+channel. Live OS policy/priority queries happen on the control side, not in the
+render callback. Both show the scheduling state, observed policy/priority,
+requested priority, native Linux thread ID (TID), and any errno for running
+threads:
+
+| State | Meaning |
+|---|---|
+| `inactive` | No output stream is active; TID is 0. |
+| `pending` | The output stream is starting, but its first callback has not attempted promotion yet. |
+| `active` | The live thread has `SCHED_FIFO` at exactly the requested priority. |
+| `denied` | The initial promotion failed; the observed policy/priority and errno show the actual result. |
+| `degraded` | Promotion succeeded initially, but the live policy/priority no longer matches the request. |
+| `unavailable` | The live thread's scheduling policy/priority cannot be queried. |
+| `unsupported` | This selective scheduling feature is Linux-only. |
+
+An output stop resets scheduling health to `inactive`; restarting attempts
+promotion again on the new callback thread. Slot promotion health remains
+associated with that slot's runner lifetime even while output is stopped.
+`denied` is nonterminal: rendering continues at the actual policy, commonly
+`SCHED_OTHER priority 0`, with e.g. `errno=1 (Operation not permitted)`.
+Check the reported result rather than assuming requested priority means success.
+
+Native `Engine.stats()` and `Transport.stats()` expose a `realtime` dictionary
+with `state`, `policy`, `priority` (actual), `requested_priority`, `error` (integer
+errno, 0 on success), and `thread_id` (native Linux TID, 0 before startup).
+The control facade carries output health as `RemoteAudioEngine.output_realtime`
+and slot health as `InstrumentSlot.worker_realtime` in initial state and through
+its existing periodic update channel.
+
+Linux permission must be configured separately from promotion. The supplied
+[Pi service](rpi-build/README.md#selective-realtime-scheduling) grants a finite
+`LimitRTPRIO=20` allowance inherited by children while still running as `pi`;
+it does not set a default FIFO policy or add `CAP_SYS_NICE`. An SSH/login shell
+does not inherit the service's allowance, so manual startup may report `denied`;
+inspect the shell's limit with `ulimit -r`. Do not run the whole daemon under
+`chrt` or as root to bypass this distinction.
+
+This scheduling change does **not** change buffers or one-block handoff latency,
+or guarantee that overloaded plugins, device backends, or the OS meet deadlines.
+Measure callback timing, underruns, and missing slot blocks before tuning;
+global realtime promotion, wakeup replacement, memory locking, affinity,
+governor changes, and kernel tuning are outside this feature.
 
 ### MIDI Commands
 
@@ -583,6 +636,11 @@ running flags. `Render` distinguishes maximum slot-process capacity from the
 eligible slot count in the last callback. `Slot buffering` states added latency.
 Each `Slot N worker` row shows its PID, failure, and cumulative missing blocks;
 these cached worker-health fields refresh approximately every 100 ms.
+
+`Output realtime` and each `Slot N realtime` row report the selective scheduling
+state and, for live threads, actual versus requested priority, policy, TID, and
+any errno. These are cached control-side observations, not a status-time RPC.
+An `active` scheduling row is not a guarantee of meeting the audio deadline.
 
 `Callback time` shows mixer/master callback last/peak execution time and the
 block deadline, **not native instrument/insert rendering time**. A fast mixer

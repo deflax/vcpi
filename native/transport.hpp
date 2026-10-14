@@ -1,5 +1,6 @@
 #pragma once
 #include "plugin.hpp"
+#include "realtime.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -12,6 +13,7 @@
 #include <string>
 
 namespace vcpi {
+constexpr std::uint32_t transportVersion = 3;
 namespace detail {
 static_assert(sizeof(float) == sizeof(std::uint32_t) && std::numeric_limits<float>::is_iec559,
               "Audio peaks require 32-bit IEEE-754 floats");
@@ -60,6 +62,7 @@ struct alignas(64) SharedHeader {
     alignas(64) std::atomic<std::uint32_t> midiWrite{0};
     alignas(64) std::atomic<std::uint32_t> midiRead{0};
     alignas(64) std::atomic<std::uint32_t> rendererPid{0};
+    alignas(64) RealtimeRecord realtime;
     alignas(64) std::atomic<std::uint32_t> failureState{0};
     std::array<char, 512> failure{};
     std::array<RequestCell, handoffCells> requests{};
@@ -71,6 +74,7 @@ struct TransportStats {
     std::uint32_t midiSent = 0, midiConsumed = 0, midiPending = 0;
     float audioPeak = 0.0f;
     std::string failure;
+    RealtimeStats realtime;
 };
 class Transport {
 public:

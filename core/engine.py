@@ -67,6 +67,7 @@ class AudioEngine:
         self.block_period_ms = buffer_size * 1000.0 / sample_rate
         self.backend_label = "not opened"
         self.output_name = None
+        self.output_realtime = {}
         self.refresh_health()
 
     def route(self, midi_channel, slot_index):
@@ -380,6 +381,7 @@ class AudioEngine:
                          "block_period_ms", "backend_label", "output_name"):
                 if name in stats:
                     setattr(self, name, stats[name])
+            self.output_realtime = stats["realtime"]
         self.render_slots = sum(slot is not None for slot in self.slots)
         self._publish_health()
 

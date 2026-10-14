@@ -14,7 +14,6 @@ static_assert(std::atomic<std::uint32_t>::is_always_lock_free, "Cross-process 32
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free, "Cross-process 64-bit atomic must be lock free");
 namespace {
 constexpr std::uint64_t transportMagic = 0x5643504941554431ULL;
-constexpr std::uint32_t transportVersion = 2;
 std::runtime_error systemError(const char* operation) {
     return std::runtime_error(std::string(operation) + ": " + std::strerror(errno));
 }
@@ -82,6 +81,7 @@ TransportStats Transport::stats() const {
     result.progress = header->progress.load(std::memory_order_acquire);
     result.misses = header->misses.load(std::memory_order_relaxed);
     result.audioPeak = detail::loadPeak(header->audioPeakBits);
+    result.realtime = header->realtime.stats(slotRealtimePriority);
     // Read consumer first, so a racing dequeue can't make pending underflow.
     const auto read = header->midiRead.load(std::memory_order_acquire);
     const auto write = header->midiWrite.load(std::memory_order_acquire);

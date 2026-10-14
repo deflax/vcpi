@@ -50,6 +50,16 @@ py::dict parameterDict(const std::vector<ParameterSnapshot>& parameters) {
         result[py::str(info.key)] = parameterDescriptor(info);
     return result;
 }
+py::dict realtimeDict(const RealtimeStats& info) {
+    py::dict result;
+    result["state"] = info.state;
+    result["policy"] = info.policy;
+    result["priority"] = info.priority;
+    result["requested_priority"] = info.requestedPriority;
+    result["error"] = info.error;
+    result["thread_id"] = info.threadId;
+    return result;
+}
 py::dict transportDict(const TransportStats& info) {
     py::dict result;
     result["sequence"] = info.sequence;
@@ -61,6 +71,7 @@ py::dict transportDict(const TransportStats& info) {
     result["midi_sent"] = info.midiSent;
     result["midi_consumed"] = info.midiConsumed;
     result["audio_peak"] = info.audioPeak;
+    result["realtime"] = realtimeDict(info.realtime);
     return result;
 }
 py::dict engineDict(const EngineStats& info) {
@@ -77,6 +88,7 @@ py::dict engineDict(const EngineStats& info) {
     result["backend_label"] = info.backendLabel;
     result["output_name"] = info.outputName.empty() ? py::object(py::none()) : py::object(py::str(info.outputName));
     result["output_peak"] = info.outputPeak;
+    result["realtime"] = realtimeDict(info.realtime);
     return result;
 }
 py::array_t<float> audioArray(std::vector<float> samples) {
@@ -215,7 +227,7 @@ PYBIND11_MODULE(_vcpi_native, module) {
         py::dict result;
         result["engine"] = "native C++17 / PortAudio";
         result["plugin_host"] = "JUCE 8.0.6 VST3";
-        result["transport_version"] = 2;
+        result["transport_version"] = transportVersion;
         return result;
     });
 }

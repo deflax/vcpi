@@ -20,7 +20,7 @@ from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
 from graph.signal_flow import render_signal_flow
 from graph.plugin_info import render_plugin_info
 from graph.knobs import render_knobs
-from graph.status import render_status
+from graph.status import format_realtime, render_status
 
 
 VCPI_ASCII_LOGO = r"""
@@ -1012,6 +1012,7 @@ class HostCLI(cmd.Cmd):
                 f"| running={output['running']} "
                 f"| master gain={output['master_gain']:.3f}"
             )
+            self._print(f"  Output realtime: {format_realtime(output['realtime'])}")
             self._print(
                 f"  Callbacks={output['callback_count']} "
                 f"| render errors={output['render_errors']} "
@@ -1041,6 +1042,7 @@ class HostCLI(cmd.Cmd):
                     f"(before mixer gain/mute/solo): {slot['audio_peak']:.6g}"
                 )
                 self._print(f"    Worker failure: {slot['worker_failure'] or 'none'}")
+                self._print(f"    Realtime: {format_realtime(slot['realtime'])}")
 
         else:
             self._print(f"Unknown audio subcommand: {sub}")

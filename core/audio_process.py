@@ -97,6 +97,7 @@ class _OwnerRuntime:
         self.pending_parameters = deque()
         self.master_snapshots = []
         self._last_slot_health = 0.0
+        self._last_output_realtime = None
         try:
             import mido
         except ImportError:
@@ -245,6 +246,10 @@ class _OwnerRuntime:
         if now - self._last_slot_health < 0.1:
             return
         self._last_slot_health = now
+        realtime = self.engine.output_realtime
+        if realtime != self._last_output_realtime:
+            self._last_output_realtime = realtime
+            self.engine._applied_updates.append(("output_realtime", realtime))
         for index, slot in enumerate(self.engine.slots):
             if slot is None:
                 continue
@@ -252,6 +257,7 @@ class _OwnerRuntime:
             worker.poll_failure()
             fields = {"worker_pid": worker.pid, "worker_failure": worker.failure,
                       "worker_misses": worker.misses,
+                      "worker_realtime": worker.realtime,
                       "buffering_samples": self.engine.buffer_size}
             changed = {key: value for key, value in fields.items()
                        if getattr(slot, key) != value}
@@ -347,6 +353,7 @@ class _OwnerRuntime:
                 staged.slot.render_owner = staged
                 staged.slot.worker_pid = staged.pid
                 staged.slot.buffering_samples = self.engine.buffer_size
+                staged.slot.worker_realtime = staged.transport.stats()["realtime"]
                 staged.slot.midi_channels = {
                     channel for channel, target in self.engine.channel_map.items()
                     if target == index}
@@ -577,6 +584,7 @@ class RemoteAudioEngine:
         self.master_gain = 1.0
         self.channel_map = {}
         self.backend_label = "not opened"
+        self.output_realtime = {}
         self.audio_output_name = None
         self.audio_devices = []
         self.native_dependencies = {}
@@ -730,7 +738,8 @@ class RemoteAudioEngine:
             self.slots = hydrate_slots(state["slots"])
             self.master_effects = state["master_effects"]
             for name in ("master_gain", "channel_map", "backend_label", "audio_output_name",
-                         "output_channels", "render_workers", "audio_devices", "native_dependencies"):
+                         "output_realtime", "output_channels", "render_workers",
+                         "audio_devices", "native_dependencies"):
                 setattr(self, name, state[name])
         self._notify(None)
 
@@ -769,6 +778,8 @@ class RemoteAudioEngine:
                             changed_slots.add(index)
                     elif kind == "master_gain":
                         self.master_gain = update[1]
+                    elif kind == "output_realtime":
+                        self.output_realtime = update[1]
             self._received_update = serial
             self._state_condition.notify_all()
         if changed_slots:

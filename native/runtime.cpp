@@ -11,6 +11,7 @@
 namespace vcpi {
 namespace {
 using Clock = std::chrono::steady_clock;
+std::atomic<std::uint64_t> nextRealtimeStart{0};
 class PluginOwnership {
 public:
     bool tryAcquire(Plugin* instrument, const std::vector<std::shared_ptr<Plugin>>& effects) noexcept {
@@ -77,8 +78,13 @@ SlotRunner::SlotRunner(std::shared_ptr<Transport> blocks, std::shared_ptr<Plugin
     std::uint32_t empty = 0;
     if (!transport->shared().rendererPid.compare_exchange_strong(empty, static_cast<std::uint32_t>(::getpid()), std::memory_order_acq_rel))
         throw std::invalid_argument("Transport already has a native renderer");
+    transport->shared().realtime.reset(true);
     try { thread = std::thread(&SlotRunner::run, this); }
-    catch (...) { transport->shared().rendererPid.store(0, std::memory_order_release); throw; }
+    catch (...) {
+        transport->shared().realtime.reset();
+        transport->shared().rendererPid.store(0, std::memory_order_release);
+        throw;
+    }
 }
 SlotRunner::~SlotRunner() { shutdown(); }
 void SlotRunner::collectMidi(std::uint32_t end) {
@@ -102,6 +108,8 @@ void SlotRunner::process() {
     transport->shared().midiRead.store(observedMidi, std::memory_order_release);
 }
 void SlotRunner::run() noexcept {
+    // Complete promotion (including a nonterminal denial) before any barrier ACK.
+    transport->shared().realtime.promote(slotRealtimePriority);
     while (!stopping.load(std::memory_order_acquire)) {
         if (!gate.tryAcquire()) {
             std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -137,6 +145,7 @@ void SlotRunner::run() noexcept {
         gate.release();
         if (!didWork) std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
+    transport->shared().realtime.exited();
 }
 void SlotRunner::barrier() {
     std::lock_guard<std::mutex> control(controls);
@@ -378,6 +387,8 @@ void Engine::start(int deviceIndex, const std::string& deviceName) {
     output.suggestedLatency = device->defaultLowOutputLatency;
     checkPa(Pa_IsFormatSupported(nullptr, &output, sampleRate), "Unsupported output format");
     checkPa(Pa_OpenStream(&stream, nullptr, &output, sampleRate, static_cast<unsigned long>(frames), paDitherOff | paClipOff, &Engine::callback, this), "Open output stream");
+    realtime.reset(true);
+    realtimeStart = nextRealtimeStart.fetch_add(1, std::memory_order_relaxed) + 1;
     running.store(true, std::memory_order_release);
     const auto error = Pa_StartStream(stream);
     if (error != paNoError) {
@@ -403,6 +414,7 @@ void Engine::stopUnlocked() {
         stream = nullptr;
     }
     running.store(false, std::memory_order_release);
+    realtime.reset();
     applyControls();
     if (failure.load(std::memory_order_acquire) == Failure::None) reconcileRetained();
     if (stopError != paNoError && stopError != paStreamIsStopped)
@@ -421,6 +433,15 @@ void Engine::shutdown() {
 }
 int Engine::callback(const void*, void* output, unsigned long count, const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags flags, void* context) noexcept {
     auto& engine = *static_cast<Engine*>(context);
+#if defined(__linux__)
+    // POD TLS avoids a syscall on subsequent callbacks. A backend replacement
+    // thread still gets its own attempt; a stream restart gets a fresh token.
+    static thread_local std::uint64_t promotedStart = 0;
+    if (promotedStart != engine.realtimeStart) {
+        engine.realtime.promote(outputRealtimePriority);
+        promotedStart = engine.realtimeStart;
+    }
+#endif
     if (flags & paOutputUnderflow) engine.underruns.fetch_add(1, std::memory_order_relaxed);
     if (count != static_cast<unsigned long>(engine.frames)) {
         engine.applyControls();
@@ -523,6 +544,7 @@ EngineStats Engine::stats() {
     result.outputPeak = detail::loadPeak(outputPeakBits);
     result.backendLabel = backendLabel;
     result.outputName = outputName;
+    result.realtime = realtime.stats(outputRealtimePriority);
     return result;
 }
 } // namespace vcpi

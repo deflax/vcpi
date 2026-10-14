@@ -291,6 +291,7 @@ class SlotWorker:
         self.result = None
         self.misses = 0
         self.failure = None
+        self.realtime = {}
         self._main_thread = threading.get_ident()
         self._wait_hook = wait_hook
         self._progress = 0
@@ -448,6 +449,7 @@ class SlotWorker:
         stats = self.transport.stats()
         progress = int(stats["progress"])
         self.misses = int(stats["misses"])
+        self.realtime = stats["realtime"]
         if stats.get("failure"):
             self.failure = self.failure or str(stats["failure"])
         if progress != self._progress or int(stats["sequence"]) <= int(stats["submitted"]):

@@ -1,8 +1,10 @@
 """Consumer-visible native audio rendering, without opening an output device."""
 
+import os
 import struct
 import tempfile
 import time
+import sys
 import unittest
 import wave
 from pathlib import Path
@@ -192,6 +194,44 @@ class NativeAudioTests(unittest.TestCase):
         self.assertIsNotNone(failed.render_owner.failure)
         np.testing.assert_allclose(self.block(), 0.25, atol=1e-6)
         self.assertEqual(self.engine.render_errors, 0)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux thread scheduling")
+    def test_realtime_targets_slot_thread_and_leaves_offline_control_unchanged(self):
+        control_policy = os.sched_getscheduler(0)
+        control_priority = os.sched_getparam(0).sched_priority
+        slot = self.slot(0)
+        self.block()
+        np.testing.assert_allclose(self.block(), 0.25, atol=1e-6)
+        self.assertEqual(os.sched_getscheduler(0), control_policy)
+        self.assertEqual(os.sched_getparam(0).sched_priority, control_priority)
+        output = self.engine.stats()["realtime"]
+        self.assertEqual(output["state"], "inactive")
+        self.assertEqual(output["thread_id"], 0)
+        transport = slot.render_owner.transport
+        realtime = transport.stats()["realtime"]
+        self.assertNotEqual(realtime["thread_id"], os.getpid())
+        actual_policy = os.sched_getscheduler(realtime["thread_id"])
+        actual_priority = os.sched_getparam(realtime["thread_id"]).sched_priority
+        self.assertEqual(realtime["priority"], actual_priority)
+        policy_names = {
+            os.SCHED_OTHER: "SCHED_OTHER", os.SCHED_FIFO: "SCHED_FIFO",
+            os.SCHED_RR: "SCHED_RR", os.SCHED_BATCH: "SCHED_BATCH",
+            os.SCHED_IDLE: "SCHED_IDLE",
+        }
+        self.assertEqual(realtime["policy"], policy_names.get(actual_policy, "unknown"))
+        if realtime["error"]:
+            self.assertEqual(realtime["state"], "denied")
+            self.assertEqual(actual_policy, control_policy)
+            self.assertEqual(actual_priority, control_priority)
+        else:
+            self.assertEqual(realtime["state"], "active")
+            self.assertEqual(actual_policy, os.SCHED_FIFO)
+            self.assertEqual(actual_priority, realtime["requested_priority"])
+            os.sched_setscheduler(realtime["thread_id"], os.SCHED_OTHER, os.sched_param(0))
+            demoted = transport.stats()["realtime"]
+            self.assertEqual(demoted["state"], "degraded")
+            self.assertEqual(demoted["policy"], "SCHED_OTHER")
+            self.assertEqual(demoted["priority"], 0)
 
 
 if __name__ == "__main__":

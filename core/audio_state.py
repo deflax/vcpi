@@ -155,6 +155,7 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
             "worker_pid": slot.worker_pid,
             "worker_failure": slot.worker_failure,
             "worker_misses": slot.worker_misses,
+            "worker_realtime": dict(slot.worker_realtime),
             "buffering_samples": slot.buffering_samples,
         })
     master_effects = (
@@ -174,6 +175,7 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
         "master_gain": float(engine.master_gain),
         "channel_map": dict(engine.channel_map),
         "backend_label": engine.backend_label,
+        "output_realtime": dict(engine.output_realtime),
         "audio_output_name": owner.audio_output_name,
         "output_channels": engine.output_channels,
         "render_workers": engine.render_workers,

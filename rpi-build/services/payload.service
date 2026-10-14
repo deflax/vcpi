@@ -8,6 +8,8 @@ Environment=JACK_NO_AUDIO_RESERVATION=1
 Environment=LOG_LEVEL=DEBUG
 User=pi
 Group=pi
+# Permit selective native FIFO promotion without changing default thread policy.
+LimitRTPRIO=20
 WorkingDirectory=/home/pi/vcpi
 RuntimeDirectory=vcpi
 #ExecStartPre=/bin/sleep 10

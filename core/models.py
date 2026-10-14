@@ -28,6 +28,7 @@ class InstrumentSlot:
     worker_pid: int | None = None
     worker_failure: str | None = None
     worker_misses: int = 0
+    worker_realtime: dict = field(default_factory=dict)
     buffering_samples: int = 0
 
     @property

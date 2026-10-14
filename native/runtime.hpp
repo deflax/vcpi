@@ -50,6 +50,7 @@ struct EngineStats {
     double lastCallbackMs = 0.0, peakCallbackMs = 0.0, blockPeriodMs = 0.0;
     float outputPeak = 0.0f;
     std::string backendLabel, outputName;
+    RealtimeStats realtime;
 };
 class Engine {
 public:
@@ -110,6 +111,8 @@ private:
     juce::MidiBuffer masterMidi;
     PaStream* stream = nullptr;
     std::atomic<bool> running{false};
+    RealtimeRecord realtime;
+    std::uint64_t realtimeStart = 0;
     enum class Failure : std::uint32_t { None, Timeout, Ownership };
     static_assert(std::atomic<Failure>::is_always_lock_free, "Output failure latch must be lock free");
     std::atomic<Failure> failure{Failure::None};

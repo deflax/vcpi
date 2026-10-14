@@ -13,6 +13,25 @@ if TYPE_CHECKING:
     from core.host import VcpiCore
 
 
+def format_realtime(info: dict) -> str:
+    """Describe observed native scheduling, not merely the requested policy."""
+    if not info:
+        return "not reported"
+    state = info["state"]
+    if state == "unsupported":
+        return "unsupported (Linux-only)"
+    requested = info["requested_priority"]
+    if state in {"inactive", "pending"}:
+        return f"{state} (requested SCHED_FIFO priority {requested})"
+    text = (
+        f"{state}: {info['policy']} priority {info['priority']}"
+        f" (requested {requested}), TID {info['thread_id']}"
+    )
+    if info["error"]:
+        text += f", errno={info['error']} ({os.strerror(info['error'])})"
+    return text
+
+
 def render_status(host: VcpiCore) -> str:
     """Return an ASCII status box using control state and cached audio health.
 
@@ -35,6 +54,7 @@ def render_status(host: VcpiCore) -> str:
     rows.append(("Audio owner", f"PID {engine.owner_pid} (output mixer and master effects)"))
     rows.append(("Audio failure", str(failure) if failure else "(none)"))
     rows.append(("Backend", engine.backend_label))
+    rows.append(("Output realtime", format_realtime(engine.output_realtime)))
 
     # -- Render capacity and callback health ---------------------------------
     # Capacity is the maximum worker count, not active threads/eligible slots.
@@ -64,6 +84,7 @@ def render_status(host: VcpiCore) -> str:
         state = f"FAILED: {slot.worker_failure}" if slot.worker_failure else "ready"
         rows.append((f"Slot {index + 1} worker",
                      f"PID {slot.worker_pid}  {state}  missing blocks: {slot.worker_misses}"))
+        rows.append((f"Slot {index + 1} realtime", format_realtime(slot.worker_realtime)))
 
     rows.append(("", ""))  # spacer
 
