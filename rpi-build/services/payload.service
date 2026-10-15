@@ -1,7 +1,6 @@
 [Unit]
 Description=vcpi headless host
 After=sound.target
-ConditionPathExists=/root/setup.sh.done
 
 [Service]
 Environment=JACK_NO_AUDIO_RESERVATION=1

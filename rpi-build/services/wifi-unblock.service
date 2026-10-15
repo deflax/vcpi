@@ -13,4 +13,4 @@ ExecStart=-/usr/sbin/iw dev wlan0 set power_save off
 RemainAfterExit=yes
 
 [Install]
-WantedBy=network-online.target
+WantedBy=multi-user.target

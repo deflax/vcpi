@@ -370,7 +370,7 @@ All Raspberry Pi image build files are in `rpi-build/`.
 
 - Full instructions: `rpi-build/README.md`
 - Build script: `rpi-build/prepare-image.sh`
-- First-boot provisioning script: `rpi-build/setup.sh`
+- Internal target provisioner: `rpi-build/internal/provision-target.sh` (not a user entry point)
 - Systemd units: `rpi-build/services/`
 
 Run image build from repo root:
@@ -385,6 +385,12 @@ Or from inside `rpi-build/`:
 cd rpi-build
 sudo ./prepare-image.sh <raspios-image-url>
 ```
+
+The build host installs OS/Python dependencies, Cardinal and the ARM64 native
+extension into the image before flashing. The Pi needs no Internet access on
+first boot; SSH and Ableton Link work over the local network. Build on Linux with
+root/loop-mount access and, on x86_64, ARM64 QEMU/binfmt support. See the Pi guide
+for prerequisites and verification limits.
 
 ## License
 
