@@ -78,6 +78,10 @@ void validateSavedState(const void* data, std::size_t size) {
 }
 Plugin::Plugin(const std::string& path, double rate, int size, const std::string& kind)
     : sampleRate(rate), frames(size) {
+   #if JUCE_MAC
+    // Keep Cocoa/message handling available without making this audio owner a Dock app.
+    juce::Process::setDockIconVisible(false);
+   #endif
     validateAudio(rate, size);
     if (kind != "wav" && kind != "instrument" && kind != "effect")
         throw std::invalid_argument("Plugin kind must be instrument, effect or wav");

@@ -80,6 +80,12 @@ bundles must match the target OS and CPU architecture. Do not copy `.venv`,
 `build/`, or compiled extensions between platforms. Set
 `CMAKE_BUILD_PARALLEL_LEVEL=1` on memory-constrained systems.
 
+On macOS, native audio owners hide their Python Dock icon before loading plugins,
+while keeping JUCE's Cocoa/message handling initialized. Linux initialization is
+unchanged. After updating, rebuild the native extension and restart the daemon.
+Verify Dock visibility and VST/Cardinal playback on a Mac; Linux rendering smoke
+checks do not exercise macOS application activation.
+
 ## Repository Layout
 
 ```text
