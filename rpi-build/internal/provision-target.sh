@@ -88,6 +88,11 @@ fi
 usermod -aG audio,plugdev,sudo pi
 printf '%s\n' "$VCPI_USERCONF" | chpasswd --encrypted
 unset VCPI_USERCONF
+
+# Setting the password alone leaves Raspberry Pi OS's first-boot wizard enabled.
+# Finish account setup now, including console/desktop and SSH wizard cleanup.
+/usr/bin/cancel-rename pi
+
 install -d -o pi -g pi /home/pi
 printf '%s\n' '/usr/bin/jackd -P75 -p16 -dalsa -dhw:0 -p1024 -n3' > /home/pi/.jackdrc
 chown pi:pi /home/pi/.jackdrc

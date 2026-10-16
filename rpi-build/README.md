@@ -112,7 +112,9 @@ in the local `vst3/` tree must be compatible with Linux ARM64.
 
 ## On First Boot
 
-No apt, pip, Git downloads, compilation or provisioning service runs on the Pi.
+No apt, pip, Git downloads, compilation or account-setup wizard runs on the Pi.
+The builder sets the `pi` password from `userconf.txt` and completes Raspberry Pi
+OS account setup before publishing the image. No keyboard or monitor is required.
 There is no wait for Internet connectivity or time synchronization. Wi-Fi and SSH
 are enabled for local access. The builder does not configure a firewall.
 
