@@ -10,6 +10,26 @@ from rich.table import Table
 from rich.text import Text
 
 
+def _logo_colour(column: int, row: int, width: int, height: int) -> str:
+    """Diagonal blend with broad yellow/purple ends and a narrow green centre."""
+    position = (0.8 * column / max(width - 1, 1)
+                + 0.2 * row / max(height - 1, 1) - 0.1) / 0.8
+    yellow, green, purple = (255, 224, 55), (0, 198, 0), (132, 4, 217)
+    if position <= 0.28:
+        return "#ffe037"
+    if position >= 0.72:
+        return "#8404d9"
+    if position <= 0.5:
+        start, end = yellow, green
+        fraction = (position - 0.28) / 0.22
+    else:
+        start, end = green, purple
+        fraction = (position - 0.5) / 0.22
+    return "#{:02x}{:02x}{:02x}".format(
+        *(int(a + (b - a) * fraction) for a, b in zip(start, end))
+    )
+
+
 def _table(title: str, *columns: str) -> Table:
     table = Table(title=Text(title), box=box.SIMPLE, border_style="cyan")
     for column in columns:
@@ -103,23 +123,22 @@ def display_response(console: Console, command: str, lines: list[str]) -> None:
     if table is not None:
         console.print(table)
         return
-    logo_colours = ("bright_cyan", "bright_green", "bright_magenta", "bright_yellow")
-    logo_width = 0
+    logo_lines = []
     if name in ("", "about"):
-        logo_width = max(
-            (len(line) for line in lines if line.strip() and set(line) <= set(" █░")),
-            default=0,
-        )
+        logo_lines = [
+            line for line in lines if line.strip() and set(line) <= set(" █░")
+        ]
+    logo_width = max((len(line) for line in logo_lines), default=0)
+    logo_row = 0
     # Preserve spacing and width for diagrams, including on narrow terminals.
     for line in lines:
         text = Text(line)
         if logo_width and line.strip() and set(line) <= set(" █░"):
             for column, char in enumerate(line):
                 if char in "█░":
-                    colour = logo_colours[min(column * len(logo_colours) // logo_width,
-                                              len(logo_colours) - 1)]
-                    face = "bold" if char == "█" else "dim"
-                    text.stylize(f"{face} {colour}", column, column + 1)
+                    colour = _logo_colour(column, logo_row, logo_width, len(logo_lines))
+                    text.stylize(colour, column, column + 1)
+            logo_row += 1
         if line.lstrip().startswith(("Error:", "***")):
             text.stylize("bold red")
         elif name == "flow":

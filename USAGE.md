@@ -740,6 +740,12 @@ Choice parameters list available choices instead of a numeric range:
 | `shutdown` | Shut down the vcpi daemon process |
 | `quit` / `exit` / `Ctrl-D` | Disconnect this client session |
 
+The interactive startup banner and `about` logo use a diagonal yellow
+(`#FFE037`) → green (`#00C600`) → purple (`#8404D9`) gradient, with broad yellow
+and purple regions and a narrow green centre. Truecolour terminals display the
+exact colours; other colour terminals approximate them. Non-interactive output
+remains plain text.
+
 `ps` samples the daemon and its descendants (audio owner, loaded slot workers,
 and helper processes) over approximately **200 ms**. It excludes the separate
 CLI client and unrelated system processes. PID/TID and process roles identify
