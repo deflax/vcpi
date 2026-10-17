@@ -659,6 +659,13 @@ Tables wrap to the terminal width. Redirected input/output uses plain-text
 tables; `flow explore` explains the interactive-client requirement instead of
 blocking the daemon.
 
+In colour-capable terminals, state words use **green** for on/true, active,
+connected, running, or ready; **red** for off/false, stopped, muted, disabled,
+blocked, or failed; and **yellow** for inactive, disconnected, unlinked, empty,
+unknown, or pending states. Boolean control values and LED on/off indicators
+use the same colours. Labels remain visible without colour; a reported
+`failure: none` is not marked as a failure.
+
 Generic MIDI inputs share the channel map; sequencer banks target slots directly.
 MIDI Mix knobs map to the first three **instrument** parameters in insertion
 order, not insert or master-effect parameters. Disconnected ports and unbound

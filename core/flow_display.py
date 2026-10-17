@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from io import StringIO
+import re
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Point
@@ -26,6 +27,50 @@ def _section_id(view: str) -> str:
     return f"slot{view}" if view in "12345678" and len(view) == 1 else view
 
 
+_STATE_COLOURS = {
+    "green": (
+        r"\b(?:on|true|active|connected|running|ready)\b"
+        r"|\beligible for output\b|\b(?:Link )?enabled\b"
+    ),
+    "red": (
+        r"\b(?:off|false|stopped|failed|failure|muted|disabled|blocked|solo-excluded)\b"
+        r"|\b(?:slot|master) gain zero\b"
+    ),
+    "yellow": (
+        r"\b(?:inactive|disconnected|unlinked|unbound|undefined|unknown|empty|"
+        r"unavailable|pending)\b|\bnot (?:opened|cached|reported)\b"
+        r"|\bnone connected\b|\bno (?:instrument parameter|enum values)\b"
+    ),
+}
+_STATE_PATTERNS = [
+    (re.compile(pattern, re.IGNORECASE), colour)
+    for colour, pattern in _STATE_COLOURS.items()
+]
+_CONTROL_VALUE = re.compile(
+    r"^(true|false)\b|\b(?:LED|mute|solo|enabled)\s+(on|off|true|false)\b",
+    re.IGNORECASE,
+)
+
+
+def _cell_text(cell: str, column: str) -> Text:
+    """Colour state spans, never interpret daemon/plugin strings as markup."""
+    text = Text(cell)
+    if "state" in column.lower():
+        for pattern, colour in _STATE_PATTERNS:
+            for match in pattern.finditer(cell):
+                # A reported absence of failure is healthy, not a red failure.
+                if match.group().lower() == "failure" and cell[match.end():].startswith(": none"):
+                    continue
+                text.stylize(colour, match.start(), match.end())
+    elif "value" in column.lower() or "range" in column.lower():
+        for match in _CONTROL_VALUE.finditer(cell):
+            group = 1 if match.group(1) is not None else 2
+            value = match.group(group).lower()
+            text.stylize("green" if value in ("on", "true") else "red",
+                         match.start(group), match.end(group))
+    return text
+
+
 def _section_table(section: dict, width: int) -> Table:
     columns = section["columns"]
     # Preserve every cell even when the terminal cannot fit all column borders.
@@ -43,7 +88,7 @@ def _section_table(section: dict, width: int) -> Table:
                     text.append("\n")
                 text.append(column, style="bold cyan")
                 text.append(": ")
-                text.append(cell)
+                text.append_text(_cell_text(cell, column))
             table.add_row(text)
     else:
         for index, column in enumerate(columns):
@@ -52,7 +97,8 @@ def _section_table(section: dict, width: int) -> Table:
                 overflow="fold", min_width=1,
             )
         for row in section["rows"]:
-            table.add_row(*(Text(cell) for cell in row))
+            table.add_row(*(_cell_text(cell, column)
+                            for column, cell in zip(columns, row)))
     return table
 
 
