@@ -734,10 +734,29 @@ Choice parameters list available choices instead of a numeric range:
 |---|---|
 | `about` | Print the vcpi logo and basic project info |
 | `status` | Print combined system status |
+| `ps` | Show daemon/child processes and threads with sampled CPU and resident memory |
 | `deps` | Check optional dependency availability |
 | `debug [on\|off]` | Show current logging level; enable DEBUG or return to INFO |
 | `shutdown` | Shut down the vcpi daemon process |
 | `quit` / `exit` / `Ctrl-D` | Disconnect this client session |
+
+`ps` samples the daemon and its descendants (audio owner, loaded slot workers,
+and helper processes) over approximately **200 ms**. It excludes the separate
+CLI client and unrelated system processes. PID/TID and process roles identify
+each row; process rows show state, total CPU, RSS in MiB, and thread count.
+Thread rows show native thread IDs, names where available, and CPU usage.
+**100% CPU means one fully occupied core**; process CPU includes its threads
+and can exceed 100%. Thread memory is shared with the process, so it is not
+repeated or summed. RSS across processes can also include shared pages.
+A dash indicates a non-applicable field or a newly observed thread without
+a CPU baseline. Tasks that exit during collection are omitted; inaccessible
+details are reported explicitly. Run `ps` again to refresh.
+
+Collection uses `psutil` on the control side, without audio/plugin RPCs or
+render-callback changes. Other control commands wait during the short sample;
+native audio rendering continues independently. Linux thread names come from
+`/proc`, with Python names for daemon threads; other platforms may show generic
+thread names.
 
 `status` reads shared output-callback health and cached metadata; it does not
 contact native owners or query PortAudio while rendering. `Audio owner`

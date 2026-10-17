@@ -20,6 +20,7 @@ from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import NUM_SLOTS
 from core.logging_setup import set_log_level
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
+from core.processes import render_processes
 from graph.signal_flow import build_flow_snapshot, render_flow_snapshot
 from graph.plugin_info import render_plugin_info
 from graph.status import format_realtime, render_status
@@ -155,7 +156,7 @@ class HostCLI(cmd.Cmd):
             ("MIDI ports & routing", {"midi", "midimix", "note"}),
             ("Sequencing, tempo & Link", {"seq", "tempo", "ableton"}),
             ("Save & load sessions", {"save", "load"}),
-            ("Status, signal & logging", {"status", "flow", "deps", "debug"}),
+            ("Status, signal & logging", {"status", "ps", "flow", "deps", "debug"}),
             ("Help, exit & shutdown", {"help", "about", "quit", "exit", "shutdown"}),
         )
         remaining = dict(entries)
@@ -1409,6 +1410,22 @@ class HostCLI(cmd.Cmd):
     def do_status(self, arg):
         """Overall status: status"""
         self._print(render_status(self.host))
+
+    def do_ps(self, arg):
+        """Show daemon processes and threads with resource usage: ps
+
+        Includes the daemon and all descendants (audio, slots, helpers), not
+        the separate CLI client. Samples CPU over ~200 ms; 100% is one core.
+        Process rows show total CPU, resident memory (MiB), state and thread
+        count. Thread rows show native TIDs and CPU, not separate memory.
+        """
+        if arg.strip():
+            self._print("Usage: ps")
+            return
+        try:
+            self._print(render_processes(self.host))
+        except (OSError, RuntimeError) as exc:
+            self._print(f"Error collecting process resources: {exc}")
 
     def do_deps(self, arg):
         """Check dependencies."""
