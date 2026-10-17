@@ -106,9 +106,13 @@ for save/restore behavior and legacy session compatibility.
     audio_state.py    # Plain plugin/parameter snapshots for control and display
     audio_deps.py     # Native extension availability for audio owners
     engine.py         # Control-only facade for native audio
-    cli.py            # Interactive command-line interface
+    cli.py            # Command dispatch and plain-text responses
+    completion.py     # Daemon-side command and argument completion
     server.py         # Unix socket server for headless mode
     client.py         # CLI client (connects to server)
+    client_display.py # Rich terminal presentation of command responses
+    flow_display.py   # Full-screen routing explorer
+    processes.py      # Daemon/child process and thread resource diagnostics
     link.py           # Ableton Link wrapper
     sequencer.py      # Internal step sequencer
     session.py        # Session save/restore
@@ -117,13 +121,14 @@ for save/restore behavior and legacy session compatibility.
   sampler/            # WAV sample assets
     samples/          # Built-in WAV sample packs (808, 909, piano, etc.)
   controllers/        # Hardware controller modules (generic MIDI input, MIDI Mix)
-  graph/              # ASCII visualization renderers (signal flow, plugin info)
+  graph/              # Flow/status/plugin snapshots and plain-text renderers
   vst3/               # Open-license VST3 plugins (run arch-specific fetch scripts)
   patches/            # VCV/Cardinal .vcv patch files
   sessions/           # User-saved session files (save/load commands)
+  tests/              # Automated Python regression tests
   main.py             # Top-level Python entry point
   vcpid               # Server launcher (venv setup and incremental native build)
-  vcpi                # Client launcher (creates .venv on first run)
+  vcpi                # Client launcher (venv setup and dependency synchronization)
   requirements.txt    # Python dependencies
   USAGE.md            # Full CLI and startup flag reference
   rpi-build/          # Raspberry Pi image build/provisioning tools only
