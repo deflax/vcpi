@@ -4,7 +4,7 @@ After=sound.target
 
 [Service]
 Environment=JACK_NO_AUDIO_RESERVATION=1
-Environment=LOG_LEVEL=WARNING
+Environment=LOG_LEVEL=INFO
 User=pi
 Group=pi
 # Permit selective native FIFO promotion without changing default thread policy.

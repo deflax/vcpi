@@ -65,11 +65,12 @@ print the existing PID. Connect to the running instance with `./vcpi` instead.
 The PID file is stored at `~/.config/vcpi/vcpi.pid`.
 
 Startup logging level is controlled by environment variable `LOG_LEVEL`.
-Core and `./vcpid` defaults are `WARNING` if unset.
-The Raspberry Pi `payload.service` explicitly sets `LOG_LEVEL=WARNING`.
+Core and `./vcpid` defaults are `INFO` if unset, showing activity messages,
+warnings, and errors without DEBUG noise. The Raspberry Pi `payload.service`
+explicitly sets `LOG_LEVEL=INFO`. An explicit `LOG_LEVEL=WARNING` hides INFO.
 
 From a connected client, use `debug` to inspect the current daemon logging level,
-`debug on` to enable DEBUG, and `debug off` to return to WARNING without restarting.
+`debug on` to enable DEBUG, and `debug off` to return to INFO without restarting.
 The change applies to the daemon, live audio/slot workers, and subsequently
 created workers. It lasts until the daemon exits and does not edit service or
 shell configuration. Logs remain in the daemon terminal or service journal,
@@ -79,8 +80,8 @@ Raw native/plugin stdout and stderr (including ALSA/JACK probing and plugin
 print statements) are discarded unless DEBUG is enabled. With `debug on`, they
 stream to the daemon terminal with `[daemon]`, `[audio]`, or `[slot N]` prefixes.
 There are no vcpi per-process log files or replay buffers. `debug off` stops
-streaming and discards subsequent raw output; structured vcpi warnings/errors
-continue to appear. Long or unterminated native lines may be split into bounded
+streaming and discards subsequent raw output; structured vcpi activity messages,
+warnings, and errors continue to appear. Long or unterminated lines may be split into bounded
 prefixed fragments. Existing service-journal retention is managed by systemd,
 not by vcpi.
 
@@ -688,7 +689,7 @@ Choice parameters list available choices instead of a numeric range:
 | `about` | Print the vcpi logo and basic project info |
 | `status` | Print combined system status |
 | `deps` | Check optional dependency availability |
-| `debug [on\|off]` | Show current logging level; enable DEBUG or return to WARNING |
+| `debug [on\|off]` | Show current logging level; enable DEBUG or return to INFO |
 | `shutdown` | Shut down the vcpi daemon process |
 | `quit` / `exit` / `Ctrl-D` | Disconnect this client session |
 

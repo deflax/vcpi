@@ -135,19 +135,19 @@ python main.py serve
 python main.py cli
 
 # Logging defaults:
-# - python main.py serve -> WARNING
-# - ./vcpid -> WARNING
+# - python main.py serve -> INFO
+# - ./vcpid -> INFO
 LOG_LEVEL=INFO ./vcpid
 ```
 
 Toggle logging without restarting from the connected client:
-`debug on` enables DEBUG, `debug off` returns to WARNING, and `debug` shows the
+`debug on` enables DEBUG, `debug off` returns to INFO, and `debug` shows the
 current level. The setting applies to the daemon and audio workers until the
 daemon exits; logs appear in the daemon terminal or service journal.
 Raw native/plugin stdout and stderr are discarded unless DEBUG is enabled, then
 shown with `[daemon]`, `[audio]`, or `[slot N]` prefixes. vcpi creates no
 per-process log files and cannot replay discarded output. Structured vcpi
-warnings/errors remain visible. To see diagnostics from startup, use
+activity messages, warnings, and errors remain visible. For startup diagnostics, use
 `LOG_LEVEL=DEBUG ./vcpid`; this also streams build output with `[build]` prefixes.
 Successful builds are otherwise quiet; failures show the final 64 KiB of
 diagnostics.

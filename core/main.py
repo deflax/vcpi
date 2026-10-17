@@ -115,7 +115,7 @@ def _cmd_serve(args):
         sys.exit(1)
 
     with native_output("daemon"):
-        level = configure_logging(default_level="WARNING")
+        level = configure_logging()
         logger.info("vcpi server starting (log level: %s)", logging.getLevelName(level))
 
         # Install before booting: unwind active RPCs instead of re-entering their

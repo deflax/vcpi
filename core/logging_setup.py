@@ -8,7 +8,7 @@ import os
 from core.native_output import logging_stream, set_debug_output
 
 
-def configure_logging(default_level: str = "WARNING") -> int:
+def configure_logging(default_level: str = "INFO") -> int:
     """Configure process-wide logging and return resolved log level.
 
     The level is read from ``LOG_LEVEL``. If unset, ``default_level`` is used.
@@ -16,7 +16,7 @@ def configure_logging(default_level: str = "WARNING") -> int:
     level_name = os.environ.get("LOG_LEVEL", default_level).upper()
     level = getattr(logging, level_name, None)
     if not isinstance(level, int):
-        level = getattr(logging, default_level.upper(), logging.WARNING)
+        level = getattr(logging, default_level.upper(), logging.INFO)
         invalid_level = level_name
     else:
         invalid_level = None
@@ -40,8 +40,8 @@ def configure_logging(default_level: str = "WARNING") -> int:
 
 def set_log_level(level: str) -> str:
     """Toggle runtime logging and let subsequently spawned workers inherit it."""
-    if level not in ("DEBUG", "WARNING"):
-        raise ValueError("log level must be DEBUG or WARNING")
+    if level not in ("DEBUG", "INFO"):
+        raise ValueError("log level must be DEBUG or INFO")
     logging.getLogger().setLevel(level)
     os.environ["LOG_LEVEL"] = level
     set_debug_output(level == "DEBUG")

@@ -22,7 +22,7 @@ def _write_debug_fragment(fragment):
 
 def run_build_step(command):
     """Run a build step, streaming DEBUG output or retaining a bounded failure tail."""
-    debug = os.environ.get("LOG_LEVEL", "WARNING").strip().upper() == "DEBUG"
+    debug = os.environ.get("LOG_LEVEL", "INFO").strip().upper() == "DEBUG"
     pending = bytearray()
     truncated = False
     with subprocess.Popen(

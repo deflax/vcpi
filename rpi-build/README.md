@@ -118,7 +118,7 @@ OS account setup before publishing the image. No keyboard or monitor is required
 There is no wait for Internet connectivity or time synchronization. Wi-Fi and SSH
 are enabled for local access. The builder does not configure a firewall.
 
-`payload.service` runs as `pi`, sets `LOG_LEVEL=WARNING`, and starts:
+`payload.service` runs as `pi`, sets `LOG_LEVEL=INFO`, and starts:
 
 ```text
 /home/pi/vcpi/.venv/bin/python /home/pi/vcpi/main.py serve --sock /run/vcpi/vcpi.sock
