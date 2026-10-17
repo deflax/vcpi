@@ -21,6 +21,7 @@ from multiprocessing.connection import wait as wait_connections
 from core.audio_state import capture_state, hydrate_slots
 from core.models import NUM_SLOTS
 from core.logging_setup import configure_logging, set_log_level
+from core.native_output import native_output, output_destination
 from core.state_transport import (
     encode_native_message, receive_frame, send_frame, validate_native_message,
     validate_native_state,
@@ -542,7 +543,14 @@ class _OwnerRuntime:
             self.control.poll(0.005)
 
 
-def _audio_owner(sample_rate, buffer_size, health, control, inputs, updates, cancelled):
+def _audio_owner(sample_rate, buffer_size, health, control, inputs, updates, cancelled,
+                 output):
+    with native_output("audio", output):
+        _run_audio_owner(sample_rate, buffer_size, health, control, inputs, updates,
+                         cancelled)
+
+
+def _run_audio_owner(sample_rate, buffer_size, health, control, inputs, updates, cancelled):
     owner = None
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     configure_logging()
@@ -620,7 +628,7 @@ class RemoteAudioEngine:
         self._process = context.Process(
             target=_audio_owner,
             args=(sample_rate, buffer_size, self._health, child_control, child_inputs,
-                  child_updates, self._cancelled),
+                  child_updates, self._cancelled, output_destination()),
             name="vcpi-audio-owner", daemon=False,
         )
         try:

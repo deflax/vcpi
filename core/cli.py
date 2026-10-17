@@ -1381,6 +1381,9 @@ class HostCLI(cmd.Cmd):
         debug on enables DEBUG logging in the daemon and live audio workers.
         debug off returns logging to WARNING. New workers inherit the setting.
         Changes last until the daemon exits; logs stay in its terminal/service log.
+        Raw native/plugin output is discarded unless debug is on, then shown with
+        [daemon], [audio], or [slot N] prefixes. No per-process log files are kept.
+        For startup diagnostics, launch with LOG_LEVEL=DEBUG ./vcpid.
         """
         mode = arg.strip().lower()
         if mode not in ("", "on", "off"):

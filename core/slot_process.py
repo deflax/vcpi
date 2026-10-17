@@ -20,6 +20,7 @@ from core.audio_state import capture_plugin
 from core.audio_deps import require_native
 from core.models import InstrumentSlot, NUM_SLOTS
 from core.logging_setup import configure_logging, set_log_level
+from core.native_output import native_output, output_destination
 from core.state_transport import (
     encode_native_message, receive_frame, send_frame, validate_native_message,
 )
@@ -191,7 +192,14 @@ def _execute(owner, index, operation, arguments):
 
 
 def _slot_owner(sample_rate, frames, index, operation, arguments,
-                transport_path, control, lifeline):
+                transport_path, control, lifeline, output):
+    with native_output(f"slot {index + 1}", output):
+        _run_slot_owner(sample_rate, frames, index, operation, arguments,
+                        transport_path, control, lifeline)
+
+
+def _run_slot_owner(sample_rate, frames, index, operation, arguments,
+                    transport_path, control, lifeline):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     configure_logging()
     owner = None
@@ -317,7 +325,7 @@ class SlotWorker:
         self._process = context.Process(
             target=_slot_owner,
             args=(sample_rate, buffer_size, slot_index, operation, arguments,
-                  self.transport_path, child_control, child_lifeline),
+                  self.transport_path, child_control, child_lifeline, output_destination()),
             name=f"vcpi-slot-{slot_index + 1}", daemon=False,
         )
         self._io_thread = threading.Thread(target=self._io_loop,

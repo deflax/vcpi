@@ -75,6 +75,21 @@ created workers. It lasts until the daemon exits and does not edit service or
 shell configuration. Logs remain in the daemon terminal or service journal,
 not in the client response. Use `help debug` for command help.
 
+Raw native/plugin stdout and stderr (including ALSA/JACK probing and plugin
+print statements) are discarded unless DEBUG is enabled. With `debug on`, they
+stream to the daemon terminal with `[daemon]`, `[audio]`, or `[slot N]` prefixes.
+There are no vcpi per-process log files or replay buffers. `debug off` stops
+streaming and discards subsequent raw output; structured vcpi warnings/errors
+continue to appear. Long or unterminated native lines may be split into bounded
+prefixed fragments. Existing service-journal retention is managed by systemd,
+not by vcpi.
+
+To see startup output, use `LOG_LEVEL=DEBUG ./vcpid` before the daemon starts.
+The launcher also gates successful build output: it is quiet by default and
+streams with `[build]` prefixes at DEBUG. Failed builds always report their
+diagnostics; in quiet mode only the final 64 KiB of a failed step is retained
+in memory and printed, with a notice if earlier output was discarded.
+
 VST3 plugin search and name resolution:
 
 - `slot <n> vst` and `slot <n> fx` accept a plugin **name** (e.g. `Dexed`) or a

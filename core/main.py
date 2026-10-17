@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from core.logging_setup import configure_logging
 from core.paths import DEFAULT_SOCK_PATH, check_pidfile, write_pidfile, remove_pidfile
+from core.native_output import native_output
 
 if TYPE_CHECKING:
     from core.host import VcpiCore
@@ -113,29 +114,30 @@ def _cmd_serve(args):
         )
         sys.exit(1)
 
-    level = configure_logging(default_level="WARNING")
-    logger.info("vcpi server starting (log level: %s)", logging.getLevelName(level))
+    with native_output("daemon"):
+        level = configure_logging(default_level="WARNING")
+        logger.info("vcpi server starting (log level: %s)", logging.getLevelName(level))
 
-    # Install before booting: unwind active RPCs instead of re-entering their
-    # locks from a signal handler. Resource cleanup happens in finally blocks.
-    def interrupt(signum, frame):
-        del signum, frame
-        raise SystemExit(0)
+        # Install before booting: unwind active RPCs instead of re-entering their
+        # locks from a signal handler. Resource cleanup happens in finally blocks.
+        def interrupt(signum, frame):
+            del signum, frame
+            raise SystemExit(0)
 
-    signal.signal(signal.SIGINT, interrupt)
-    signal.signal(signal.SIGTERM, interrupt)
+        signal.signal(signal.SIGINT, interrupt)
+        signal.signal(signal.SIGTERM, interrupt)
 
-    write_pidfile()
-    host = None
-    try:
-        host = _boot_host(args)
-        run_server(host, args.sock)
-    finally:
+        write_pidfile()
+        host = None
         try:
-            if host is not None:
-                host.shutdown()
+            host = _boot_host(args)
+            run_server(host, args.sock)
         finally:
-            remove_pidfile()
+            try:
+                if host is not None:
+                    host.shutdown()
+            finally:
+                remove_pidfile()
 
 
 def _cmd_cli(args):

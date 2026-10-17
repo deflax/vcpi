@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
+
+from core.native_output import logging_stream, set_debug_output
 
 
 def configure_logging(default_level: str = "WARNING") -> int:
@@ -24,9 +25,10 @@ def configure_logging(default_level: str = "WARNING") -> int:
         level=level,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stdout,
+        stream=logging_stream(),
         force=True,
     )
+    set_debug_output(level <= logging.DEBUG)
 
     if invalid_level is not None:
         logging.getLogger(__name__).warning(
@@ -42,4 +44,5 @@ def set_log_level(level: str) -> str:
         raise ValueError("log level must be DEBUG or WARNING")
     logging.getLogger().setLevel(level)
     os.environ["LOG_LEVEL"] = level
+    set_debug_output(level == "DEBUG")
     return logging.getLevelName(logging.getLogger().getEffectiveLevel())
