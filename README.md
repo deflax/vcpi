@@ -4,56 +4,12 @@ vcpi is a VST3 host with a native C++ audio engine, Python control plane, and
 Ableton Link tempo sync, designed for hardware-centric live setups (for example
 Arturia BeatStep Pro + Akai MIDI Mix).
 
-## Quick Start (from repo root)
+## Setup
 
-Fastest path:
-
-```bash
-# Terminal 1
-./vcpid
-
-# Terminal 2
-./vcpi
-```
-
-Manual setup:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python build_native.py
-
-# Terminal 1: start server
-python main.py serve
-
-# Terminal 2: connect interactive client
-python main.py cli
-```
-
-The daemon runs a control process, a spawned audio-output process, and a
-persistent process for each loaded slot; the CLI remains a separate client.
-Command parsing, formatting, session files, MIDI ports, the sequencer, and
-Ableton Link stay in the control process. Each slot process owns its
-VST3/Cardinal or WAV source and insert effects on a native render thread.
-The native PortAudio callback owns mixing and master effects; neither that
-callback nor slot DSP enters Python or acquires the GIL. Slot audio crosses
-preallocated, atomic-owned mapped memory with one block of added buffering.
-Loading/replacing a slot does not stop unrelated slots; read-only commands use
-cached snapshots.
-Session format 2 saves native VST3 state chunks rather than replaying every
-exposed parameter, which can trigger MIDI helpers and action controls. This
-includes instruments, slot inserts, and master effects; WAV slots remain
-path-based. Legacy format 1 restores only known automatable parameters, with
-warnings for skipped controls. Interrupted startup releases native owners
-without overwriting the saved session.
-
-In server mode, vcpi does not start audio automatically. Start audio manually
-from `vcpi` with `audio start [device]`.
-
-The server launcher builds the extension incrementally before starting audio
-owners. The first build downloads pinned JUCE, pybind11, and PortAudio sources;
-it requires network access, Git, CMake 3.22+, a C++17 compiler, and Python headers.
+Linux and macOS are supported. Install the native build prerequisites before
+starting the daemon. The first build requires network access to download pinned
+JUCE, pybind11, and PortAudio sources, plus Git, CMake 3.22+, a C++17 compiler,
+and Python development headers.
 
 On Debian/Ubuntu:
 
@@ -62,29 +18,81 @@ sudo apt install build-essential cmake pkg-config git python3-dev python3-venv \
   libasound2-dev libfreetype6-dev libfontconfig1-dev libx11-dev libxext-dev
 ```
 
-On macOS, install Apple's command-line tools and CMake (for example with Homebrew):
+On macOS, install Python 3, Git, Apple's command-line tools, and CMake
+(for example with Homebrew):
 
 ```bash
 xcode-select --install
-brew install cmake
+brew install python cmake git
 ```
 
-Build on each target machine using its own virtual environment:
+### Quick start (from repo root)
 
 ```bash
-python build_native.py
+# Terminal 1: prepare the environment, build native audio, and start the daemon
+./vcpid
+
+# Terminal 2: connect the interactive client
+./vcpi
 ```
 
-Linux uses PortAudio's ALSA backend; macOS builds its CoreAudio backend. VST3
-bundles must match the target OS and CPU architecture. Do not copy `.venv`,
-`build/`, or compiled extensions between platforms. Set
-`CMAKE_BUILD_PARALLEL_LEVEL=1` on memory-constrained systems.
+Both launchers create `.venv` if needed and install Python dependencies on first
+launch or when `requirements.txt` changes. `./vcpid` also builds the native
+extension incrementally before starting the daemon.
 
-On macOS, native audio owners hide their Python Dock icon before loading plugins,
-while keeping JUCE's Cocoa/message handling initialized. Linux initialization is
-unchanged. After updating, rebuild the native extension and restart the daemon.
-Verify Dock visibility and VST/Cardinal playback on a Mac; Linux rendering smoke
-checks do not exercise macOS application activation.
+Audio does **not** start automatically. In the client, try a bundled sample:
+
+```text
+slot 1 wav piano c4-soft
+audio devices
+audio start
+note 1 60 100 500
+```
+
+Use `audio start <device>` to select an output from `audio devices`.
+Use `quit` to disconnect the client; `shutdown` stops the daemon.
+Only one daemon per user can run at a time.
+
+### Manual setup
+
+Direct Python startup does not install dependencies or build the extension:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python build_native.py
+
+# Terminal 1
+.venv/bin/python main.py serve
+
+# Terminal 2
+.venv/bin/python main.py cli
+```
+
+Build on each target machine using its own virtual environment. Linux uses
+PortAudio's ALSA backend; macOS uses CoreAudio. VST3 bundles must match the target
+OS and CPU architecture. Do not copy `.venv`, `build/`, or compiled extensions
+between platforms. Set `CMAKE_BUILD_PARALLEL_LEVEL=1` on memory-constrained systems.
+
+## Runtime Model
+
+The daemon runs a Python control process, a spawned audio-output process, and a
+persistent process for each loaded slot; the CLI is a separate client connected
+through a local Unix socket. To use it from another machine, SSH into the host
+and run `./vcpi` there.
+
+Command parsing, session files, MIDI ports, sequencing, and Ableton Link stay in
+the control process. Each slot owns its VST3/Cardinal or WAV source and insert
+effects on a native render thread. The native PortAudio callback mixes slot
+audio and runs master effects. Neither the callback nor slot DSP enters Python
+or acquires the GIL. Shared-memory slot transport adds one block of buffering.
+Loading or replacing a slot does not stop unrelated slots; read-only plugin
+commands use cached snapshots.
+
+Sessions save native VST3 state chunks for instruments, slot inserts, and master
+effects; WAV slots remain path-based. See [session commands](USAGE.md#session-commands)
+for save/restore behavior and legacy session compatibility.
 
 ## Repository Layout
 
@@ -152,7 +160,7 @@ activity messages, warnings, and errors remain visible. For startup diagnostics,
 Successful builds are otherwise quiet; failures show the final 64 KiB of
 diagnostics.
 
-Full CLI and startup flag reference: `USAGE.md`
+Full CLI and startup flag reference: [USAGE.md](USAGE.md).
 
 Inside `./vcpi`, press `Tab` for command and argument suggestions. Completion
 comes from the daemon: audio/MIDI subcommands, routing channels and slots,
@@ -170,32 +178,30 @@ scrolling, and manual refresh. `get` includes parameter values, units, ranges,
 and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
 table; use `help <command>` for detailed syntax.
-The welcome and `about` logos use cyan, green, magenta, and yellow bands, with
-bright block faces and dim shadows in colour-capable terminals.
 Piped input/output remains plain text. `./vcpi` and `./vcpid` install dependencies
 on first launch and when `requirements.txt` changes, including for existing
 environments. For direct Python startup, install them manually with
 `.venv/bin/pip install -r requirements.txt`.
 
-Inside the CLI, a typical first run is:
+To route a hardware MIDI input to a bundled sample:
 
 ```text
-deps
+slot 1 wav piano c4-soft
 midi ports input
-audio devices
-slot 1 vst Dexed
 midi input <index>
-midimix input <index>
-midi ports output
-midimix output <index>
-midi link <ch> <slot>
-flow
+midi link <ch> 1
+audio devices
 audio start
 tempo 120
 status
-info 1
-get 1
+flow
 ```
+
+Replace `<index>` with a port index and `<ch>` with the hardware's MIDI channel
+(1–16). `midi link` changes internal routing only; `midi input` opens the port.
+For VST instruments, fetch or install a compatible plugin first, then use
+`slot 1 vst <plugin-name>`. MIDI Mix control and LED ports are optional; see
+[Controller Setup](#controller-setup).
 
 Read or change instrument, slot-effect, and master-effect parameters:
 
@@ -272,7 +278,7 @@ vcpi> midi link 10 3     # BSP ch 10 -> slot 3
 vcpi> midi link 5 1      # keyboard ch 5 -> slot 1
 ```
 
-- There are no device-specific commands; every MIDI input is a peer.
+- Generic note inputs use the same commands; MIDI Mix has a separate control input.
 - Routing is channel-based: `midi link <ch> <slot>` maps a MIDI channel to a slot.
 - Each device sends on its own channel(s); configure channels on the hardware.
 - Use `midi input close <index>` to close an open input.
@@ -324,8 +330,11 @@ Fetch bundled open-license VST3 plugins and load one:
 ./vst3/fetch-vsts-aarch64  # Raspberry Pi / Linux aarch64
 ```
 
-Bundled plugins currently include Dexed, Surge XT, Odin 2, OB-Xf, Geonkick,
-JC-303, Firefly Synth 2 (+FX), and Dragonfly Reverb.
+The Linux x86_64 fetcher includes Dexed, Surge XT, Odin 2, OB-Xf, Geonkick,
+JC-303, Firefly Synth 2 (+FX), and Dragonfly Reverb. The Linux aarch64 fetcher
+includes Surge XT, OB-Xf, and Dragonfly Reverb. These scripts do not install
+macOS plugins; install macOS-compatible VST3 bundles separately.
+See the [plugin catalog](vst3/README.md#plugin-catalog) for architecture-specific details.
 
 ```text
 vcpi> slot 1 vst Dexed         # Tab completes installed VST names
@@ -409,7 +418,7 @@ vcpi> get 1 fx 1        # parameters for slot 1's first effect
 vcpi> get master 1     # parameters for the first master effect
 ```
 
-Headless server + remote CLI:
+Headless server + local CLI (or run both commands on the host over SSH):
 
 ```bash
 # Terminal 1
@@ -419,8 +428,9 @@ Headless server + remote CLI:
 ./vcpi
 ```
 
-From `vcpi`, use `shutdown` to terminate the daemon process (for example, to
-let systemd restart it).
+From `vcpi`, `quit` or `exit` disconnects without stopping audio. Use `shutdown`
+to save the session and terminate the daemon. Whether a service restarts it
+depends on that service's restart policy.
 
 ## Raspberry Pi Builds
 
