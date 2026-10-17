@@ -168,6 +168,8 @@ The client keeps a scrolling `vcpi>` prompt with session history and uses
 values, units, ranges, and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
 table; use `help <command>` for detailed syntax.
+The welcome and `about` logos use cyan, green, magenta, and yellow bands, with
+bright block faces and dim shadows in colour-capable terminals.
 Piped input/output remains plain text. `./vcpi` and `./vcpid` install dependencies
 on first launch and when `requirements.txt` changes, including for existing
 environments. For direct Python startup, install them manually with

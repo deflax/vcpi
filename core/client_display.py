@@ -103,9 +103,23 @@ def display_response(console: Console, command: str, lines: list[str]) -> None:
     if table is not None:
         console.print(table)
         return
+    logo_colours = ("bright_cyan", "bright_green", "bright_magenta", "bright_yellow")
+    logo_width = 0
+    if name in ("", "about"):
+        logo_width = max(
+            (len(line) for line in lines if line.strip() and set(line) <= set(" █░")),
+            default=0,
+        )
     # Preserve spacing and width for diagrams, including on narrow terminals.
     for line in lines:
         text = Text(line)
+        if logo_width and line.strip() and set(line) <= set(" █░"):
+            for column, char in enumerate(line):
+                if char in "█░":
+                    colour = logo_colours[min(column * len(logo_colours) // logo_width,
+                                              len(logo_colours) - 1)]
+                    face = "bold" if char == "█" else "dim"
+                    text.stylize(f"{face} {colour}", column, column + 1)
         if line.lstrip().startswith(("Error:", "***")):
             text.stylize("bold red")
         elif name == "flow":
