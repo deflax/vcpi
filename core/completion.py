@@ -160,7 +160,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
     if command == "ableton":
         return choices(("link", "cut")) if not args else empty
     if command == "flow":
-        return choices(("all", "midi", "controls", "audio", *_SLOTS, "master", "json", "explore")) if not args else empty
+        return choices(("all", "midi", "controls", "audio", *_SLOTS, "master", "explore")) if not args else empty
     if command == "audio":
         if not args:
             return choices(("start", "stop", "devices", "diagnose"))

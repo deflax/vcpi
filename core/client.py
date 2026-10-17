@@ -185,7 +185,7 @@ def _read_response(rfile, console: Console | None = None, command: str = "") -> 
 
 def _fetch_flow_snapshot(rfile, wfile) -> dict:
     """Consume a complete response before reporting a malformed flow snapshot."""
-    wfile.write("flow json\n")
+    wfile.write("\x02\n")
     wfile.flush()
     lines = _read_response_lines(rfile)
     if lines is None:

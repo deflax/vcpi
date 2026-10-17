@@ -11,6 +11,10 @@ instance.  The protocol is line-oriented text:
   text before the cursor. Their response is one JSON object line, terminated
   by the same sentinel, and is never dispatched as a CLI command.
 
+  The exact ``\\x02`` request fetches a cached flow snapshot for Rich client
+  views. It returns one JSON object using the same response framing and is
+  not a public CLI command.
+
 The sentinel is a NUL byte on its own line (``\\x00\\n``).  The client reads
 lines until it sees the sentinel, then prints everything before it and
 prompts for the next command.
@@ -39,6 +43,7 @@ from core.host import VcpiCore
 from core.cli import HostCLI
 from core.completion import complete_line
 from core.paths import DEFAULT_SOCK_PATH
+from graph.signal_flow import build_flow_snapshot
 
 # Sentinel that marks the end of a command's output.
 END_OF_RESPONSE = "\x00"
@@ -262,6 +267,15 @@ class VcpiServer:
                 if not isinstance(before, str):
                     raise ValueError("completion request must contain a JSON string")
                 return json.dumps(complete_line(cli, before)) + "\n", False
+            except Exception as exc:
+                return f"Error: {exc}\n", False
+
+        if line.startswith("\x02"):
+            try:
+                if line != "\x02":
+                    raise ValueError("flow snapshot request takes no arguments")
+                snapshot = build_flow_snapshot(self.host)
+                return json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")) + "\n", False
             except Exception as exc:
                 return f"Error: {exc}\n", False
 

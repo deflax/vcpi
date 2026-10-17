@@ -260,7 +260,7 @@ display filter; MIDI CC input and underlying parameter access are unchanged.
 | `gain master [value]` | Get or set master gain |
 | `mute <slot>` | Toggle slot mute |
 | `solo <slot>` | Toggle slot solo |
-| `flow [all\|midi\|controls\|audio\|1-8\|master\|json\|explore]` | Inspect routing, mapped controls, and output; see visualization commands |
+| `flow [all\|midi\|controls\|audio\|1-8\|master\|explore]` | Inspect routing, mapped controls, and output; see visualization commands |
 
 ### Audio Commands
 
@@ -642,7 +642,6 @@ and audio output. Focused views expose the details without one oversized table:
 | `flow 1` … `flow 8` | Slot source/path, MIDI and sequencer inputs, inserts, mixer/worker state, and controls |
 | `flow master` | Master effects, gain/control, and output |
 | `flow all` | Every view, including empty slots and unlinked routes |
-| `flow json` | Entire snapshot as one JSON object for scripts |
 | `flow explore` | Read-only full-screen explorer in the interactive client |
 
 Inside `flow explore`:

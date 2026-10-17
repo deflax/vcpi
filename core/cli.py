@@ -10,7 +10,6 @@ import cmd
 import inspect
 import logging
 import os
-import json
 import shlex
 from pathlib import Path
 
@@ -784,30 +783,26 @@ class HostCLI(cmd.Cmd):
     # -- routing / MIDI ------------------------------------------------------
 
     def do_flow(self, arg):
-        """Explore cached signal routing: flow [all|midi|controls|audio|1-8|master|json|explore]
+        """Explore cached signal routing: flow [all|midi|controls|audio|1-8|master|explore]
 
         With no argument, show the compact overview. Named views and slot
-        numbers show a detailed table; all prints every table. json emits the
-        entire snapshot as one JSON line for scripts. explore opens the
-        full-screen read-only explorer in the interactive client only.
+        numbers show a detailed table; all prints every table. explore opens
+        the full-screen read-only explorer in the interactive client only.
         No hardware discovery, owner requests, or routing changes are performed.
         """
         parts = arg.strip().split()
-        views = {"all", "midi", "controls", "audio", "master", "json", "explore"}
+        views = {"all", "midi", "controls", "audio", "master", "explore"}
         if len(parts) > 1 or (parts and parts[0] not in views
                               and parts[0] not in {str(i) for i in range(1, NUM_SLOTS + 1)}):
-            self._print("Usage: flow [all|midi|controls|audio|1-8|master|json|explore]")
+            self._print("Usage: flow [all|midi|controls|audio|1-8|master|explore]")
             return
         view = parts[0] if parts else "overview"
         if view == "explore":
-            self._print("flow explore requires the interactive client; use flow all or flow json for plain output.")
+            self._print("flow explore requires the interactive client; use flow all for plain output.")
             return
         snapshot = build_flow_snapshot(self.host)
-        if view == "json":
-            self._print(json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")))
-        else:
-            section_id = f"slot{view}" if view.isdecimal() else view
-            self._print(render_flow_snapshot(snapshot, None if view == "all" else section_id))
+        section_id = f"slot{view}" if view.isdecimal() else view
+        self._print(render_flow_snapshot(snapshot, None if view == "all" else section_id))
 
     def do_info(self, arg):
         """Show plugin info: info <slot 1-8> | info <slot 1-8> fx <fx_index> | info master <fx_index>"""
