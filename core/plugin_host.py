@@ -150,56 +150,15 @@ class PluginHost:
             f"{CARDINAL_VST3_ENV}, or install Cardinal at {sample}."
         )
 
-    def _apply_vcv_patch(self, plugin: object, patch_path: Path) -> str:
-        """Attempt to load a .vcv patch into a Cardinal plugin instance."""
-        load_preset = getattr(plugin, "load_preset", None)
-        if callable(load_preset):
-            try:
-                load_preset(str(patch_path))
-                return "patch loaded via load_preset()"
-            except Exception as exc:
-                logger.debug("load_preset failed for %s: %s", patch_path, exc)
-
-        load_state = getattr(plugin, "load_state", None)
-        if callable(load_state):
-            try:
-                load_state(patch_path.read_bytes())
-                return "patch loaded via load_state()"
-            except Exception as exc:
-                logger.debug("load_state failed for %s: %s", patch_path, exc)
-
-        if hasattr(plugin, "state"):
-            try:
-                setattr(plugin, "state", patch_path.read_bytes())
-                return "patch loaded via state property"
-            except Exception as exc:
-                logger.debug("state property load failed for %s: %s", patch_path, exc)
-
-        param_names: list[str] = []
-        params = getattr(plugin, "parameters", None)
-        if params is not None and hasattr(params, "keys"):
-            try:
-                param_names = list(params.keys())
-            except Exception:
-                param_names = []
-
-        param_tokens = ("vcv", "patch", "project", "rack", "file", "path", "preset")
-        likely_params = [
-            name for name in param_names if any(token in name.lower() for token in param_tokens)
-        ]
-        for param_name in likely_params:
-            try:
-                setattr(plugin, param_name, str(patch_path))
-                return f"patch path applied to parameter '{param_name}'"
-            except Exception as exc:
-                logger.debug("set param %s failed for %s: %s", param_name, patch_path, exc)
-
-        return "could not auto-load .vcv patch; Cardinal instance is loaded"
+    def _apply_vcv_patch(self, plugin: NativePlugin, patch_path: Path) -> str:
+        """Import a Cardinal project through the native VST3 state adapter."""
+        plugin.load_preset(str(patch_path))
+        return "patch imported via Cardinal VST3 state"
 
     def load_vcv(self, slot_index: int, vcv_path: str,
                  cardinal_path: Optional[str] = None,
                  name: Optional[str] = None) -> tuple[InstrumentSlot, str, str]:
-        """Load Cardinal in a slot and attempt to apply a .vcv project file."""
+        """Load Cardinal in a slot and import a .vcv project file."""
         patch_path = Path(vcv_path).expanduser()
         if not patch_path.exists() or not patch_path.is_file():
             raise FileNotFoundError(f".vcv patch not found: {patch_path}")

@@ -380,9 +380,52 @@ void Plugin::loadPreset(const std::string& path) {
         instance->getExtensions(visitor);
         if (!visitor.accepted)
             throw std::runtime_error("VST3 rejected preset: " + path);
+    } else if (juce::File(juce::String(path)).hasFileExtension("vcv")) {
+        // Cardinal stores standard-base64 project data in DPF's "patch"
+        // field. Raw .vcv bytes are not a JUCE VST3 state envelope.
+        juce::MemoryBlock current;
+        instance->getStateInformation(current);
+        auto xml = juce::AudioProcessor::getXmlFromBinary(
+            current.getData(), static_cast<int>(current.getSize()));
+        auto* component = xml ? xml->getChildByName("IComponent") : nullptr;
+        juce::MemoryBlock componentData;
+        if (!component || !componentData.fromBase64Encoding(component->getAllSubText()))
+            throw std::runtime_error("Cardinal has no readable VST3 component state");
+        std::string state(static_cast<const char*>(componentData.getData()), componentData.getSize());
+        std::size_t patchStart = std::string::npos, patchEnd = std::string::npos;
+        bool inStates = false;
+        // Preserve the other fields, including host parameter values.
+        for (std::size_t pos = 0; pos < state.size();) {
+            const auto keyEnd = state.find('\0', pos);
+            if (keyEnd == std::string::npos) break;
+            const auto key = state.substr(pos, keyEnd - pos);
+            pos = keyEnd + 1;
+            if (key == "__dpf_state_begin__") { inStates = true; continue; }
+            if (key == "__dpf_state_end__") break;
+            const auto valueEnd = state.find('\0', pos);
+            if (valueEnd == std::string::npos) break;
+            if (inStates && key == "patch") {
+                patchStart = pos;
+                patchEnd = valueEnd;
+                break;
+            }
+            pos = valueEnd + 1;
+        }
+        if (patchStart == std::string::npos)
+            throw std::runtime_error("Plugin does not expose Cardinal's DPF patch state");
+        const auto encoded = juce::Base64::toBase64(data.getData(), data.getSize()).toStdString();
+        state.replace(patchStart, patchEnd - patchStart, encoded);
+        component->deleteAllTextElements();
+        component->addTextElement(juce::MemoryBlock(state.data(), state.size()).toBase64Encoding());
+        // Do not replay stale controller state over the updated component.
+        if (auto* controller = xml->getChildByName("IEditController"))
+            xml->removeChildElement(controller, true);
+        juce::AudioProcessor::copyXmlToBinary(*xml, current);
+        if (current.getSize() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+            throw std::invalid_argument("Preset is too large");
+        applyState(std::string(static_cast<const char*>(current.getData()), current.getSize()));
+        return; // applyState already refreshes parameter metadata.
     } else {
-        // Cardinal's raw .vcv attempt uses the same best-effort setStateInformation
-        // path as the former host; not all Cardinal builds accept raw project data.
         if (data.getSize() > static_cast<std::size_t>(std::numeric_limits<int>::max())) throw std::invalid_argument("Preset is too large");
         instance->setStateInformation(data.getData(), static_cast<int>(data.getSize()));
     }

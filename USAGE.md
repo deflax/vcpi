@@ -111,6 +111,15 @@ Cardinal/VCV helpers:
 - `slot <n> vcv` does not auto-route channels; use `midi link <ch> <slot>` explicitly.
 - Override patch directory with `VCPI_PATCHES_DIR`.
 - Override Cardinal plugin path with `CARDINAL_VST3_PATH`.
+- Author patches in Cardinal with Host MIDI and Host Audio modules wired to the
+  instrument. Both JSON and compressed `.vcv` projects are imported through
+  Cardinal's VST3 `patch` state; a raw `.vcv` file is not a VST3 preset/state chunk.
+  Unsupported plugin state interfaces report an error rather than falling back
+  to an empty instance.
+- Session saves capture the loaded plugin state, so restoring a current-format
+  session does not require re-importing the original `.vcv` file.
+- If `audio diagnose` shows MIDI consumed but a slot peak of zero, inspect the
+  patch import and internal MIDI/audio wiring before changing output devices.
 
 Examples:
 
