@@ -179,6 +179,7 @@ PYBIND11_MODULE(_vcpi_native, module) {
         .def("attach", &Engine::attach, py::arg("index"), py::arg("transport"), py::arg("gain") = 1.0, py::arg("muted") = false, py::arg("solo") = false, py::call_guard<py::gil_scoped_release>())
         .def("set_slot", &Engine::setSlot, py::arg("index"), py::arg("gain"), py::arg("muted"), py::arg("solo"), py::call_guard<py::gil_scoped_release>())
         .def("set_master_gain", &Engine::setMasterGain, py::arg("gain"), py::call_guard<py::gil_scoped_release>())
+        .def("set_mixer", &Engine::setMixer, py::arg("slots"), py::arg("master_gain"), py::call_guard<py::gil_scoped_release>())
         .def("set_master_effects", &Engine::setMasterEffects, py::arg("effects"), py::call_guard<py::gil_scoped_release>())
         .def("start", [](Engine& engine, const py::object& device) {
             int index = -1;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import math
 import threading
 from contextlib import contextmanager
 
@@ -198,30 +199,6 @@ class AudioEngine:
                 self._applied_updates.append(
                     ("parameter", index, fx_index, name, actual, raw, display))
             return actual
-        if operation == "slot":
-            index, fields = arguments
-            slot = self._control_slot(index)
-            unknown = fields.keys() - self._slot_fields
-            if unknown:
-                raise TypeError(f"unsupported slot fields: {', '.join(sorted(unknown))}")
-            applied = {name: (float(value) if name == "gain" else bool(value)
-                       if name in ("muted", "solo", "enabled") else str(value))
-                       for name, value in fields.items()}
-            if self._native is not None:
-                self._native.set_slot(index, applied.get("gain", slot.gain),
-                                      applied.get("muted", slot.muted),
-                                      applied.get("solo", slot.solo))
-            for name, value in applied.items():
-                setattr(slot, name, value)
-            self._applied_updates.append(("slot", index, applied))
-            return
-        if operation == "master_gain":
-            value = float(arguments[0])
-            if self._native is not None:
-                self._native.set_master_gain(value)
-            self.master_gain = value
-            self._applied_updates.append(("master_gain", value))
-            return
         if operation == "barrier":
             if self.control_error is not None:
                 raise self.control_error
@@ -232,25 +209,88 @@ class AudioEngine:
             return
         raise ValueError(f"unknown audio control: {operation}")
 
+    def _apply_mixer_controls(self, controls):
+        """Publish adjacent mixer edits with one callback acknowledgment."""
+        states = [(slot.gain, slot.muted, slot.solo) if slot is not None
+                  else (1.0, False, False) for slot in self.slots]
+        master = self.master_gain
+        updates = {}
+        master_changed = False
+
+        def gain(value):
+            value = float(value)
+            if not math.isfinite(value) or not 0 <= value <= 3.4028234663852886e38:
+                raise ValueError("Gain must be a finite nonnegative float")
+            return value
+
+        for control in controls:
+            try:
+                if control.operation == "slot":
+                    index, fields = control.arguments
+                    self._control_slot(index)
+                    unknown = fields.keys() - self._slot_fields
+                    if unknown:
+                        raise TypeError(f"unsupported slot fields: {', '.join(sorted(unknown))}")
+                    applied = {name: (gain(value) if name == "gain" else bool(value)
+                               if name in ("muted", "solo", "enabled") else str(value))
+                               for name, value in fields.items()}
+                    old_gain, muted, solo = states[index]
+                    states[index] = (applied.get("gain", old_gain),
+                                     applied.get("muted", muted), applied.get("solo", solo))
+                    updates.setdefault(index, {}).update(applied)
+                else:
+                    value = gain(control.arguments[0])
+                    master = value
+                    master_changed = True
+            except Exception as error:
+                control.error = error
+        if not updates and not master_changed:
+            return
+        if self._native is not None:
+            self._native.set_mixer(states, master)
+        # Cached state and completion notifications remain applied-only: publish
+        # them after the entire snapshot has reached the native callback.
+        for index, fields in updates.items():
+            slot = self.slots[index]
+            for name, value in fields.items():
+                setattr(slot, name, value)
+            self._applied_updates.append(("slot", index, fields))
+        if master_changed:
+            self.master_gain = master
+            self._applied_updates.append(("master_gain", master))
+
     def apply_pending_controls(self):
         """Apply FIFO controls on the control owner, including during playback."""
         if threading.get_ident() != self._owner_thread:
             raise RuntimeError("pending controls must be applied by the audio owner")
         with self._lock:
-            for _ in range(len(self._control_queue)):
+            remaining = len(self._control_queue)
+            while remaining:
                 with self._control_lock:
                     control = self._control_queue.popleft()
-                    if control.cancelled:
-                        continue
+                    remaining -= 1
+                    controls = [control]
+                    mixer = control.operation in ("slot", "master_gain")
+                    if mixer:
+                        while remaining and self._control_queue[0].operation in ("slot", "master_gain"):
+                            controls.append(self._control_queue.popleft())
+                            remaining -= 1
+                    controls = [item for item in controls if not item.cancelled]
                 try:
-                    control.result = self._apply_control(control)
+                    if mixer:
+                        self._apply_mixer_controls(controls)
+                    elif controls:
+                        control.result = self._apply_control(control)
                 except Exception as error:
-                    control.error = error
-                    if control.done is None and self.control_error is None:
-                        self.control_error = error
+                    for item in controls:
+                        if item.error is None:
+                            item.error = error
                 finally:
-                    if control.done is not None:
-                        control.done.set()
+                    for item in controls:
+                        if item.error is not None and item.done is None and self.control_error is None:
+                            self.control_error = item.error
+                        if item.done is not None:
+                            item.done.set()
             if self.control_error is not None:
                 raise self.control_error
 

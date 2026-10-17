@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace vcpi {
@@ -59,6 +60,7 @@ public:
     void attach(int index, std::shared_ptr<Transport> transport, double gain, bool muted, bool solo);
     void setSlot(int index, double gain, bool muted, bool solo);
     void setMasterGain(double gain);
+    void setMixer(const std::array<std::tuple<double, bool, bool>, 8>& mixing, double masterGain);
     void setMasterEffects(const std::vector<std::shared_ptr<Plugin>>& effects);
     void start(int deviceIndex = -1, const std::string& deviceName = {});
     void stop();
@@ -68,7 +70,11 @@ public:
     std::vector<float> renderBlock();
 private:
     static constexpr std::size_t slotCount = 8, commandCapacity = 128;
-    enum class CommandType { Attach, Slot, MasterGain, Barrier };
+    enum class CommandType { Attach, Slot, MasterGain, Mixer, Barrier };
+    struct MixerSlot {
+        float gain = 1.0f;
+        bool muted = false, solo = false;
+    };
     struct Command {
         CommandType type = CommandType::Barrier;
         int index = 0;
@@ -76,6 +82,7 @@ private:
         float gain = 1.0f;
         bool muted = false, solo = false;
         std::uint64_t ticket = 0;
+        std::array<MixerSlot, slotCount> mixerSlots{};
     };
     struct Slot {
         Transport* transport = nullptr;
@@ -83,7 +90,7 @@ private:
         bool muted = false, solo = false;
         bool failureReported = false;
     };
-    void submitControl(Command command);
+    void submitControl(const Command& command);
     void applyControls() noexcept;
     void reconcileRetained();
     void render(float* output) noexcept;

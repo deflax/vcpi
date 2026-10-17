@@ -680,6 +680,13 @@ order, not insert or master-effect parameters. Disconnected ports and unbound
 controls are explicit. Mute/solo, disabled slots, zero gains, stopped audio, and
 worker/owner failures are shown as output blockers.
 
+MIDI Mix faders adjust slot gains and the master gain. Adjacent queued mixer
+edits are combined into one snapshot at an audio callback boundary, keeping
+the latest value for each field without waiting one audio block per CC event.
+Applied-state views and LED reconciliation update after that boundary.
+Slot replacements and explicit control barriers retain FIFO ordering;
+mixer batches do not cross them.
+
 These views perform no hardware discovery, native-owner requests, or routing
 changes. They show cached applied values and routing eligibility, **not live
 meters or proof of audible sound**. Link tempo is the cached configured tempo,

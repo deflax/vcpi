@@ -151,7 +151,12 @@ class _OwnerRuntime:
                     raise BufferError("audio input backlog is full while audio is stopped")
                 time.sleep(0.001)
             elif self.inputs.poll(0.01):
-                self.receive_input()
+                for _ in range(64):
+                    self.receive_input()
+                    if (self.received_input >= sequence
+                            or self.pending() >= INPUT_CAPACITY
+                            or not self.inputs.poll()):
+                        break
             if time.monotonic() >= deadline:
                 raise TimeoutError("audio input ordering barrier timed out")
 

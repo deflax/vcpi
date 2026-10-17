@@ -173,6 +173,47 @@ class NativeAudioTests(unittest.TestCase):
         self.assertEqual(snapshot.parameters, {})
         self.assertEqual(snapshot.values, {})
 
+    def test_mixer_snapshot_applies_sparse_solo_and_rejects_partial_updates(self):
+        self.slot(0)
+        self.slot(7)
+        self.block()
+        states = [(1.0, False, False)] * 8
+        states[0] = (0.5, False, False)
+        states[7] = (0.25, False, True)
+        self.engine._native.set_mixer(states, 0.5)
+        np.testing.assert_allclose(self.block(), 0.03125, atol=1e-6)
+        for invalid in (-1.0, float("nan"), float("inf"), 1e39):
+            with self.subTest(gain=invalid):
+                rejected = list(states)
+                rejected[0] = (0.0, True, False)
+                rejected[7] = (invalid, False, False)
+                with self.assertRaises(ValueError):
+                    self.engine._native.set_mixer(rejected, 0.1)
+                np.testing.assert_allclose(self.block(), 0.03125, atol=1e-6)
+        with self.assertRaises(ValueError):
+            self.engine._native.set_mixer([(0.0, True, False)] * 8, float("nan"))
+        np.testing.assert_allclose(self.block(), 0.03125, atol=1e-6)
+
+    def test_gain_burst_preserves_fields_and_slot_replacement_order(self):
+        retired = self.slot(0)
+        for value in range(64):
+            self.engine.enqueue_slot_change(0, gain=value / 127.0)
+            self.engine.enqueue_master_gain(value / 127.0)
+        self.engine.enqueue_slot_change(0, muted=True)
+        replacement = self.slot(0)
+        self.assertIsNot(retired, replacement)
+        self.engine.enqueue_slot_change(0, gain=0.5)
+        self.engine.enqueue_slot_change(0, solo=True)
+        self.engine.enqueue_master_gain(0.25)
+        self.engine.flush_controls()
+        self.assertEqual(retired.gain, 63 / 127.0)
+        self.assertTrue(retired.muted)
+        self.assertFalse(replacement.muted)
+        self.assertTrue(replacement.solo)
+        self.assertEqual(replacement.gain, 0.5)
+        self.block()
+        np.testing.assert_allclose(self.block(), 0.03125, atol=1e-6)
+
     def test_midi_overflow_is_explicit(self):
         transport = self.backend.Transport(str(self.root / "overflow.mmap"), 64, True)
         try:

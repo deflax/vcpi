@@ -256,17 +256,18 @@ float Engine::validateGain(double gain) {
         throw std::invalid_argument("Gain must be a finite nonnegative float");
     return static_cast<float>(gain);
 }
-void Engine::submitControl(Command command) {
+void Engine::submitControl(const Command& command) {
     checkOperational();
     const auto write = commandWrite.load(std::memory_order_relaxed);
     const auto read = commandRead.load(std::memory_order_acquire);
     if (static_cast<std::uint32_t>(write - read) >= commandCapacity) throw MidiFull("Native engine control FIFO is full");
-    command.ticket = ++nextTicket;
+    const auto ticket = ++nextTicket;
     commands[write % commandCapacity] = command;
+    commands[write % commandCapacity].ticket = ticket;
     commandWrite.store(write + 1, std::memory_order_release);
     if (!running.load(std::memory_order_acquire)) applyControls();
     const auto deadline = Clock::now() + std::chrono::seconds(5);
-    while (acknowledged.load(std::memory_order_acquire) < command.ticket) {
+    while (acknowledged.load(std::memory_order_acquire) < ticket) {
         if (Clock::now() >= deadline) {
             failure.store(Failure::Timeout, std::memory_order_release);
             throw NativeTimeout("Native output control acknowledgement timed out");
@@ -297,6 +298,14 @@ void Engine::applyControls() noexcept {
                 slots[command.index].solo = command.solo;
                 break;
             case CommandType::MasterGain: masterGain = command.gain; break;
+            case CommandType::Mixer:
+                for (std::size_t i = 0; i < slots.size(); ++i) {
+                    slots[i].gain = command.mixerSlots[i].gain;
+                    slots[i].muted = command.mixerSlots[i].muted;
+                    slots[i].solo = command.mixerSlots[i].solo;
+                }
+                masterGain = command.gain;
+                break;
             case CommandType::Barrier: break;
         }
         // Release publishes completed raw-pointer replacement; no old callback
@@ -343,6 +352,17 @@ void Engine::setMasterGain(double gain) {
     const auto scalar = validateGain(gain);
     std::lock_guard<std::mutex> control(controls);
     submitControl({CommandType::MasterGain, 0, nullptr, scalar, false, false, 0});
+}
+void Engine::setMixer(const std::array<std::tuple<double, bool, bool>, 8>& mixing, double gain) {
+    Command command;
+    command.type = CommandType::Mixer;
+    command.gain = validateGain(gain);
+    for (std::size_t i = 0; i < mixing.size(); ++i) {
+        const auto& [slotGain, muted, solo] = mixing[i];
+        command.mixerSlots[i] = {validateGain(slotGain), muted, solo};
+    }
+    std::lock_guard<std::mutex> control(controls);
+    submitControl(command);
 }
 void Engine::setMasterEffects(const std::vector<std::shared_ptr<Plugin>>& chain) {
     validateEffects(chain, sampleRate, frames);
