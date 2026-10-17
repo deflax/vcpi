@@ -13,6 +13,7 @@ import os
 import shlex
 from pathlib import Path
 
+from core.completion import complete_line
 from core.deps import HAS_LINK, HAS_RTMIDI, HAS_MIDO
 from core.host import VcpiCore
 from core.midi import list_midi_input_ports, list_midi_output_ports
@@ -353,131 +354,37 @@ class HostCLI(cmd.Cmd):
     def _vst_names(self) -> list[str]:
         return sorted({path.stem for path in self._iter_vst_plugin_paths()})
 
-    def complete_slot(self, text, line, begidx, endidx):
-        """Tab completion for the unified slot command."""
-        del endidx
-        prefix_tokens = line[:begidx].split()
-        if not prefix_tokens or prefix_tokens[0] != "slot":
-            return []
-
-        arg_index = len(prefix_tokens) - 1
-        args_before = prefix_tokens[1:]
-
-        # slot <slot|master>
-        if arg_index == 0:
-            targets = ["master", *[str(i) for i in range(1, NUM_SLOTS + 1)]]
-            return self._filter_prefix(targets, text)
-
-        if not args_before:
-            return []
-
-        target = args_before[0]
-
-        if target == "master":
-            # slot master fx ...
-            if arg_index == 1:
-                return self._filter_prefix(["fx"], text)
-            if arg_index == 2 and len(args_before) >= 2 and args_before[1] == "fx":
-                return self._filter_prefix(["clear", *self._vst_names()], text)
-            return []
-
-        # slot <num> <subcommand> ...
-        if arg_index == 1:
-            return self._filter_prefix(list(self.SLOT_TYPES), text)
-
-        if len(args_before) < 2:
-            return []
-
-        mode = args_before[1]
-
-        if mode == "vst":
-            if arg_index == 2:
-                return self._filter_prefix(self._vst_names(), text)
-            return []
-
-        if mode == "vcv":
-            if arg_index == 2:
-                return self._filter_prefix(self._vcv_patch_names(), text)
-            return []
-
-        if mode == "wav":
-            if arg_index == 2:
-                return self._filter_prefix(self._sample_pack_names(), text)
-            if arg_index == 3 and len(args_before) >= 3:
-                return self._filter_prefix(self._sample_names(args_before[2]), text)
-            return []
-
-        if mode == "fx":
-            if arg_index == 2:
-                return self._filter_prefix(["clear", *self._vst_names()], text)
-            return []
-
-        return []
-
-    def _complete_slot_fx(self, text, prefix_tokens):
-        """Complete plugin targets: <slot> [fx <index>] | master [index]."""
-        arg_index = len(prefix_tokens) - 1
-
-        if arg_index == 0:
-            targets = ["master", *[str(i) for i in range(1, NUM_SLOTS + 1)]]
-            return self._filter_prefix(targets, text)
-
-        args = prefix_tokens[1:]
-        if not args:
-            return []
-
-        if args[0] == "master":
-            # master <fx_index>
-            if arg_index == 1:
-                n = len(self.host.engine.master_effects)
-                return self._filter_prefix([str(i) for i in range(1, n + 1)], text)
-            return []
-
-        # <slot> [fx <fx_index>]
-        if arg_index == 1:
-            return self._filter_prefix(["fx"], text)
-        if arg_index == 2 and len(args) >= 2 and args[1] == "fx":
-            try:
-                idx = _slot_to_internal(int(args[0]))
-                slot = self.host.engine.slots[idx]
-                if slot and slot.effects:
-                    n = len(slot.effects)
-                    return self._filter_prefix([str(i) for i in range(1, n + 1)], text)
-            except (ValueError, IndexError):
-                pass
-        return []
-
-    def complete_info(self, text, line, begidx, endidx):
-        del endidx
-        prefix_tokens = line[:begidx].split()
-        if not prefix_tokens or prefix_tokens[0] != "info":
-            return []
-        return self._complete_slot_fx(text, prefix_tokens)
-
-    def _complete_parameter_command(self, text, line, begidx, command):
+    def cmdloop(self, intro=None):
+        """Let readline replace a whole completion span, including plugin words."""
+        if not self.use_rawinput or not self.completekey:
+            return super().cmdloop(intro)
         try:
-            prefix_tokens = shlex.split(line[:begidx])
-        except ValueError:
-            return []
-        if not prefix_tokens or prefix_tokens[0] != command:
-            return []
-        matches = self._complete_slot_fx(text, prefix_tokens)
+            import readline
+        except ImportError:
+            return super().cmdloop(intro)
+        delimiters = readline.get_completer_delims()
         try:
-            _, _, plugin, remaining = self._parameter_target(
-                prefix_tokens[1:], require_master_index=command == "set")
-        except ValueError:
-            return matches
-        if not remaining:
-            names = [name for name, param in plugin.parameters.items()
-                     if not param.is_midi_cc_helper]
-            matches.extend(self._filter_prefix(names, text))
-        return sorted(set(matches))
+            readline.set_completer_delims("\n")
+            return super().cmdloop(intro)
+        finally:
+            readline.set_completer_delims(delimiters)
 
-    def complete_get(self, text, line, begidx, endidx):
-        return self._complete_parameter_command(text, line, begidx, "get")
+    def complete(self, text, state):
+        """Bridge cmd.Cmd's readline API to the shared daemon grammar."""
+        if state == 0:
+            import readline
 
-    def complete_set(self, text, line, begidx, endidx):
-        return self._complete_parameter_command(text, line, begidx, "set")
+            before = readline.get_line_buffer()[:readline.get_endidx()]
+            result = complete_line(self, before)
+            start = len(before) + result["start_position"]
+            preserved = before[readline.get_begidx():start]
+            self.completion_matches = [
+                preserved + match + " " for match in result["matches"]
+            ]
+        try:
+            return self.completion_matches[state]
+        except IndexError:
+            return None
 
     def do_slot(self, arg):
         """Slot management: slot <1-8> vst <path|name> [--name <label>] | slot <1-8> wav <pack> <sample> [name] | slot <1-8> vcv <patch> [name] | slot <1-8|master> fx <path|name> [--name <label>] | slot <1-8> clear | slot <1-8|master> fx clear <fx_index>"""
@@ -771,16 +678,6 @@ class HostCLI(cmd.Cmd):
 
     # -- gain / mute / solo --------------------------------------------------
 
-    def complete_gain(self, text, line, begidx, endidx):
-        del endidx
-        prefix_tokens = line[:begidx].split()
-        if not prefix_tokens or prefix_tokens[0] != "gain":
-            return []
-        arg_index = len(prefix_tokens) - 1
-        if arg_index == 0:
-            targets = ["master", *[str(i) for i in range(1, NUM_SLOTS + 1)]]
-            return self._filter_prefix(targets, text)
-        return []
 
     def do_gain(self, arg):
         """Set gain: gain <slot 1-8> <0.0-1.0> | gain master [0.0-1.0]"""
@@ -1401,10 +1298,6 @@ class HostCLI(cmd.Cmd):
         self._print(f"  Debug logging: {'on' if level <= logging.DEBUG else 'off'} "
                     f"(log level: {logging.getLevelName(level)})")
 
-    def complete_debug(self, text, line, begidx, endidx):
-        if len(line[:begidx].split()) == 1:
-            return self._filter_prefix(["on", "off"], text)
-        return []
 
     # -- session -------------------------------------------------------------
 
@@ -1431,13 +1324,6 @@ class HostCLI(cmd.Cmd):
             if f.is_file() and not f.name.startswith(".")
         )
 
-    def complete_save(self, text, line, begidx, endidx):
-        del endidx
-        return self._filter_prefix(self._session_names(), text)
-
-    def complete_load(self, text, line, begidx, endidx):
-        del endidx
-        return self._filter_prefix(self._session_names(), text)
 
     def do_save(self, arg):
         """Save session: save [<name>]

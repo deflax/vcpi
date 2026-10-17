@@ -7,6 +7,10 @@ instance.  The protocol is line-oriented text:
   client -> server:  one command per line (UTF-8)
   server -> client:  output lines, terminated by a sentinel line
 
+  Completion requests use ``\\x01`` followed by a JSON string containing the
+  text before the cursor. Their response is one JSON object line, terminated
+  by the same sentinel, and is never dispatched as a CLI command.
+
 The sentinel is a NUL byte on its own line (``\\x00\\n``).  The client reads
 lines until it sees the sentinel, then prints everything before it and
 prompts for the next command.
@@ -20,6 +24,7 @@ the result.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import queue
@@ -32,6 +37,7 @@ from typing import NamedTuple
 
 from core.host import VcpiCore
 from core.cli import HostCLI
+from core.completion import complete_line
 from core.paths import DEFAULT_SOCK_PATH
 
 # Sentinel that marks the end of a command's output.
@@ -249,6 +255,15 @@ class VcpiServer:
         # Build a throw-away HostCLI that prints into our buffer.
         cli = HostCLI(self.host, stdout=buf, owns_host=False)
         cli.use_rawinput = False
+
+        if line.startswith("\x01"):
+            try:
+                before = json.loads(line[1:])
+                if not isinstance(before, str):
+                    raise ValueError("completion request must contain a JSON string")
+                return json.dumps(complete_line(cli, before)) + "\n", False
+            except Exception as exc:
+                return f"Error: {exc}\n", False
 
         # cmd.Cmd.onecmd() returns True when the command wants to exit.
         stop = cli.onecmd(line)

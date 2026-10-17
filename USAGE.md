@@ -150,15 +150,32 @@ Other responses, including `help <command>`, retain their text.
 - Redirected input or output uses the plain-text client, without Rich formatting.
 - For direct Python startup, install dependencies with `.venv/bin/pip install -r requirements.txt`.
 
-When connected with `./vcpi` (or `python main.py cli`), press `Tab` to
-autocomplete command names. `slot` has context-aware argument completion:
+When connected with `./vcpi` (or `python main.py cli`), press `Tab` after a
+command or partial argument to show matching choices. Suggestions come from the
+daemon's shared command grammar and cached state, not a separate client-side
+command list. Tab does not execute commands, start audio, or read live plugin
+parameters.
 
-- `slot` -> slot numbers `1`-`8`, `master`
-- `slot <n>` -> `vst`, `wav`, `vcv`, `fx`, `clear`
-- `slot <n> wav` -> sample pack names and sample names
-- `slot <n> vcv` -> patch names from `patches/`
-- `slot <n> vst` / `slot <n> fx` -> detected VST names
-- `info` / `get` / `set` -> slot numbers, `master`, `fx`, effect indexes
+| Context | Suggestions |
+|---|---|
+| Command name / `help` | Available commands and help topics |
+| `audio` / `audio start` | Subcommands and cached output-device indexes |
+| `midi` / `midimix` | Subcommands, port directions, current hardware indexes, and opened-input close indexes |
+| `midi link` / `midi cut` | MIDI channels and routing slots |
+| `seq` | Actions, sequence banks, and target slots |
+| `ableton` / `debug` | Link actions and debug on/off |
+| `gain` / `mute` / `solo` / `note` | Valid slot targets; `gain` also offers `master` |
+| `slot` | Slot types, installed plugins, patch names, sample packs/samples, and loaded effect indexes for `fx clear` |
+| `info` / `get` / `set` | Plugin targets and actual loaded effect indexes |
+| `get` / `set` parameter names | Cached visible parameters, excluding MIDI CC helpers |
+| `set` value | Boolean literals and enum choices, quoted when necessary |
+| `save` / `load` | Saved session names from the daemon's sessions directory |
+
+Incomplete quotes and multiword plugin/enum names are completed as a whole,
+without duplicating words already typed. Session names retain their raw-name
+syntax. Arbitrary gain, tempo, note, velocity, and duration values are not
+guessed. Commands without arguments have no additional suggestions; unavailable
+hardware or empty plugin/effect lists may also yield no choices.
 
 ### Plugin Commands
 

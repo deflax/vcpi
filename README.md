@@ -154,11 +154,13 @@ diagnostics.
 
 Full CLI and startup flag reference: `USAGE.md`
 
-Inside `./vcpi`, press `Tab` to autocomplete command names. The `slot`
-command has context-aware completion: `slot <n> vst` and `slot <n> fx`
-complete detected VST3 plugin names, `slot <n> wav` completes pack and
-sample names, and `slot <n> vcv` completes patch names. You do not need
-to type full paths.
+Inside `./vcpi`, press `Tab` for command and argument suggestions. Completion
+comes from the daemon: audio/MIDI subcommands, routing channels and slots,
+sequencer banks, mixer targets, help topics, and debug modes are supported.
+`get`/`set` suggest cached plugin parameters and boolean/enum choices; effect
+indexes reflect loaded chains. Plugin, patch, sample, and session names are
+discovered on the daemon, including names containing spaces where the command
+supports them. Free-form numeric values are left for you to enter.
 
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and

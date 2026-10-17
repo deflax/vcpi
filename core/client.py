@@ -16,8 +16,7 @@ Or directly::
 
 from __future__ import annotations
 
-import os
-import re
+import json
 import socket
 import sys
 from collections.abc import Iterable
@@ -34,253 +33,6 @@ from core.paths import DEFAULT_SOCK_PATH
 
 # Must match the sentinel used by server.py
 END_OF_RESPONSE = "\x00"
-
-
-HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-
-# Fallback for tab completion in case help parsing fails.
-FALLBACK_COMMANDS = (
-    "about",
-    "audio",
-    "debug",
-    "deps",
-    "exit",
-    "gain",
-    "get",
-    "help",
-    "info",
-    "ableton",
-    "midi",
-    "midimix",
-    "flow",
-    "mute",
-    "note",
-    "load",
-    "quit",
-    "save",
-    "set",
-    "shutdown",
-    "slot",
-    "solo",
-    "status",
-    "tempo",
-)
-
-SLOT_TYPES = ("vst", "wav", "vcv", "fx", "clear")
-
-
-def _filter_prefix(values: list[str], prefix: str) -> list[str]:
-    wanted = prefix.lower()
-    return sorted(v for v in values if v.lower().startswith(wanted))
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parent.parent
-
-
-def _samples_root() -> Path:
-    cwd_samples = Path.cwd() / "sampler" / "samples"
-    if cwd_samples.exists() and cwd_samples.is_dir():
-        return cwd_samples
-    return _repo_root() / "sampler" / "samples"
-
-
-def _sample_pack_names() -> list[str]:
-    root = _samples_root()
-    if not root.exists() or not root.is_dir():
-        return []
-    return sorted(
-        entry.name
-        for entry in root.iterdir()
-        if entry.is_dir() and not entry.name.startswith(".")
-    )
-
-
-def _sample_names(pack_name: str) -> list[str]:
-    pack = Path(pack_name.strip().strip("/"))
-    if pack.is_absolute() or ".." in pack.parts:
-        return []
-
-    pack_dir = _samples_root() / pack
-    if not pack_dir.exists() or not pack_dir.is_dir():
-        return []
-
-    return sorted(wav.stem for wav in pack_dir.glob("*.wav"))
-
-
-def _patches_root() -> Path:
-    raw = os.environ.get("VCPI_PATCHES_DIR", "patches")
-    path = Path(raw).expanduser()
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    return path
-
-
-def _vcv_patch_names() -> list[str]:
-    root = _patches_root()
-    if not root.exists() or not root.is_dir():
-        return []
-
-    out: list[str] = []
-    for patch_file in root.rglob("*.vcv"):
-        try:
-            rel = patch_file.relative_to(root).as_posix()
-        except ValueError:
-            continue
-        if rel.lower().endswith(".vcv"):
-            rel = rel[:-4]
-        out.append(rel)
-    return sorted(out)
-
-
-def _vst_search_dirs() -> list[Path]:
-    env_tokens: list[str] = []
-    for key in ("VST3_PATH", "VST_PATH"):
-        raw = os.environ.get(key)
-        if raw:
-            env_tokens.extend(part for part in raw.split(os.pathsep) if part)
-
-    candidates = [
-        *env_tokens,
-        str(_repo_root() / "vst3"),
-        str(Path.cwd() / "vst3"),
-        str(Path.cwd()),
-        str(_repo_root()),
-        "~/.vst3",
-        "/usr/lib/vst3",
-        "/usr/local/lib/vst3",
-        "~/Library/Audio/Plug-Ins/VST3",
-        "/Library/Audio/Plug-Ins/VST3",
-    ]
-
-    out: list[Path] = []
-    seen: set[Path] = set()
-    for token in candidates:
-        path = Path(token).expanduser()
-        try:
-            resolved = path.resolve()
-        except OSError:
-            resolved = path
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if resolved.exists() and resolved.is_dir():
-            out.append(resolved)
-    return out
-
-
-def _vst_names() -> list[str]:
-    names: set[str] = set()
-    for base in _vst_search_dirs():
-        try:
-            entries = list(base.iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            if entry.suffix.lower() == ".vst3":
-                names.add(entry.stem)
-    return sorted(names)
-
-
-def _sessions_root() -> Path:
-    cwd_sessions = Path.cwd() / "sessions"
-    if cwd_sessions.exists() and cwd_sessions.is_dir():
-        return cwd_sessions
-    return _repo_root() / "sessions"
-
-
-def _session_names() -> list[str]:
-    root = _sessions_root()
-    if not root.exists() or not root.is_dir():
-        return []
-    return sorted(
-        f.stem for f in root.glob("*.json")
-        if f.is_file() and not f.name.startswith(".")
-    )
-
-
-def _complete_slot_fx_args(text: str, prefix_tokens: list[str]) -> list[str]:
-    """Complete info/get/set targets without live plugin metadata."""
-    arg_index = len(prefix_tokens) - 1
-    slots = [str(i) for i in range(1, 9)]
-
-    if arg_index == 0:
-        return _filter_prefix(["master", *slots], text)
-
-    args = prefix_tokens[1:]
-    if not args:
-        return []
-
-    if args[0] == "master":
-        if arg_index == 1:
-            return _filter_prefix(slots, text)
-        return []
-
-    # <slot> [fx <index>]
-    if args[0] in slots:
-        if arg_index == 1:
-            return _filter_prefix(["fx"], text)
-        if arg_index == 2 and args[1] == "fx":
-            return _filter_prefix(slots, text)
-
-    return []
-
-
-def _complete_slot_args(text: str, prefix_tokens: list[str]) -> list[str]:
-    """Tab completion for the unified slot command."""
-    arg_index = len(prefix_tokens) - 1
-    args_before = prefix_tokens[1:]
-    slots = [str(i) for i in range(1, 9)]
-
-    # slot <slot|master>
-    if arg_index == 0:
-        return _filter_prefix(["master", *slots], text)
-
-    if not args_before:
-        return []
-
-    target = args_before[0]
-
-    if target == "master":
-        # slot master fx ...
-        if arg_index == 1:
-            return _filter_prefix(["fx"], text)
-        if arg_index == 2 and len(args_before) >= 2 and args_before[1] == "fx":
-            return _filter_prefix(["clear", *_vst_names()], text)
-        return []
-
-    # slot <num> <subcommand> ...
-    if arg_index == 1:
-        return _filter_prefix(list(SLOT_TYPES), text)
-
-    if len(args_before) < 2:
-        return []
-
-    mode = args_before[1].lower()
-
-    if mode == "vst":
-        if arg_index == 2:
-            return _filter_prefix(_vst_names(), text)
-        return []
-
-    if mode == "vcv":
-        if arg_index == 2:
-            return _filter_prefix(_vcv_patch_names(), text)
-        return []
-
-    if mode == "wav":
-        if arg_index == 2:
-            return _filter_prefix(_sample_pack_names(), text)
-        if arg_index == 3 and len(args_before) >= 3:
-            return _filter_prefix(_sample_names(args_before[2]), text)
-        return []
-
-    if mode == "fx":
-        if arg_index == 2:
-            return _filter_prefix(["clear", *_vst_names()], text)
-        return []
-
-    return []
 
 
 def connect(sock_path: str | Path | None = None):
@@ -306,13 +58,12 @@ def connect(sock_path: str | Path | None = None):
     console = Console() if interactive else None
 
     try:
-        # Keep socket cleanup active during banner and completion discovery too.
+        # Keep socket cleanup active during banner and completion requests too.
         if not _read_response(rfile, console):
             return
-        command_names = _fetch_command_names(rfile, wfile)
         session = (
             PromptSession(
-                completer=CommandCompleter(command_names),
+                completer=CommandCompleter(rfile, wfile),
                 history=InMemoryHistory(),
                 complete_while_typing=False,
             )
@@ -361,112 +112,43 @@ def connect(sock_path: str | Path | None = None):
 
 
 class CommandCompleter(Completer):
-    """Complete commands and asset arguments using the existing discovery rules."""
+    """Request the daemon's cached-state completions over the command stream."""
 
-    def __init__(self, command_names: list[str]):
+    def __init__(self, rfile, wfile):
         super().__init__()
-        self.names: list[str] = sorted(set(command_names))
+        self.rfile = rfile
+        self.wfile = wfile
 
     def get_completions(
         self, document: Document, complete_event: CompleteEvent,
     ) -> Iterable[Completion]:
         before = document.text_before_cursor
-        match = re.search(r"\S*$", before)
-        text = match.group() if match else ""
-        prefix_tokens = before[:len(before) - len(text)].split()
+        try:
+            self.wfile.write("\x01" + json.dumps(before) + "\n")
+            self.wfile.flush()
+            # Always consume the entire framed response, including errors,
+            # before deciding whether it contains usable suggestions.
+            lines = _read_response_lines(self.rfile)
+        except (OSError, ValueError):
+            return
 
-        if not prefix_tokens:
-            matches = _filter_prefix(self.names, text)
-        elif prefix_tokens[0] == "slot":
-            matches = _complete_slot_args(text, prefix_tokens)
-        elif prefix_tokens[0] in ("info", "get", "set"):
-            matches = _complete_slot_fx_args(text, prefix_tokens)
-        elif prefix_tokens[0] == "debug" and len(prefix_tokens) == 1:
-            matches = _filter_prefix(["on", "off"], text)
-        elif prefix_tokens[0] in ("save", "load"):
-            matches = _filter_prefix(_session_names(), text)
-        else:
+        if lines is None or len(lines) != 1:
+            return
+        try:
+            response = json.loads(lines[0])
+        except (ValueError, TypeError):
+            return
+        if not isinstance(response, dict) or set(response) != {"start_position", "matches"}:
+            return
+        start = response["start_position"]
+        matches = response["matches"]
+        if type(start) is not int or not -len(before) <= start <= 0:
+            return
+        if not isinstance(matches, list) or any(not isinstance(name, str) for name in matches):
             return
 
         for name in matches:
-            yield Completion(name + " ", start_position=-len(text), display=name)
-
-
-def _fetch_command_names(rfile, wfile) -> list[str]:
-    """Fetch command names from server help output for completion."""
-    try:
-        wfile.write("help\n")
-        wfile.flush()
-    except (BrokenPipeError, ConnectionResetError, OSError):
-        return list(FALLBACK_COMMANDS)
-
-    lines = _read_response_lines(rfile)
-    if lines is None:
-        return list(FALLBACK_COMMANDS)
-
-    parsed = _parse_help_commands(lines)
-    return parsed or list(FALLBACK_COMMANDS)
-
-
-def _parse_help_commands(lines: list[str]) -> list[str]:
-    """Extract command tokens from cmd.Cmd style help output."""
-    commands: list[str] = []
-    seen: set[str] = set()
-    in_custom_help = False
-
-    for raw in lines:
-        line = raw.strip()
-        if not line:
-            continue
-
-        lower = line.lower()
-        if (
-            lower.startswith("documented commands")
-            or lower.startswith("undocumented commands")
-            or lower.startswith("miscellaneous help topics")
-        ):
-            continue
-
-        if lower.startswith("available commands"):
-            in_custom_help = True
-            continue
-
-        if lower.startswith("tip:"):
-            continue
-
-        if lower.startswith("no commands available"):
-            continue
-
-        if set(line) <= {"=", "-"}:
-            continue
-
-        if in_custom_help:
-            if line.endswith(":"):
-                continue
-            # Group headings are skipped above; command rows contain a name
-            # followed by a summary.
-            token = line.split()[0]
-            if token == "EOF":
-                continue
-            if not HELP_TOKEN_RE.fullmatch(token):
-                continue
-            if token in seen:
-                continue
-            seen.add(token)
-            commands.append(token)
-            continue
-
-        for token in line.split():
-            if token == "EOF":
-                continue
-            if not HELP_TOKEN_RE.fullmatch(token):
-                continue
-            if token in seen:
-                continue
-            seen.add(token)
-            commands.append(token)
-
-    return commands
+            yield Completion(name + " ", start_position=start, display=name)
 
 
 def _read_response(rfile, console: Console | None = None, command: str = "") -> bool:
