@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import cmd
 import inspect
+import logging
 import os
 import shlex
 from pathlib import Path
@@ -16,6 +17,7 @@ from core.deps import HAS_LINK, HAS_RTMIDI, HAS_MIDO
 from core.host import VcpiCore
 from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import NUM_SLOTS
+from core.logging_setup import set_log_level
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
 from graph.signal_flow import render_signal_flow
 from graph.plugin_info import render_plugin_info
@@ -152,7 +154,7 @@ class HostCLI(cmd.Cmd):
             ("MIDI", {"midi", "midimix", "note"}),
             ("Sequencer & sync", {"seq", "tempo", "ableton"}),
             ("Sessions", {"save", "load"}),
-            ("Status & diagnostics", {"status", "flow", "deps"}),
+            ("Status & diagnostics", {"status", "flow", "deps", "debug"}),
             ("Help & lifecycle", {"help", "about", "quit", "exit", "shutdown"}),
         )
         remaining = dict(entries)
@@ -1372,6 +1374,34 @@ class HostCLI(cmd.Cmd):
                 self._print("Error: bpm must be a number")
                 return
         self._print(f"  {self.host.link.bpm:.1f} BPM")
+
+    def do_debug(self, arg):
+        """Show or toggle daemon debug logging: debug [on|off]
+
+        debug on enables DEBUG logging in the daemon and live audio workers.
+        debug off returns logging to WARNING. New workers inherit the setting.
+        Changes last until the daemon exits; logs stay in its terminal/service log.
+        """
+        mode = arg.strip().lower()
+        if mode not in ("", "on", "off"):
+            self._print("Usage: debug [on|off]")
+            return
+        if mode:
+            level = "DEBUG" if mode == "on" else "WARNING"
+            try:
+                self.host.engine.request("set_log_level", level=level)
+            except Exception as error:
+                self._print(f"Error: {error}")
+                return
+            set_log_level(level)
+        level = logging.getLogger().getEffectiveLevel()
+        self._print(f"  Debug logging: {'on' if level <= logging.DEBUG else 'off'} "
+                    f"(log level: {logging.getLevelName(level)})")
+
+    def complete_debug(self, text, line, begidx, endidx):
+        if len(line[:begidx].split()) == 1:
+            return self._filter_prefix(["on", "off"], text)
+        return []
 
     # -- session -------------------------------------------------------------
 

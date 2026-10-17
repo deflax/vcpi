@@ -136,9 +136,14 @@ python main.py cli
 
 # Logging defaults:
 # - python main.py serve -> WARNING
-# - ./vcpid -> DEBUG
+# - ./vcpid -> WARNING
 LOG_LEVEL=INFO ./vcpid
 ```
+
+Toggle logging without restarting from the connected client:
+`debug on` enables DEBUG, `debug off` returns to WARNING, and `debug` shows the
+current level. The setting applies to the daemon and audio workers until the
+daemon exits; logs appear in the daemon terminal or service journal.
 
 Full CLI and startup flag reference: `USAGE.md`
 

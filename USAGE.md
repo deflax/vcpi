@@ -64,9 +64,16 @@ Only one server instance per user is allowed. If a server is already running
 print the existing PID. Connect to the running instance with `./vcpi` instead.
 The PID file is stored at `~/.config/vcpi/vcpi.pid`.
 
-Logging level is controlled by environment variable `LOG_LEVEL`.
-Core default is `WARNING`. `./vcpid` defaults it to `DEBUG` if unset.
-The Raspberry Pi `payload.service` also sets `LOG_LEVEL=DEBUG`.
+Startup logging level is controlled by environment variable `LOG_LEVEL`.
+Core and `./vcpid` defaults are `WARNING` if unset.
+The Raspberry Pi `payload.service` explicitly sets `LOG_LEVEL=WARNING`.
+
+From a connected client, use `debug` to inspect the current daemon logging level,
+`debug on` to enable DEBUG, and `debug off` to return to WARNING without restarting.
+The change applies to the daemon, live audio/slot workers, and subsequently
+created workers. It lasts until the daemon exits and does not edit service or
+shell configuration. Logs remain in the daemon terminal or service journal,
+not in the client response. Use `help debug` for command help.
 
 VST3 plugin search and name resolution:
 
@@ -666,6 +673,7 @@ Choice parameters list available choices instead of a numeric range:
 | `about` | Print the vcpi logo and basic project info |
 | `status` | Print combined system status |
 | `deps` | Check optional dependency availability |
+| `debug [on\|off]` | Show current logging level; enable DEBUG or return to WARNING |
 | `shutdown` | Shut down the vcpi daemon process |
 | `quit` / `exit` / `Ctrl-D` | Disconnect this client session |
 

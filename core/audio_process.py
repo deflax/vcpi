@@ -20,6 +20,7 @@ from multiprocessing.connection import wait as wait_connections
 
 from core.audio_state import capture_state, hydrate_slots
 from core.models import NUM_SLOTS
+from core.logging_setup import configure_logging, set_log_level
 from core.state_transport import (
     encode_native_message, receive_frame, send_frame, validate_native_message,
     validate_native_state,
@@ -469,6 +470,12 @@ class _OwnerRuntime:
             result = dict(self.engine.channel_map)
         elif operation == "diagnose":
             result = self.diagnose()
+        elif operation == "set_log_level":
+            result = set_log_level(**arguments)
+            for slot in self.engine.slots:
+                worker = slot.render_owner if slot is not None else None
+                if worker is not None and worker.failure is None:
+                    worker.request("set_log_level", wait_hook=self.service_wait, **arguments)
         elif operation == "shutdown":
             if self.engine.running:
                 self.engine.flush_controls()
@@ -538,6 +545,7 @@ class _OwnerRuntime:
 def _audio_owner(sample_rate, buffer_size, health, control, inputs, updates, cancelled):
     owner = None
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    configure_logging()
     try:
         from core.plugin_host import PluginHost
 

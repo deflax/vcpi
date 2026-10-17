@@ -34,3 +34,12 @@ def configure_logging(default_level: str = "WARNING") -> int:
         )
 
     return level
+
+
+def set_log_level(level: str) -> str:
+    """Toggle runtime logging and let subsequently spawned workers inherit it."""
+    if level not in ("DEBUG", "WARNING"):
+        raise ValueError("log level must be DEBUG or WARNING")
+    logging.getLogger().setLevel(level)
+    os.environ["LOG_LEVEL"] = level
+    return logging.getLevelName(logging.getLogger().getEffectiveLevel())

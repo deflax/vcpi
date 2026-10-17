@@ -19,6 +19,7 @@ from multiprocessing.connection import wait as wait_connections
 from core.audio_state import capture_plugin
 from core.audio_deps import require_native
 from core.models import InstrumentSlot, NUM_SLOTS
+from core.logging_setup import configure_logging, set_log_level
 from core.state_transport import (
     encode_native_message, receive_frame, send_frame, validate_native_message,
 )
@@ -135,6 +136,8 @@ def _execute(owner, index, operation, arguments):
     requested_index = arguments.pop("slot_index", index)
     if requested_index != index:
         raise ValueError("control targets a different slot")
+    if operation == "set_log_level":
+        return {"ok": True, "result": set_log_level(**arguments), "updates": []}
     if operation == "set_parameter":
         result = owner.engine.set_parameter(slot_index=index, **arguments)
     elif operation == "set_parameters":
@@ -190,6 +193,7 @@ def _execute(owner, index, operation, arguments):
 def _slot_owner(sample_rate, frames, index, operation, arguments,
                 transport_path, control, lifeline):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    configure_logging()
     owner = None
     transport = None
     ready = False

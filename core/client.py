@@ -42,6 +42,7 @@ HELP_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 FALLBACK_COMMANDS = (
     "about",
     "audio",
+    "debug",
     "deps",
     "exit",
     "gain",
@@ -380,6 +381,8 @@ class CommandCompleter(Completer):
             matches = _complete_slot_args(text, prefix_tokens)
         elif prefix_tokens[0] in ("info", "get", "set"):
             matches = _complete_slot_fx_args(text, prefix_tokens)
+        elif prefix_tokens[0] == "debug" and len(prefix_tokens) == 1:
+            matches = _filter_prefix(["on", "off"], text)
         elif prefix_tokens[0] in ("save", "load"):
             matches = _filter_prefix(_session_names(), text)
         else:

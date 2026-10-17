@@ -25,6 +25,6 @@ fi
 # Build before spawning audio owners; never compile on the audio path.
 "$PYTHON_BIN" "$ROOT_DIR/build_native.py"
 
-export LOG_LEVEL="${LOG_LEVEL:-DEBUG}"
+export LOG_LEVEL="${LOG_LEVEL:-WARNING}"
 
 exec "$PYTHON_BIN" "$ROOT_DIR/main.py" serve "$@"
