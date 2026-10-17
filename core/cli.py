@@ -148,14 +148,14 @@ class HostCLI(cmd.Cmd):
         width = max(len(name) for name, _ in entries)
         self._print("Available commands:")
         groups = (
-            ("Plugins", {"slot", "get", "set", "info"}),
-            ("Mixer", {"gain", "mute", "solo"}),
-            ("Audio", {"audio"}),
-            ("MIDI", {"midi", "midimix", "note"}),
-            ("Sequencer & sync", {"seq", "tempo", "ableton"}),
-            ("Sessions", {"save", "load"}),
-            ("Status & diagnostics", {"status", "flow", "deps", "debug"}),
-            ("Help & lifecycle", {"help", "about", "quit", "exit", "shutdown"}),
+            ("Instruments & effects", {"slot", "get", "set", "info"}),
+            ("Volume, mute & solo", {"gain", "mute", "solo"}),
+            ("Audio devices & output", {"audio"}),
+            ("MIDI ports & routing", {"midi", "midimix", "note"}),
+            ("Sequencing, tempo & Link", {"seq", "tempo", "ableton"}),
+            ("Save & load sessions", {"save", "load"}),
+            ("Status, signal & logging", {"status", "flow", "deps", "debug"}),
+            ("Help, exit & shutdown", {"help", "about", "quit", "exit", "shutdown"}),
         )
         remaining = dict(entries)
         for title, commands in groups:

@@ -128,8 +128,9 @@ Server/client specific:
 
 ## Interactive Commands
 
-Type `help` for commands grouped by function: plugins, mixer, audio, MIDI,
-sequencer & sync, sessions, status & diagnostics, and help & lifecycle.
+Type `help` for commands grouped by purpose: instruments & effects; volume,
+mute & solo; audio devices & output; MIDI ports & routing; sequencing, tempo
+& Link; save & load sessions; status, signal & logging; and help, exit & shutdown.
 Commands are alphabetical within each group. Use `help <command>` for
 detailed syntax and usage; `help get` and `help set` include parameter-targeting
 syntax and examples.
