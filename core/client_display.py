@@ -22,8 +22,11 @@ def _table(title: str, *columns: str) -> Table:
 def _help(console: Console, lines: list[str]) -> None:
     table = _table("Available commands", "Category", "Command", "Description")
     table.columns[0].style = "bold"
-    table.columns[1].style = "cyan"
     table.columns[1].no_wrap = True
+    colours = ("cyan", "green", "yellow", "magenta",
+               "bright_blue", "bright_cyan", "bright_green", "bright_magenta")
+    group_index = 0
+    colour = colours[0]
     category = ""
     notes: list[str] = []
     for line in lines:
@@ -32,9 +35,12 @@ def _help(console: Console, lines: list[str]) -> None:
             continue
         if not line.startswith(" ") and stripped.endswith(":"):
             category = stripped[:-1]
+            colour = colours[group_index % len(colours)]
+            group_index += 1
         elif line.startswith("  "):
             name, _, summary = stripped.partition(" ")
-            table.add_row(Text(category), Text(name), Text(summary.strip()))
+            table.add_row(Text(category, style=colour), Text(name, style=colour),
+                          Text(summary.strip()))
             category = ""
         else:
             notes.append(line)
