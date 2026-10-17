@@ -29,6 +29,7 @@ from prompt_toolkit.history import InMemoryHistory
 from rich.console import Console
 
 from core.client_display import display_response
+from core.flow_display import display_flow, explore_flow
 from core.paths import DEFAULT_SOCK_PATH
 
 # Must match the sentinel used by server.py
@@ -80,6 +81,24 @@ def connect(sock_path: str | Path | None = None):
                 # Ctrl-D -> disconnect gracefully
                 print()
                 break
+
+            # Rich flow views use the same cached snapshot as the text command.
+            # Navigation stays client-local; the daemon never owns terminal input.
+            tokens = line.strip().split()
+            if console is not None and tokens and tokens[0] == "flow":
+                views = {"all", "midi", "controls", "audio", "master",
+                         *(str(i) for i in range(1, 9))}
+                view = tokens[1] if len(tokens) == 2 else "overview"
+                if len(tokens) <= 2 and (len(tokens) == 1 or view in views or view == "explore"):
+                    try:
+                        fetch = lambda: _fetch_flow_snapshot(rfile, wfile)
+                        if view == "explore":
+                            explore_flow(fetch)
+                        else:
+                            display_flow(console, fetch(), view)
+                    except (OSError, ValueError) as error:
+                        console.print(f"Error: {error}", markup=False, style="bold red")
+                    continue
 
             try:
                 wfile.write(line + "\n")
@@ -162,6 +181,37 @@ def _read_response(rfile, console: Console | None = None, command: str = "") -> 
         for line in lines:
             print(line)
     return True
+
+
+def _fetch_flow_snapshot(rfile, wfile) -> dict:
+    """Consume a complete response before reporting a malformed flow snapshot."""
+    wfile.write("flow json\n")
+    wfile.flush()
+    lines = _read_response_lines(rfile)
+    if lines is None:
+        raise OSError("server disconnected")
+    try:
+        snapshot = json.loads("\n".join(lines))
+    except ValueError as error:
+        raise ValueError("\n".join(lines) or "empty flow response") from error
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("title"), str):
+        raise ValueError("invalid flow snapshot")
+    sections = snapshot.get("sections")
+    if not isinstance(sections, list) or not sections:
+        raise ValueError("invalid flow sections")
+    for section in sections:
+        if not isinstance(section, dict):
+            raise ValueError("invalid flow section")
+        if any(not isinstance(section.get(key), str) for key in ("id", "title")):
+            raise ValueError("invalid flow section heading")
+        columns, rows = section.get("columns"), section.get("rows")
+        if (not isinstance(columns, list) or not columns
+                or any(not isinstance(column, str) for column in columns)
+                or not isinstance(rows, list)
+                or any(not isinstance(row, list) or len(row) != len(columns)
+                       or any(not isinstance(cell, str) for cell in row) for row in rows)):
+            raise ValueError("invalid flow table")
+    return snapshot
 
 
 def _read_response_lines(rfile) -> list[str] | None:

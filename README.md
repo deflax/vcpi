@@ -164,8 +164,10 @@ supports them. Free-form numeric values are left for you to enter.
 
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
-`info` display tables; flow diagrams receive color. `get` includes parameter
-values, units, ranges, and choices without slider bars.
+`info` display tables. `flow` adds routing, mapped-control, and audio-output tables;
+`flow explore` opens a read-only full-screen explorer with slot/master drill-downs,
+scrolling, and manual refresh. `get` includes parameter values, units, ranges,
+and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
 table; use `help <command>` for detailed syntax.
 The welcome and `about` logos use cyan, green, magenta, and yellow bands, with
@@ -398,6 +400,8 @@ vcpi> ableton link 120
 vcpi> status
 
 vcpi> flow              # signal flow: all slots, FX chains, master bus
+vcpi> flow explore      # navigate MIDI, controls, audio, slots, and master
+vcpi> flow controls     # exact MIDI Mix bindings and cached parameter targets
 vcpi> info 1            # plugin metadata: vendor, category, version, etc.
 vcpi> info 1 fx 1       # info for slot 1's first effect
 vcpi> get 1             # all visible instrument parameters

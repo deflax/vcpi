@@ -139,9 +139,9 @@ category's heading and command names; descriptions remain neutral. Descriptions
 wrap to the terminal width; detailed `help <command>` output is unchanged.
 
 The interactive client uses `prompt_toolkit` for the `vcpi>` command line
-and Rich for terminal presentation; it is not a full-screen interface.
-`help`, `get`, `status`, and `info` use tables. `flow` retains its diagram layout
-with color. Piped `get` output uses plain parameter lines without slider bars.
+and Rich for terminal presentation. `help`, `get`, `status`, `info`, and
+`flow` use tables. `flow explore` temporarily opens a full-screen routing
+explorer, then returns to the prompt. Piped output remains plain text.
 Other responses, including `help <command>`, retain their text.
 
 - Up/Down recall commands from the current client session.
@@ -260,7 +260,7 @@ display filter; MIDI CC input and underlying parameter access are unchanged.
 | `gain master [value]` | Get or set master gain |
 | `mute <slot>` | Toggle slot mute |
 | `solo <slot>` | Toggle slot solo |
-| `flow` | Show full signal-flow diagram (all slots, FX chains, master bus) |
+| `flow [all\|midi\|controls\|audio\|1-8\|master\|json\|explore]` | Inspect routing, mapped controls, and output; see visualization commands |
 
 ### Audio Commands
 
@@ -622,34 +622,53 @@ before unlinking orphaned shared semaphore resources.
 
 ### Visualization Commands
 
-The `flow` and `info` commands render ASCII diagrams using cached
+The `flow` and `info` commands use cached control-side
 metadata from the native JUCE VST3 host. Parameter inspection uses `get`,
 described under [Plugin Commands](#plugin-commands). Numeric parameters retain
 display values and unit-qualified names (kHz displays use Hz values).
 Text choices and boolean switches are inferred at load even when a plugin
 omits VST3 step counts. `raw_value` remains normalized.
 
-**`flow`** shows the full signal chain across all 8 slots:
+**`flow`** shows a routing overview: connected MIDI inputs, MIDI Mix connections,
+sequencer clock, all eight instrument/FX chains, slot eligibility, master bus,
+and audio output. Focused views expose the details without one oversized table:
 
-```text
-vcpi> flow
-+------------------------------------------------+
-|                vcpi Signal Flow                |
-+------------------------------------------------+
-|   [ S1] ch01,ch02    -> Dexed -> DragonflyHall |
-|          gain [########--] 0.75                |
-|   [S2] (empty)                                 |
-|   [xS3] ch05         -> Surge -> TAL-Dub       |
-|          gain [########--] 0.75 M              |
-|   ...                                          |
-|   Master FX: Limiter                           |
-|   Master   : [########--] 0.85                 |
-+------------------------------------------------+
-```
+| Command | View |
+|---|---|
+| `flow` | Compact whole-system overview |
+| `flow midi` | Open generic inputs, all 16 channel routes, sequencer bank destinations and patterns |
+| `flow controls` | MIDI Mix CC/note bindings, knob targets, cached values/ranges, and LED feedback connection |
+| `flow audio` | Ordered audio chains, output device/backend, stream format, and output health |
+| `flow 1` … `flow 8` | Slot source/path, MIDI and sequencer inputs, inserts, mixer/worker state, and controls |
+| `flow master` | Master effects, gain/control, and output |
+| `flow all` | Every view, including empty slots and unlinked routes |
+| `flow json` | Entire snapshot as one JSON object for scripts |
+| `flow explore` | Read-only full-screen explorer in the interactive client |
 
-- `x` prefix on the slot number means the slot is inaudible (muted, or
-  another slot is soloed).
-- `M` / `S` flags indicate mute and solo state.
+Inside `flow explore`:
+
+- Left/Right or Tab/Shift-Tab cycle through views.
+- `o`, `m`, `c`, `a` jump to overview, MIDI, controls, or audio.
+- `1`–`8` jump to a slot; `9` opens the master bus.
+- Up/Down, PageUp/PageDown, Home/End scroll the selected view.
+- `r` refreshes the snapshot. Refresh is manual; navigation sends no requests.
+  A failed refresh leaves the previous snapshot visible with an error.
+- `q`, Escape, Ctrl-C, or Ctrl-D return to the command prompt.
+
+Tables wrap to the terminal width. Redirected input/output uses plain-text
+tables; `flow explore` explains the interactive-client requirement instead of
+blocking the daemon.
+
+Generic MIDI inputs share the channel map; sequencer banks target slots directly.
+MIDI Mix knobs map to the first three **instrument** parameters in insertion
+order, not insert or master-effect parameters. Disconnected ports and unbound
+controls are explicit. Mute/solo, disabled slots, zero gains, stopped audio, and
+worker/owner failures are shown as output blockers.
+
+These views perform no hardware discovery, native-owner requests, or routing
+changes. They show cached applied values and routing eligibility, **not live
+meters or proof of audible sound**. Link tempo is the cached configured tempo,
+not a fresh peer-tempo reading. There is no external audio-input path.
 
 **`info`** shows plugin metadata:
 

@@ -94,7 +94,7 @@ class CompletionTests(unittest.TestCase):
         self.assertIn("slot", self.matches("help "))
         self.assertEqual(self.matches("help aud"), ["audio"])
         self.assertIn("master", self.matches("  gain\t"))
-        for before in ("unknown ", "status ", "help audio ", "flow ", "about ",
+        for before in ("unknown ", "status ", "help audio ", "about ",
                        "audio stop ", "audio devices ", "audio diagnose ",
                        "debug on ", "mute 1 ", "solo 1 ", "note 1 ",
                        "gain master ", "tempo ", "ableton cut ", "ableton link "):

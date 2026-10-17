@@ -10,6 +10,7 @@ import cmd
 import inspect
 import logging
 import os
+import json
 import shlex
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from core.midi import list_midi_input_ports, list_midi_output_ports
 from core.models import NUM_SLOTS
 from core.logging_setup import set_log_level
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
-from graph.signal_flow import render_signal_flow
+from graph.signal_flow import build_flow_snapshot, render_flow_snapshot
 from graph.plugin_info import render_plugin_info
 from graph.status import format_realtime, render_status
 
@@ -783,11 +784,30 @@ class HostCLI(cmd.Cmd):
     # -- routing / MIDI ------------------------------------------------------
 
     def do_flow(self, arg):
-        """Show full signal-flow diagram: flow"""
-        if arg.strip():
-            self._print("Usage: flow")
+        """Explore cached signal routing: flow [all|midi|controls|audio|1-8|master|json|explore]
+
+        With no argument, show the compact overview. Named views and slot
+        numbers show a detailed table; all prints every table. json emits the
+        entire snapshot as one JSON line for scripts. explore opens the
+        full-screen read-only explorer in the interactive client only.
+        No hardware discovery, owner requests, or routing changes are performed.
+        """
+        parts = arg.strip().split()
+        views = {"all", "midi", "controls", "audio", "master", "json", "explore"}
+        if len(parts) > 1 or (parts and parts[0] not in views
+                              and parts[0] not in {str(i) for i in range(1, NUM_SLOTS + 1)}):
+            self._print("Usage: flow [all|midi|controls|audio|1-8|master|json|explore]")
             return
-        self._print(render_signal_flow(self.host.engine, self.host.channel_map))
+        view = parts[0] if parts else "overview"
+        if view == "explore":
+            self._print("flow explore requires the interactive client; use flow all or flow json for plain output.")
+            return
+        snapshot = build_flow_snapshot(self.host)
+        if view == "json":
+            self._print(json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")))
+        else:
+            section_id = f"slot{view}" if view.isdecimal() else view
+            self._print(render_flow_snapshot(snapshot, None if view == "all" else section_id))
 
     def do_info(self, arg):
         """Show plugin info: info <slot 1-8> | info <slot 1-8> fx <fx_index> | info master <fx_index>"""
