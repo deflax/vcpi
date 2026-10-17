@@ -860,6 +860,8 @@ Server logs now include:
 - CLI command execution (`[CLI] ...`)
 - MIDI input events at `DEBUG`
 - MIDI Mix fader/knob events at `DEBUG`; mute/solo actions remain at `INFO`
-- Final applied slot/master gains at `INFO`, once per affected gain in each
-  drained mixer batch, after callback acknowledgment. A continuous fader
-  movement can span multiple batches.
+- Final applied slot/master gains at `INFO`, after that gain has been quiet for
+  300 ms. Further updates replace the pending summary and restart its quiet
+  interval, even across queue drains. Gain changes themselves remain immediate;
+  only logging is delayed. Slot replacement discards the old slot's pending
+  summary, and shutdown flushes pending final values without waiting.

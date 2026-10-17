@@ -6,6 +6,7 @@ import collections
 import logging
 import math
 import threading
+import time
 from contextlib import contextmanager
 
 from core.audio_deps import require_native
@@ -32,6 +33,7 @@ class AudioEngine:
 
     _slot_fields = frozenset(
         ("gain", "muted", "solo", "enabled", "source_type", "vcv_patch_path"))
+    _gain_log_quiet_seconds = 0.3
 
     def __init__(self, sample_rate=44100, buffer_size=512, output_channels=2,
                  health_buffer=None, *, slot_mode=False):
@@ -53,6 +55,7 @@ class AudioEngine:
         self._midi_queue = collections.deque()
         self._control_queue = collections.deque()
         self._applied_updates = collections.deque()
+        self._pending_gain_logs = {}
         self._control_lock = threading.Lock()
         self._lock = threading.RLock()
         self._owner_thread = threading.get_ident()
@@ -172,6 +175,7 @@ class AudioEngine:
                 self.slots[index] = slot
                 self._midi_queue = collections.deque(
                     item for item in self._midi_queue if item[0] != index)
+            self._pending_gain_logs.pop(index, None)
             return retired
         if operation == "parameter":
             index, fx_index, name, value = arguments
@@ -252,6 +256,7 @@ class AudioEngine:
             return
         if self._native is not None:
             self._native.set_mixer(states, master)
+        deadline = time.monotonic() + self._gain_log_quiet_seconds
         # Cached state and completion notifications remain applied-only: publish
         # them after the entire snapshot has reached the native callback.
         for index, fields in updates.items():
@@ -260,11 +265,22 @@ class AudioEngine:
                 setattr(slot, name, value)
             self._applied_updates.append(("slot", index, fields))
             if "gain" in fields:
-                logger.info("slot %d gain -> %.2f (applied)", index + 1, slot.gain)
+                self._pending_gain_logs[index] = (slot.gain, deadline)
         if master_changed:
             self.master_gain = master
             self._applied_updates.append(("master_gain", master))
-            logger.info("master gain -> %.2f (applied)", master)
+            self._pending_gain_logs[None] = (master, deadline)
+
+    def _flush_gain_logs(self, *, force=False):
+        now = time.monotonic()
+        for index, (gain, deadline) in tuple(self._pending_gain_logs.items()):
+            if not force and now < deadline:
+                continue
+            if index is None:
+                logger.info("master gain -> %.2f (applied)", gain)
+            else:
+                logger.info("slot %d gain -> %.2f (applied)", index + 1, gain)
+            del self._pending_gain_logs[index]
 
     def apply_pending_controls(self):
         """Apply FIFO controls on the control owner, including during playback."""
@@ -300,6 +316,7 @@ class AudioEngine:
                             item.done.set()
             if self.control_error is not None:
                 raise self.control_error
+            self._flush_gain_logs()
 
     def publish_slot(self, index, slot):
         if not isinstance(index, int) or not 0 <= index < NUM_SLOTS:
@@ -462,6 +479,7 @@ class AudioEngine:
                 self.runner = None
             if self._native is not None:
                 self._native.shutdown()
+            self._flush_gain_logs(force=True)
             self._closed = True
             self._running = False
             self.master_effects.clear()

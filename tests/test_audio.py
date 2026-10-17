@@ -9,6 +9,7 @@ import unittest
 import wave
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import mido
 import numpy as np
@@ -213,6 +214,50 @@ class NativeAudioTests(unittest.TestCase):
         self.assertEqual(replacement.gain, 0.5)
         self.block()
         np.testing.assert_allclose(self.block(), 0.03125, atol=1e-6)
+
+    def test_gain_summaries_wait_for_quiet_without_delaying_applied_values(self):
+        slot = self.slot(0)
+        quiet = self.engine._gain_log_quiet_seconds
+        with self.assertLogs("core.engine", level="INFO") as captured:
+            with patch("core.engine.time.monotonic") as clock:
+                for step in range(20):
+                    clock.return_value = 10 + step * quiet / 2
+                    gain = step / 20
+                    self.engine.enqueue_slot_change(0, gain=gain)
+                    self.engine.enqueue_master_gain(gain)
+                    self.engine.apply_pending_controls()
+                    self.assertEqual(slot.gain, gain)
+                    self.assertEqual(self.engine.master_gain, gain)
+                    self.assertEqual(captured.records, [])
+                last_update = clock.return_value
+                clock.return_value = last_update + quiet * 0.9
+                self.engine.apply_pending_controls()
+                self.assertEqual(captured.records, [])
+                clock.return_value = last_update + quiet * 1.1
+                self.engine.apply_pending_controls()
+                self.assertEqual([record.args[-1] for record in captured.records],
+                                 [19 / 20, 19 / 20])
+                clock.return_value += quiet * 2
+                self.engine.apply_pending_controls()
+                self.assertEqual(len(captured.records), 2)
+
+    def test_gain_summaries_are_independent_and_discard_retired_slot_values(self):
+        self.slot(0)
+        quiet = self.engine._gain_log_quiet_seconds
+        with self.assertLogs("core.engine", level="INFO") as captured:
+            with patch("core.engine.time.monotonic") as clock:
+                clock.return_value = 10
+                self.engine.set_slot_state(0, gain=0.25)
+                clock.return_value = 10 + quiet / 2
+                self.engine.set_master_gain(0.5)
+                clock.return_value = 10 + quiet * 1.1
+                self.engine.apply_pending_controls()
+                self.assertEqual([record.args[-1] for record in captured.records], [0.25])
+                self.engine.set_slot_state(0, gain=0.75)
+                self.slot(0)
+                clock.return_value = 10 + quiet * 3
+                self.engine.apply_pending_controls()
+                self.assertEqual([record.args[-1] for record in captured.records], [0.25, 0.5])
 
     def test_midi_overflow_is_explicit(self):
         transport = self.backend.Transport(str(self.root / "overflow.mmap"), 64, True)
