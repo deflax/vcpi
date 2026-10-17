@@ -164,6 +164,8 @@ The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
 `info` display tables; flow diagrams receive color. `get` includes parameter
 values, units, ranges, and choices without slider bars.
+The `help` overview combines its categories and descriptions into one compact
+table; use `help <command>` for detailed syntax.
 Piped input/output remains plain text. `./vcpi` and `./vcpid` install dependencies
 on first launch and when `requirements.txt` changes, including for existing
 environments. For direct Python startup, install them manually with

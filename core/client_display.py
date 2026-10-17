@@ -20,29 +20,28 @@ def _table(title: str, *columns: str) -> Table:
 
 
 def _help(console: Console, lines: list[str]) -> None:
-    table = None
+    table = _table("Available commands", "Category", "Command", "Description")
+    table.columns[0].style = "bold"
+    table.columns[1].style = "cyan"
+    table.columns[1].no_wrap = True
+    category = ""
+    notes: list[str] = []
     for line in lines:
         stripped = line.strip()
-        if not stripped:
+        if not stripped or stripped == "Available commands:":
             continue
         if not line.startswith(" ") and stripped.endswith(":"):
-            if table is not None:
-                console.print(table)
-                table = None
-            if stripped == "Available commands:":
-                console.print(Text(stripped, style="bold"))
-            else:
-                table = _table(stripped[:-1], "Command", "Description")
-        elif line.startswith("  ") and table is not None:
+            category = stripped[:-1]
+        elif line.startswith("  "):
             name, _, summary = stripped.partition(" ")
-            table.add_row(Text(name), Text(summary.strip()))
+            table.add_row(Text(category), Text(name), Text(summary.strip()))
+            category = ""
         else:
-            if table is not None:
-                console.print(table)
-                table = None
-            console.print(Text(line))
-    if table is not None:
+            notes.append(line)
+    if table.row_count:
         console.print(table)
+    for note in notes:
+        console.print(Text(note))
 
 
 def _info_table(lines: list[str], title: str) -> Table | None:

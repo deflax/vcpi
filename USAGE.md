@@ -133,6 +133,9 @@ sequencer & sync, sessions, status & diagnostics, and help & lifecycle.
 Commands are alphabetical within each group. Use `help <command>` for
 detailed syntax and usage; `help get` and `help set` include parameter-targeting
 syntax and examples.
+The interactive overview uses one compact table for all categories, retaining
+command descriptions without repeating headers for every group. Descriptions
+wrap to the terminal width; detailed `help <command>` output is unchanged.
 
 The interactive client uses `prompt_toolkit` for the `vcpi>` command line
 and Rich for terminal presentation; it is not a full-screen interface.
