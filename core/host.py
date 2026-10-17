@@ -73,7 +73,7 @@ class VcpiCore:
 
     @property
     def audio_output_name(self) -> Optional[str]:
-        """Most recently selected output name, from the audio child's cache."""
+        """Last successfully opened output name, from the audio child's cache."""
         return self.engine.audio_output_name
 
     @staticmethod

@@ -277,10 +277,10 @@ All audio operations are subcommands of `audio`:
 
 | Command | Description |
 |---|---|
-| `audio start [device]` | Start audio engine |
+| `audio start [device]` | Start audio engine and print the opened device index, name, and backend; accepts an index or full name |
 | `audio stop` | Stop audio engine |
-| `audio devices` | List audio devices and their input/output channel capacities |
-| `audio diagnose` | Show selected output, mixer controls, realtime scheduling, MIDI delivery counters, and lifetime signal peaks |
+| `audio devices` | List audio devices, channel capacities, and backend; mark the active or last-opened entry |
+| `audio diagnose` | Show opened output, mixer controls, realtime scheduling, MIDI delivery counters, and lifetime signal peaks |
 
 The daemon spawns an audio-output process and a persistent native process per
 loaded slot. Command parsing/display work, MIDI ports, Link, sequencing, and
@@ -298,6 +298,20 @@ The catalog includes input-only devices; choose an entry with at least two
 output channels for stereo playback. Channel capacities come from PortAudio's
 device metadata, including CoreAudio devices on macOS.
 
+`audio start` without an argument uses PortAudio's default output. After a
+successful start, vcpi prints the opened entry as `[index] name` with its
+backend. The same index/name appears in `status`, `audio diagnose`, and the
+`flow` output views; `audio devices` marks it `[active]`. Once stopped, the
+cached identity is retained as the last-opened device, not an active stream.
+The identity changes only after a replacement stream starts successfully.
+
+On ALSA, a device named `default` is a system alias: PortAudio does not identify
+the physical output behind it. vcpi labels that limitation explicitly rather
+than guessing a sound card. To select an unambiguous hardware output, use
+`audio devices`, then `audio start <index>` for the desired stereo output
+entry. Full names containing spaces are also accepted without quotes:
+`audio start USB Audio Device`.
+
 Running `audio start` again stops and closes the previous output stream before
 opening the new one, including when changing devices. If opening or starting
 the replacement fails, audio remains stopped.
@@ -307,7 +321,7 @@ the replacement fails, audio remains stopped.
 `audio diagnose` reads native engine/slot transport counters and cached slot
 metadata through the audio owner's control channel. It does not inspect plugins,
 refresh the device catalog, or stop rendering. The output includes the selected
-output name/backend, running state, master gain, callback errors/underruns,
+output index/name/backend, running state, master gain, callback errors/underruns,
 output and slot realtime scheduling, and each loaded slot's gain, mute/solo
 state, worker failure, missing blocks, and:
 

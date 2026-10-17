@@ -183,6 +183,7 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
         "backend_label": engine.backend_label,
         "output_realtime": dict(engine.output_realtime),
         "audio_output_name": owner.audio_output_name,
+        "audio_output_index": engine.output_index,
         "output_channels": engine.output_channels,
         "render_workers": engine.render_workers,
         "audio_devices": devices,

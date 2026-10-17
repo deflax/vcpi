@@ -16,6 +16,7 @@ from controllers.akai_midimix import (
 )
 from core.models import NUM_SLOTS
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
+from graph.status import format_output_device
 
 
 def _plugin_name(plugin) -> str:
@@ -166,7 +167,7 @@ def _build_flow_snapshot(host, engine) -> dict:
     clock = (f"Ableton Link {'enabled' if link_enabled else 'disabled'}; "
              f"configured tempo {_value(tempo)} BPM (cached)")
     timing = "Link beat-grid" if link_enabled else "local wall clock"
-    output_name_audio = engine.audio_output_name or "(not opened)"
+    output_name_audio = format_output_device(engine.audio_output_name, engine.audio_output_index)
     backend = engine.backend_label or "(not opened)"
     sample_rate = engine.sample_rate
     buffer_size = engine.buffer_size
@@ -259,7 +260,8 @@ def _build_flow_snapshot(host, engine) -> dict:
         audio_rows.append([f"Slot {index + 1}", _chain(slot), states[index]])
     audio_rows.extend([
         ["Master path", f"slot sum -> {master_chain} -> gain {_value(master_gain)} -> output", "master FX run in displayed order"],
-        ["Output device", output_name_audio, "last selected cached name"],
+        ["Output device", output_name_audio,
+         "opened PortAudio entry (cached)" if running else "last opened PortAudio entry; stopped"],
         ["Backend", backend, audio_state],
         ["Stream format", f"{sample_rate} Hz; {buffer_size} frames/block; {output_format}", "no live signal levels are collected by flow"],
         ["Audio owner failure", failure or "none", "cached owner health"],

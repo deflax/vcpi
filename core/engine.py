@@ -75,6 +75,7 @@ class AudioEngine:
         self.block_period_ms = buffer_size * 1000.0 / sample_rate
         self.backend_label = "not opened"
         self.output_name = None
+        self.output_index = None
         self.output_realtime = {}
         self.refresh_health()
 
@@ -442,7 +443,7 @@ class AudioEngine:
             self._running = bool(stats["running"])
             for name in ("eligible_slots", "underruns", "render_errors", "callback_count",
                          "last_callback_ms", "peak_callback_ms", "deadline_misses",
-                         "block_period_ms", "backend_label", "output_name"):
+                         "block_period_ms", "backend_label", "output_name", "output_index"):
                 if name in stats:
                     setattr(self, name, stats[name])
             self.output_realtime = stats["realtime"]

@@ -101,7 +101,7 @@ class PluginHost:
 
     @property
     def audio_output_name(self) -> Optional[str]:
-        """Last selected output name, cached before the stream starts."""
+        """Last successfully opened output name, retained while stopped."""
         return self.engine.output_name
 
     @staticmethod

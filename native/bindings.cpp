@@ -87,6 +87,7 @@ py::dict engineDict(const EngineStats& info) {
     result["block_period_ms"] = info.blockPeriodMs;
     result["backend_label"] = info.backendLabel;
     result["output_name"] = info.outputName.empty() ? py::object(py::none()) : py::object(py::str(info.outputName));
+    result["output_index"] = info.outputIndex < 0 ? py::object(py::none()) : py::object(py::int_(info.outputIndex));
     result["output_peak"] = info.outputPeak;
     result["realtime"] = realtimeDict(info.realtime);
     return result;

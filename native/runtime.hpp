@@ -47,6 +47,7 @@ std::vector<std::string> hostapis();
 struct EngineStats {
     bool running = false;
     int eligibleSlots = 0;
+    int outputIndex = -1;
     std::uint64_t underruns = 0, renderErrors = 0, callbackCount = 0, deadlineMisses = 0;
     double lastCallbackMs = 0.0, peakCallbackMs = 0.0, blockPeriodMs = 0.0;
     float outputPeak = 0.0f;
@@ -128,5 +129,6 @@ private:
     std::atomic<std::uint64_t> underruns{0}, renderErrors{0}, callbackCount{0}, deadlineMisses{0}, lastCallbackNs{0}, peakCallbackNs{0};
     std::atomic<std::uint32_t> outputPeakBits{0};
     std::string backendLabel, outputName;
+    int outputIndex = -1;
 };
 } // namespace vcpi

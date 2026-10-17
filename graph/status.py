@@ -13,6 +13,16 @@ if TYPE_CHECKING:
     from core.host import VcpiCore
 
 
+def format_output_device(name, index) -> str:
+    """Identify the opened PortAudio entry without guessing alias destinations."""
+    if name is None:
+        return "(not opened)"
+    label = f"[{index}] {name}" if index is not None else name
+    if name.lower() == "default":
+        label += " (system alias; physical output not identified)"
+    return label
+
+
 def format_realtime(info: dict) -> str:
     """Describe observed native scheduling, not merely the requested policy."""
     if not info:
@@ -53,6 +63,10 @@ def render_status(host: VcpiCore) -> str:
     rows.append(("Audio", f"{audio_state}  (sr={host.sample_rate} buf={host.buffer_size})"))
     rows.append(("Audio owner", f"PID {engine.owner_pid} (output mixer and master effects)"))
     rows.append(("Audio failure", str(failure) if failure else "(none)"))
+    device = format_output_device(engine.audio_output_name, engine.audio_output_index)
+    if engine.audio_output_name and audio_state == "STOPPED":
+        device += " (last opened; stopped)"
+    rows.append(("Output device", device))
     rows.append(("Backend", engine.backend_label))
     rows.append(("Output realtime", format_realtime(engine.output_realtime)))
 

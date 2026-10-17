@@ -321,6 +321,7 @@ class _OwnerRuntime:
         return {
             "backend_label": self.engine.backend_label,
             "audio_output_name": self.owner.audio_output_name,
+            "audio_output_index": self.engine.output_index,
             "audio_devices": self.devices,
         }
 
@@ -607,6 +608,7 @@ class RemoteAudioEngine:
         self.backend_label = "not opened"
         self.output_realtime = {}
         self.audio_output_name = None
+        self.audio_output_index = None
         self.audio_devices = []
         self.native_dependencies = {}
         self.render_workers = min(os.cpu_count() or 2, NUM_SLOTS)
@@ -759,7 +761,7 @@ class RemoteAudioEngine:
             self.slots = hydrate_slots(state["slots"])
             self.master_effects = state["master_effects"]
             for name in ("master_gain", "channel_map", "backend_label", "audio_output_name",
-                         "output_realtime", "output_channels", "render_workers",
+                         "audio_output_index", "output_realtime", "output_channels", "render_workers",
                          "audio_devices", "native_dependencies"):
                 setattr(self, name, state[name])
         self._notify(None)

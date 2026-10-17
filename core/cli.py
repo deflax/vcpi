@@ -23,7 +23,7 @@ from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
 from core.processes import render_processes
 from graph.signal_flow import build_flow_snapshot, render_flow_snapshot
 from graph.plugin_info import render_plugin_info
-from graph.status import format_realtime, render_status
+from graph.status import format_output_device, format_realtime, render_status
 
 
 VCPI_ASCII_LOGO = r"""
@@ -877,11 +877,14 @@ class HostCLI(cmd.Cmd):
         sub = parts[0]
 
         if sub == "start":
-            dev = parts[1] if len(parts) > 1 else None
+            dev = " ".join(parts[1:]) if len(parts) > 1 else None
             if dev and dev.isdigit():
                 dev = int(dev)
             try:
                 self.host.start_audio(dev)
+                engine = self.host.engine
+                device = format_output_device(engine.audio_output_name, engine.audio_output_index)
+                self._print(f"  Audio started: {device} | backend={engine.backend_label}")
             except Exception as e:
                 self._print(f"Error: {e}")
 
@@ -893,10 +896,13 @@ class HostCLI(cmd.Cmd):
             if not devices:
                 self._print("  No audio devices available.")
             for device in devices:
+                engine = self.host.engine
+                selected = device["index"] == engine.audio_output_index
+                marker = (" [active]" if engine.running else " [last opened]") if selected else ""
                 self._print(
                     f"  [{device['index']}] {device['name']} "
                     f"({device['max_input_channels']} in, "
-                    f"{device['max_output_channels']} out)"
+                    f"{device['max_output_channels']} out; {device['hostapi_name']}){marker}"
                 )
 
         elif sub == "diagnose":
@@ -907,7 +913,7 @@ class HostCLI(cmd.Cmd):
                 return
             output = diagnosis["output"]
             self._print(
-                f"  Output: {output['output_name'] or '(not opened)'} "
+                f"  Output: {format_output_device(output['output_name'], output['output_index'])} "
                 f"| backend={output['backend_label']} "
                 f"| running={output['running']} "
                 f"| master gain={output['master_gain']:.3f}"

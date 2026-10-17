@@ -398,8 +398,6 @@ void Engine::start(int deviceIndex, const std::string& deviceName) {
     const auto* device = Pa_GetDeviceInfo(selected);
     if (!device || device->maxOutputChannels < 2) throw std::invalid_argument("No compatible stereo output device");
     const auto* host = Pa_GetHostApiInfo(device->hostApi);
-    outputName = device->name;
-    backendLabel = host ? host->name : "PortAudio";
     PaStreamParameters output{};
     output.device = selected;
     output.channelCount = 2;
@@ -415,6 +413,9 @@ void Engine::start(int deviceIndex, const std::string& deviceName) {
         stopUnlocked();
         checkPa(error, "Start output stream");
     }
+    outputIndex = selected;
+    outputName = device->name;
+    backendLabel = host ? host->name : "PortAudio";
 }
 void Engine::stopUnlocked() {
     if (failure.load(std::memory_order_acquire) == Failure::Ownership)
@@ -564,6 +565,7 @@ EngineStats Engine::stats() {
     result.outputPeak = detail::loadPeak(outputPeakBits);
     result.backendLabel = backendLabel;
     result.outputName = outputName;
+    result.outputIndex = outputIndex;
     result.realtime = realtime.stats(outputRealtimePriority);
     return result;
 }
