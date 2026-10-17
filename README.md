@@ -109,7 +109,7 @@ checks do not exercise macOS application activation.
   sampler/            # WAV sample assets
     samples/          # Built-in WAV sample packs (808, 909, piano, etc.)
   controllers/        # Hardware controller modules (generic MIDI input, MIDI Mix)
-  graph/              # ASCII visualization renderers (signal flow, plugin info, knobs)
+  graph/              # ASCII visualization renderers (signal flow, plugin info)
   vst3/               # Open-license VST3 plugins (run arch-specific fetch scripts)
   patches/            # VCV/Cardinal .vcv patch files
   sessions/           # User-saved session files (save/load commands)
@@ -149,8 +149,9 @@ sample names, and `slot <n> vcv` completes patch names. You do not need
 to type full paths.
 
 The client keeps a scrolling `vcpi>` prompt with session history and uses
-`prompt_toolkit` + Rich for enhanced terminal output. `help`, `params`,
-`status`, and `info` display tables; flow diagrams and knob bars receive color.
+`prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
+`info` display tables; flow diagrams receive color. `get` includes parameter
+values, units, ranges, and choices without slider bars.
 Piped input/output remains plain text. `./vcpi` and `./vcpid` install dependencies
 on first launch and when `requirements.txt` changes, including for existing
 environments. For direct Python startup, install them manually with
@@ -173,8 +174,36 @@ audio start
 tempo 120
 status
 info 1
-knobs 1
+get 1
 ```
+
+Read or change instrument, slot-effect, and master-effect parameters:
+
+```text
+get <slot> [name]
+get <slot> fx <index> [name]
+get master [index] [name]
+set <slot> <name> <value>
+set <slot> fx <index> <name> <value>
+set master <index> <name> <value>
+```
+
+Slots are 1–8 and effect indexes are 1-based. Omit `name` to read all visible
+parameters or supply one name to read just that parameter. For `get master`,
+the effect index defaults to 1; a numeric token immediately after `master`
+is always an index. `set master` requires an explicit index. Slot effects
+require the `fx <index>` tokens. Use `help get` and `help set` for detailed
+syntax and examples.
+
+Plain-text `get` output prints `  name = value`, including units when available,
+with `  (range low .. high)` or `  (choices choice1, choice2)` on the same line.
+An empty parameter list prints `  No parameters`; an unknown name is an error.
+JUCE-generated `MIDI CC <channel>|<controller>` helpers are hidden, while
+ordinary controls, including non-automatable ones, remain visible.
+`get` and `info` read cached metadata rather than calling live plugin getters;
+plugin-side changes can remain stale until a full capture. `set` waits for
+the owning process and reports the actual applied value, including clamping.
+See [USAGE.md](USAGE.md#plugin-commands) for capture details and parameter examples.
 
 ### Finding MIDI port indexes
 
@@ -353,8 +382,9 @@ vcpi> status
 vcpi> flow              # signal flow: all slots, FX chains, master bus
 vcpi> info 1            # plugin metadata: vendor, category, version, etc.
 vcpi> info 1 fx 1       # info for slot 1's first effect
-vcpi> knobs 1           # ASCII slider view of all parameters
-vcpi> knobs master 1    # knobs for first master effect
+vcpi> get 1             # all visible instrument parameters
+vcpi> get 1 fx 1        # parameters for slot 1's first effect
+vcpi> get master 1     # parameters for the first master effect
 ```
 
 Headless server + remote CLI:

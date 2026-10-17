@@ -66,16 +66,16 @@ def _info_table(lines: list[str], title: str) -> Table | None:
     return table
 
 
-def _params_table(lines: list[str]) -> Table | None:
+def _get_table(lines: list[str]) -> Table | None:
     if not lines:
         return None
-    table = _table("Parameters", "Parameter", "Value", "Range")
+    table = _table("Parameters", "Parameter", "Value", "Range / choices")
     for line in lines:
         if not line.startswith("  ") or " = " not in line:
             return None
         name, value = line.strip().split(" = ", 1)
         range_text = ""
-        match = re.search(r"  \(range (.*)\)$", value)
+        match = re.search(r"  \((?:range|choices) (.*)\)$", value)
         if match:
             range_text = match.group(1)
             value = value[:match.start()]
@@ -93,8 +93,8 @@ def display_response(console: Console, command: str, lines: list[str]) -> None:
     table = None
     if name in ("status", "info"):
         table = _info_table(lines, "Status" if name == "status" else "Plugin info")
-    elif name == "params":
-        table = _params_table(lines)
+    elif name == "get":
+        table = _get_table(lines)
     if table is not None:
         console.print(table)
         return
@@ -105,7 +105,4 @@ def display_response(console: Console, command: str, lines: list[str]) -> None:
             text.stylize("bold red")
         elif name == "flow":
             text.stylize("cyan")
-        elif name == "knobs":
-            for match in re.finditer(r"[#=]+", line):
-                text.stylize("bold green", match.start(), match.end())
         console.print(text, soft_wrap=True)

@@ -19,7 +19,6 @@ from core.models import NUM_SLOTS
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
 from graph.signal_flow import render_signal_flow
 from graph.plugin_info import render_plugin_info
-from graph.knobs import render_knobs
 from graph.status import format_realtime, render_status
 
 
@@ -147,7 +146,7 @@ class HostCLI(cmd.Cmd):
         width = max(len(name) for name, _ in entries)
         self._print("Available commands:")
         groups = (
-            ("Plugins", {"slot", "params", "set", "info", "knobs"}),
+            ("Plugins", {"slot", "get", "set", "info"}),
             ("Mixer", {"gain", "mute", "solo"}),
             ("Audio", {"audio"}),
             ("MIDI", {"midi", "midimix", "note"}),
@@ -414,7 +413,7 @@ class HostCLI(cmd.Cmd):
         return []
 
     def _complete_slot_fx(self, text, prefix_tokens):
-        """Shared completion for info/knobs: <slot 1-8> [fx <index>] | master [index]."""
+        """Complete plugin targets: <slot> [fx <index>] | master [index]."""
         arg_index = len(prefix_tokens) - 1
 
         if arg_index == 0:
@@ -453,12 +452,30 @@ class HostCLI(cmd.Cmd):
             return []
         return self._complete_slot_fx(text, prefix_tokens)
 
-    def complete_knobs(self, text, line, begidx, endidx):
-        del endidx
-        prefix_tokens = line[:begidx].split()
-        if not prefix_tokens or prefix_tokens[0] != "knobs":
+    def _complete_parameter_command(self, text, line, begidx, command):
+        try:
+            prefix_tokens = shlex.split(line[:begidx])
+        except ValueError:
             return []
-        return self._complete_slot_fx(text, prefix_tokens)
+        if not prefix_tokens or prefix_tokens[0] != command:
+            return []
+        matches = self._complete_slot_fx(text, prefix_tokens)
+        try:
+            _, _, plugin, remaining = self._parameter_target(
+                prefix_tokens[1:], require_master_index=command == "set")
+        except ValueError:
+            return matches
+        if not remaining:
+            names = [name for name, param in plugin.parameters.items()
+                     if not param.is_midi_cc_helper]
+            matches.extend(self._filter_prefix(names, text))
+        return sorted(set(matches))
+
+    def complete_get(self, text, line, begidx, endidx):
+        return self._complete_parameter_command(text, line, begidx, "get")
+
+    def complete_set(self, text, line, begidx, endidx):
+        return self._complete_parameter_command(text, line, begidx, "set")
 
     def do_slot(self, arg):
         """Slot management: slot <1-8> vst <path|name> [--name <label>] | slot <1-8> wav <pack> <sample> [name] | slot <1-8> vcv <patch> [name] | slot <1-8|master> fx <path|name> [--name <label>] | slot <1-8> clear | slot <1-8|master> fx clear <fx_index>"""
@@ -630,106 +647,125 @@ class HostCLI(cmd.Cmd):
         self._print(f"Error: unknown subcommand '{mode}'")
         self._print(f"Usage: {self._slot_usage()}")
 
-    def do_params(self, arg):
-        """Show params: params <slot 1-8>  or  params master <fx_index>"""
-        parts = arg.strip().split()
+    def _parameter_target(self, parts, *, require_master_index=False):
+        """Resolve a cached plugin and leave parameter/value arguments unconsumed."""
         if not parts:
-            self._print("Usage: params <slot 1-8> | params master <fx_index>")
-            return
+            raise ValueError("missing plugin target")
+        fx_idx = None
         if parts[0] == "master":
-            if len(parts) > 2:
-                self._print("Usage: params master <fx_index>")
-                return
-            if not self.host.engine.master_effects:
-                self._print("  No master effects loaded")
-                return
-            try:
-                fx_idx = int(parts[1]) - 1 if len(parts) > 1 else 0
-            except ValueError:
-                self._print("Error: fx_index must be a positive integer")
-                return
-            if not 0 <= fx_idx < len(self.host.engine.master_effects):
-                self._print("Error: fx_index out of range")
-                return
-            plugin = self.host.engine.master_effects[fx_idx]
+            idx = None
+            consumed = 1
+            fx_idx = 0
+            if len(parts) > 1 and (require_master_index or parts[1].lstrip("+-").isdigit()):
+                try:
+                    fx_idx = int(parts[1]) - 1
+                except ValueError:
+                    raise ValueError("fx_index must be a positive integer") from None
+                consumed = 2
+            elif require_master_index:
+                raise ValueError("missing master fx_index")
+            effects = self.host.engine.master_effects
+            if not effects:
+                raise ValueError("No master effects loaded")
+            if not 0 <= fx_idx < len(effects):
+                raise ValueError("fx_index out of range")
+            plugin = effects[fx_idx]
         else:
-            try:
-                idx = _slot_to_internal(int(parts[0]))
-            except ValueError as e:
-                self._print(f"Error: {e}")
-                return
+            idx = _slot_to_internal(int(parts[0]))
             slot = self.host.engine.slots[idx]
             if slot is None:
-                self._print("  Empty slot")
-                return
+                raise ValueError(f"Slot {parts[0]} is empty")
+            consumed = 1
             plugin = slot.plugin
+            if len(parts) > 1 and parts[1] == "fx":
+                if len(parts) < 3:
+                    raise ValueError("missing slot fx_index")
+                try:
+                    fx_idx = int(parts[2]) - 1
+                except ValueError:
+                    raise ValueError("fx_index must be a positive integer") from None
+                if not 0 <= fx_idx < len(slot.effects):
+                    raise ValueError("fx_index out of range")
+                plugin = slot.effects[fx_idx]
+                consumed = 3
         if plugin is None:
-            return
-        for name, val in plugin.values.items():
-            parameter = plugin.parameters.get(name)
-            if parameter is not None and parameter.is_midi_cc_helper:
-                continue
-            rng = parameter.range if parameter is not None else ()
-            if parameter is not None and parameter.kind == "float" and len(rng) >= 2:
-                self._print(
-                    f"  {name} = {val}  (range {rng[0]:.3f} .. {rng[1]:.3f})"
-                )
-            else:
-                self._print(f"  {name} = {val}")
+            raise ValueError("No plugin loaded")
+        return idx, fx_idx, plugin, parts[consumed:]
 
-    def do_set(self, arg):
-        """Set param: set <slot 1-8> <name> <value>  or  set master <fx> <name> <value>"""
+    def do_get(self, arg):
+        """Read cached plugin parameters, including units, ranges, and choices.
+
+        get <slot 1-8> [name]
+        get <slot 1-8> fx <fx_index> [name]
+        get master [fx_index] [name]
+
+        Omit name to list all parameters; master defaults to its first effect.
+        MIDI CC helpers are hidden. This command never calls live plugin getters.
+        Examples: get 1; get 1 cutoff; get 1 fx 2; get master 1 cutoff
+        """
         try:
-            parts = shlex.split(arg)
+            _, _, plugin, remaining = self._parameter_target(shlex.split(arg))
+            if len(remaining) > 1:
+                raise ValueError("expected at most one parameter name")
+            parameters = {name: param for name, param in plugin.parameters.items()
+                          if not param.is_midi_cc_helper}
+            if remaining:
+                name = remaining[0]
+                if name not in parameters:
+                    raise ValueError(f"unknown parameter '{name}'")
+                parameters = {name: parameters[name]}
+            if not parameters:
+                self._print("  No parameters")
+            for name, parameter in parameters.items():
+                value = plugin.values.get(name, parameter.string_value or "???")
+                units = f" {parameter.units}" if parameter.units else ""
+                details = ""
+                if parameter.kind == "enum" and parameter.valid_values:
+                    details = f"  (choices {', '.join(parameter.valid_values)})"
+                elif parameter.kind == "float" and len(parameter.range) >= 2:
+                    low, high = parameter.range[:2]
+                    if low is not None and high is not None:
+                        details = f"  (range {low:.4g} .. {high:.4g})"
+                self._print(f"  {name} = {value}{units}{details}")
         except ValueError as error:
             self._print(f"Error: {error}")
+            self._print("Usage: get <slot> [fx <index>] [name] | get master [index] [name]")
+
+    def do_set(self, arg):
+        """Set a plugin parameter and show its actual applied value.
+
+        set <slot 1-8> <name> <value>
+        set <slot 1-8> fx <fx_index> <name> <value>
+        set master <fx_index> <name> <value>
+
+        Boolean values accept true/false; quote enum values containing spaces.
+        Examples: set 1 cutoff 1000; set 1 fx 2 bypass true
+                  set master 1 mode "Quiet Mode"
+        """
+        try:
+            idx, fx_idx, plugin, remaining = self._parameter_target(
+                shlex.split(arg), require_master_index=True)
+            if len(remaining) != 2:
+                raise ValueError("expected a parameter name and one value")
+            pname, pval = remaining
+            parameter = plugin.parameters.get(pname)
+            if parameter is None:
+                raise ValueError(f"unknown parameter '{pname}'")
+            if parameter.kind != "enum":
+                try:
+                    pval = float(pval)
+                except ValueError:
+                    if pval.lower() in ("true", "false"):
+                        pval = pval.lower() == "true"
+        except ValueError as error:
+            self._print(f"Error: {error}")
+            self._print("Usage: set <slot> [fx <index>] <name> <value> | set master <index> <name> <value>")
             return
-        if not parts:
-            self._print("Usage: set <slot 1-8> <name> <value>")
-            return
-        if parts[0] == "master":
-            if len(parts) < 4:
-                self._print("Usage: set master <fx_index> <name> <value>")
-                return
-            try:
-                fx_idx = int(parts[1]) - 1
-            except ValueError:
-                self._print("Error: fx_index must be a positive integer")
-                return
-            if not 0 <= fx_idx < len(self.host.engine.master_effects):
-                self._print("Error: fx_index out of range")
-                return
-            idx = None
-            pname, pval = parts[2], parts[3]
-        else:
-            if len(parts) < 3:
-                self._print("Usage: set <slot 1-8> <name> <value>")
-                return
-            try:
-                idx = _slot_to_internal(int(parts[0]))
-            except ValueError as e:
-                self._print(f"Error: {e}")
-                return
-            slot = self.host.engine.slots[idx]
-            if slot is None:
-                self._print("  Empty slot")
-                return
-            fx_idx = None
-            pname, pval = parts[1], parts[2]
-        plugin = (self.host.engine.master_effects[fx_idx] if idx is None
-                  else self.host.engine.slots[idx].plugin)
-        parameter = plugin.parameters.get(pname)
-        if parameter is None or parameter.kind != "enum":
-            try:
-                pval = float(pval)
-            except ValueError:
-                if pval.lower() in ("true", "false"):
-                    pval = pval.lower() == "true"
         try:
             actual = self.host.engine.set_parameter(idx, pname, pval, fx_index=fx_idx)
             self._print(f"  {pname} = {actual}")
-        except Exception as e:
-            self._print(f"Error: {e}")
+        except Exception as error:
+            self._print(f"Error: {error}")
 
     # -- gain / mute / solo --------------------------------------------------
 
@@ -906,59 +942,6 @@ class HostCLI(cmd.Cmd):
                 label = f"Slot {parts[0]}: {slot.name}"
 
         self._print(render_plugin_info(plugin, label))
-
-    def do_knobs(self, arg):
-        """Show parameter knobs: knobs <slot 1-8> | knobs <slot 1-8> fx <fx_index> | knobs master [fx_index]"""
-        parts = arg.strip().split()
-        if not parts:
-            self._print("Usage: knobs <slot 1-8> | knobs <slot 1-8> fx <fx_index> | knobs master [fx_index]")
-            return
-
-        if parts[0] == "master":
-            if not self.host.engine.master_effects:
-                self._print("  No master effects loaded")
-                return
-            try:
-                fx_idx = int(parts[1]) - 1 if len(parts) > 1 else 0
-            except ValueError:
-                self._print("Error: fx_index must be a positive integer")
-                return
-            if not 0 <= fx_idx < len(self.host.engine.master_effects):
-                self._print("Error: fx_index out of range")
-                return
-            plugin = self.host.engine.master_effects[fx_idx]
-            label = f"Master FX {fx_idx + 1}"
-        else:
-            try:
-                idx = _slot_to_internal(int(parts[0]))
-            except ValueError as e:
-                self._print(f"Error: {e}")
-                return
-            slot = self.host.engine.slots[idx]
-            if slot is None:
-                self._print(f"  Slot {parts[0]} is empty")
-                return
-
-            # knobs <slot> fx <fx_index>  -- show knobs for a slot effect
-            if len(parts) >= 2 and parts[1] == "fx":
-                if not slot.effects:
-                    self._print(f"  Slot {parts[0]} has no effects")
-                    return
-                try:
-                    fx_idx = int(parts[2]) - 1 if len(parts) > 2 else 0
-                except ValueError:
-                    self._print("Error: fx_index must be a positive integer")
-                    return
-                if not 0 <= fx_idx < len(slot.effects):
-                    self._print("Error: fx_index out of range")
-                    return
-                plugin = slot.effects[fx_idx]
-                label = f"Slot {parts[0]} FX {fx_idx + 1}"
-            else:
-                plugin = slot.plugin
-                label = f"Slot {parts[0]}: {slot.name}"
-
-        self._print(render_knobs(plugin, label))
 
     # -- audio ---------------------------------------------------------------
 

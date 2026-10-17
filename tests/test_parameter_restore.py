@@ -2,6 +2,7 @@
 
 import base64
 import json
+import io
 import multiprocessing
 import pickle
 import threading
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 from core.audio_process import RemoteAudioEngine, _OwnerRuntime
 from core.engine import AudioEngine
 from core.models import InstrumentSlot
+from core.cli import HostCLI
 from core.session import _apply_plugin_params, _restore_plugin_state, _saved_plugin_state
 from core.slot_process import (
     PARAMETER_BATCH_LIMIT, SlotProcessError, SlotWorker, _execute, _slot_state,
@@ -135,6 +137,37 @@ class ParameterRestoreTests(unittest.TestCase):
         self.assertNotIn("state", reply)
         self.worker._accept(reply)
         return reply
+
+    def test_cli_slot_effect_write_preserves_types_clamping_and_target_isolation(self):
+        effect = ControlledInstrument()
+        self.native_slot.effects.append(effect)
+        self.worker._accept({"ok": True, "state": _slot_state(self.owner, 2)})
+        output = io.StringIO()
+        cli = HostCLI(SimpleNamespace(engine=self.remote), stdout=output, owns_host=False)
+        cli.onecmd("set 3 fx 1 bypass false")
+        cli.onecmd('set 3 fx 1 mode "Quiet Mode"')
+        cli.onecmd("set 3 fx 1 amplitude 2")
+        self.assertFalse(effect.bypass)
+        self.assertEqual(effect.mode, "Quiet Mode")
+        self.assertEqual(effect.amplitude, 0.75)
+        self.assertTrue(self.instrument.bypass)
+        self.assertEqual(self.instrument.mode, "Normal")
+        self.assertEqual(self.instrument.amplitude, 0.25)
+        output.seek(0)
+        output.truncate()
+        cli.onecmd("get 3 fx 1 amplitude")
+        self.assertIn("amplitude = 0.75", output.getvalue())
+        for command in ("set 3 fx 1 amplitude 0.1 extra",
+                        "set 3 fx 0 amplitude 0.1",
+                        "set 3 fx 2 amplitude 0.1",
+                        "set 3 amplitude 0.1 extra"):
+            with self.subTest(command=command):
+                output.seek(0)
+                output.truncate()
+                cli.onecmd(command)
+                self.assertTrue(output.getvalue().startswith("Error:"))
+                self.assertEqual(effect.amplitude, 0.75)
+                self.assertEqual(self.instrument.amplitude, 0.25)
 
 
     def test_single_setter_returns_actual_value_and_live_reader_delta(self):

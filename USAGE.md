@@ -108,13 +108,14 @@ Server/client specific:
 Type `help` for commands grouped by function: plugins, mixer, audio, MIDI,
 sequencer & sync, sessions, status & diagnostics, and help & lifecycle.
 Commands are alphabetical within each group. Use `help <command>` for
-detailed syntax and usage.
+detailed syntax and usage; `help get` and `help set` include parameter-targeting
+syntax and examples.
 
 The interactive client uses `prompt_toolkit` for the `vcpi>` command line
 and Rich for terminal presentation; it is not a full-screen interface.
-`help`, `params`, `status`, and `info` use tables. `flow` retains its diagram
-layout with color, and `knobs` highlights filled slider bars. Other responses,
-including `help <command>`, retain their text.
+`help`, `get`, `status`, and `info` use tables. `flow` retains its diagram layout
+with color. Piped `get` output uses plain parameter lines without slider bars.
+Other responses, including `help <command>`, retain their text.
 
 - Up/Down recall commands from the current client session.
 - `Ctrl-C` cancels the current input without disconnecting.
@@ -130,7 +131,7 @@ autocomplete command names. `slot` has context-aware argument completion:
 - `slot <n> wav` -> sample pack names and sample names
 - `slot <n> vcv` -> patch names from `patches/`
 - `slot <n> vst` / `slot <n> fx` -> detected VST names
-- `info` / `knobs` -> slot numbers, `master`, `fx`
+- `info` / `get` / `set` -> slot numbers, `master`, `fx`, effect indexes
 
 ### Plugin Commands
 
@@ -142,16 +143,15 @@ autocomplete command names. `slot` has context-aware argument completion:
 | `slot <slot\|master> fx <path\|vst_name> [--name <label>]` | Load effect into slot insert chain or master bus |
 | `slot <slot> clear` | Clear instrument from slot |
 | `slot <slot\|master> fx clear <fx_index>` | Remove effect by index |
-| `params <slot>` | Show instrument parameters |
-| `params master <fx_index>` | Show master FX parameters (defaults to first if omitted) |
+| `get <slot> [name]` | Read all visible instrument parameters, or one named parameter |
+| `get <slot> fx <fx_index> [name]` | Read all visible slot-effect parameters, or one named parameter |
+| `get master [fx_index] [name]` | Read master-effect parameters; effect index defaults to 1 |
 | `set <slot> <name> <value>` | Set instrument parameter |
-| `set master <fx_index> <name> <value>` | Set master FX parameter |
+| `set <slot> fx <fx_index> <name> <value>` | Set slot-effect parameter |
+| `set master <fx_index> <name> <value>` | Set master-effect parameter; explicit index required |
 | `info <slot>` | Show plugin metadata (vendor, category, version, latency, param count) |
 | `info <slot> fx <fx_index>` | Show metadata for a slot effect |
 | `info master [fx_index]` | Show metadata for a master bus effect |
-| `knobs <slot>` | Show ASCII parameter sliders with values, units, and ranges |
-| `knobs <slot> fx <fx_index>` | Show parameter sliders for a slot effect |
-| `knobs master [fx_index]` | Show parameter sliders for a master bus effect |
 
 VST names and paths may contain spaces: `slot 1 vst Acid V` loads the plugin
 named `Acid V` and uses that name as the slot label. Quotes are also supported.
@@ -159,10 +159,43 @@ To override the display label, use `slot 1 vst Acid V --name Bass`.
 The same syntax applies to `slot <slot|master> fx`; trailing words without
 `--name` are part of the plugin name, not a custom label.
 
+For `get`, omit `name` to list all visible parameters or supply a single name
+to read only that parameter. Use parameter names from the listing; quote names
+or values containing spaces. An unknown name produces an error. Slot-effect
+targets require `fx <fx_index>`; an index alone is not a slot-effect target.
+In `get master`, a numeric token immediately after `master` is always an
+effect index, not a parameter name. With no index, `get master` and
+`get master <name>` read the first master effect. All `set` forms require
+both a name and a value, and `set master` requires an explicit effect index.
+Do not add extra target or name arguments.
+
+Examples (parameter names and choices depend on the loaded plugin):
+
+```text
+get 1
+get 1 cutoff_hz
+get 1 fx 2
+get 1 fx 2 wet
+get master
+get master 2
+get master 2 threshold_db
+get master threshold_db
+set 1 cutoff_hz 880
+set 1 fx 2 wet 0.5
+set master 2 threshold_db -6
+help get
+help set
+```
+
+Each parameter prints a line `  name = value`, with units when available.
+When metadata is available, the same line ends with either
+`  (range low .. high)` or `  (choices choice1, choice2)`. There are no
+slider bars. An empty parameter list prints `  No parameters`.
+
 `set` waits for the owning process to apply the change between render blocks
 and prints the actual applied value, including plugin clamping. Boolean values
 may use `true`/`false`; quote enum values containing spaces, for example
-`set 1 transpose_semitones "24 semitones"`. `params`, `info`, and `knobs`
+`set 1 transpose_semitones "24 semitones"`. `get` and `info`
 read cached snapshots and never call live plugin getters. Slot metadata is
 captured at loading, chain edits, and explicit session-state capture, sequentially
 with native rendering in that slot's process. Master metadata capture requires
@@ -170,7 +203,7 @@ the output stream stopped. A parameter setter returns only its actual value,
 raw/display delta, and acknowledgment—not a fresh catalog of all parameters.
 Plugin-side changes between full captures can make diagnostics temporarily stale.
 
-`params` and `knobs` omit JUCE-generated MIDI controller helper parameters
+`get` omits JUCE-generated MIDI controller helper parameters
 whose labels have the form `MIDI CC <channel>|<controller>`. Ordinary plugin
 parameters, including non-automatable controls, remain visible. This is only a
 display filter; MIDI CC input and underlying parameter access are unchanged.
@@ -545,11 +578,12 @@ before unlinking orphaned shared semaphore resources.
 
 ### Visualization Commands
 
-The `flow`, `info`, and `knobs` commands render ASCII diagrams using cached
-metadata from the native JUCE VST3 host. Numeric parameters retain display
-values and unit-qualified names (kHz displays use Hz values). Text choices and
-boolean switches are inferred at load even when a plugin omits VST3 step counts.
-`raw_value` remains normalized.
+The `flow` and `info` commands render ASCII diagrams using cached
+metadata from the native JUCE VST3 host. Parameter inspection uses `get`,
+described under [Plugin Commands](#plugin-commands). Numeric parameters retain
+display values and unit-qualified names (kHz displays use Hz values).
+Text choices and boolean switches are inferred at load even when a plugin
+omits VST3 step counts. `raw_value` remains normalized.
 
 **`flow`** shows the full signal chain across all 8 slots:
 
@@ -595,33 +629,34 @@ vcpi> info 1
 +-----------------------------------------------+
 ```
 
-**`knobs`** shows plugin parameters, excluding MIDI CC helpers, as ASCII slider bars:
-
-```text
-vcpi> knobs 1
-+--------------------------------------------------------------+
-|                        Slot 1: Dexed                         |
-+--------------------------------------------------------------+
-|   cutoff_hz  [#-------------------]  880.0 Hz  (20 .. 2e+04) |
-|   resonance  [######--------------]  0.3       (0 .. 1)      |
-|   attack_ms  [--------------------]  50.0 ms   (0 .. 5000)   |
-+--------------------------------------------------------------+
-```
-
-- Float parameters show a slider bar, value with units, and the valid range.
-- Boolean parameters show an on/off slider.
-- Enum/string parameters show the current value and available options.
-
-All three commands support slot instruments, per-slot effects, and master bus
-effects using the same targeting syntax:
+`info` supports slot instruments, per-slot effects, and master bus effects:
 
 ```text
 info 1            # slot 1 instrument
 info 1 fx 1       # slot 1, first effect
 info master 1     # first master bus effect
-knobs 1           # slot 1 instrument
-knobs 1 fx 2      # slot 1, second effect
-knobs master      # first master bus effect (index defaults to 1)
+```
+
+To inspect the corresponding parameters, use `get`:
+
+```text
+get 1             # slot 1 instrument
+get 1 fx 2        # slot 1, second effect
+get master        # first master bus effect (index defaults to 1)
+```
+
+For example, numeric parameters with range metadata print as:
+
+```text
+  cutoff_hz = 880.0 Hz  (range 20 .. 2e+04)
+  resonance = 0.3  (range 0 .. 1)
+  attack_ms = 50.0 ms  (range 0 .. 5000)
+```
+
+Choice parameters list available choices instead of a numeric range:
+
+```text
+  mode = Hall  (choices Room, Hall, Plate)
 ```
 
 ### Status and Exit

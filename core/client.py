@@ -45,16 +45,15 @@ FALLBACK_COMMANDS = (
     "deps",
     "exit",
     "gain",
+    "get",
     "help",
     "info",
-    "knobs",
     "ableton",
     "midi",
     "midimix",
     "flow",
     "mute",
     "note",
-    "params",
     "load",
     "quit",
     "save",
@@ -200,7 +199,7 @@ def _session_names() -> list[str]:
 
 
 def _complete_slot_fx_args(text: str, prefix_tokens: list[str]) -> list[str]:
-    """Tab completion for info/knobs: <slot 1-8> [fx] | master."""
+    """Complete info/get/set targets without live plugin metadata."""
     arg_index = len(prefix_tokens) - 1
     slots = [str(i) for i in range(1, 9)]
 
@@ -212,11 +211,16 @@ def _complete_slot_fx_args(text: str, prefix_tokens: list[str]) -> list[str]:
         return []
 
     if args[0] == "master":
+        if arg_index == 1:
+            return _filter_prefix(slots, text)
         return []
 
-    # <slot> [fx]
-    if arg_index == 1:
-        return _filter_prefix(["fx"], text)
+    # <slot> [fx <index>]
+    if args[0] in slots:
+        if arg_index == 1:
+            return _filter_prefix(["fx"], text)
+        if arg_index == 2 and args[1] == "fx":
+            return _filter_prefix(slots, text)
 
     return []
 
@@ -374,7 +378,7 @@ class CommandCompleter(Completer):
             matches = _filter_prefix(self.names, text)
         elif prefix_tokens[0] == "slot":
             matches = _complete_slot_args(text, prefix_tokens)
-        elif prefix_tokens[0] in ("info", "knobs"):
+        elif prefix_tokens[0] in ("info", "get", "set"):
             matches = _complete_slot_fx_args(text, prefix_tokens)
         elif prefix_tokens[0] in ("save", "load"):
             matches = _filter_prefix(_session_names(), text)

@@ -20,7 +20,7 @@ Read this file first in new sessions. It is a durable map of the repo, not a ful
 .
 ├── core/          Main application package
 ├── controllers/   MIDI device integrations
-├── graph/         ASCII renderers for flow/status/plugin info/knobs
+├── graph/         ASCII renderers for flow/status/plugin info
 ├── sampler/       WAV sampler package and built-in sample packs
 ├── patches/       Cardinal/VCV `.vcv` patch files
 ├── sessions/      Saved session files
