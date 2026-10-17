@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+import re
 
 from core.models import InstrumentSlot
 
@@ -20,6 +21,11 @@ class ParameterSnapshot:
     is_automatable: bool = False
     is_boolean: bool = False
     is_discrete: bool = False
+
+    @property
+    def is_midi_cc_helper(self) -> bool:
+        """Identify JUCE's generated MIDI controller parameters by exact label."""
+        return re.fullmatch(r"MIDI CC [0-9]+\|[0-9]+", self.label) is not None
 
 
 @dataclass(slots=True)

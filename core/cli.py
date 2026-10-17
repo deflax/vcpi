@@ -667,6 +667,8 @@ class HostCLI(cmd.Cmd):
             return
         for name, val in plugin.values.items():
             parameter = plugin.parameters.get(name)
+            if parameter is not None and parameter.is_midi_cc_helper:
+                continue
             rng = parameter.range if parameter is not None else ()
             if parameter is not None and parameter.kind == "float" and len(rng) >= 2:
                 self._print(

@@ -170,6 +170,11 @@ the output stream stopped. A parameter setter returns only its actual value,
 raw/display delta, and acknowledgment—not a fresh catalog of all parameters.
 Plugin-side changes between full captures can make diagnostics temporarily stale.
 
+`params` and `knobs` omit JUCE-generated MIDI controller helper parameters
+whose labels have the form `MIDI CC <channel>|<controller>`. Ordinary plugin
+parameters, including non-automatable controls, remain visible. This is only a
+display filter; MIDI CC input and underlying parameter access are unchanged.
+
 ### Mixer Commands
 
 | Command | Description |
@@ -590,7 +595,7 @@ vcpi> info 1
 +-----------------------------------------------+
 ```
 
-**`knobs`** shows every parameter as an ASCII slider bar:
+**`knobs`** shows plugin parameters, excluding MIDI CC helpers, as ASCII slider bars:
 
 ```text
 vcpi> knobs 1

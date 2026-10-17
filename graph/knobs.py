@@ -1,7 +1,7 @@
 """ASCII parameter knob/slider view for vcpi.
 
-Renders every parameter of a plugin as a horizontal slider bar with
-value, units, and range information.
+Renders plugin parameters, excluding generated MIDI CC helpers, as horizontal
+slider bars with value, units, and range information.
 """
 
 from __future__ import annotations
@@ -50,7 +50,8 @@ def render_knobs(plugin: PluginSnapshot, label: str = "") -> str:
     label : str, optional
         Optional heading text (e.g. "Slot 1: Dexed").
     """
-    params = plugin.parameters
+    params = {name: param for name, param in plugin.parameters.items()
+              if not param.is_midi_cc_helper}
     if not params:
         heading = label or "Parameters"
         border = "+" + "-" * (len(heading) + 2) + "+"
