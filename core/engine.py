@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import logging
 import math
 import threading
 from contextlib import contextmanager
@@ -10,6 +11,9 @@ from contextlib import contextmanager
 from core.audio_deps import require_native
 from core.audio_state import plain_value
 from core.models import InstrumentSlot, NUM_SLOTS
+
+
+logger = logging.getLogger(__name__)
 
 
 class _Control:
@@ -255,9 +259,12 @@ class AudioEngine:
             for name, value in fields.items():
                 setattr(slot, name, value)
             self._applied_updates.append(("slot", index, fields))
+            if "gain" in fields:
+                logger.info("slot %d gain -> %.2f (applied)", index + 1, slot.gain)
         if master_changed:
             self.master_gain = master
             self._applied_updates.append(("master_gain", master))
+            logger.info("master gain -> %.2f (applied)", master)
 
     def apply_pending_controls(self):
         """Apply FIFO controls on the control owner, including during playback."""

@@ -858,5 +858,8 @@ Headless server + client shell:
 Server logs now include:
 
 - CLI command execution (`[CLI] ...`)
-- MIDI input events (`[MIDI IN] ...`)
-- MIDI Mix events (`[MIDI Mix] ...`)
+- MIDI input events at `DEBUG`
+- MIDI Mix fader/knob events at `DEBUG`; mute/solo actions remain at `INFO`
+- Final applied slot/master gains at `INFO`, once per affected gain in each
+  drained mixer batch, after callback acknowledgment. A continuous fader
+  movement can span multiple batches.

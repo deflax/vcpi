@@ -182,7 +182,7 @@ class MidiMixController:
         if cc == MASTER_FADER_CC:
             gain = value / 127.0
             self._engine.enqueue_master_gain(gain)
-            logger.info("master gain -> %.2f", gain)
+            logger.debug("master gain -> %.2f", gain)
             return
 
         slot_idx = self._cc_to_fader.get(cc)
@@ -191,7 +191,7 @@ class MidiMixController:
             if slot:
                 gain = value / 127.0
                 self._engine.enqueue_slot_change(slot_idx, generation=slot.generation, gain=gain)
-                logger.info("slot %d gain -> %.2f", slot_idx + 1, gain)
+                logger.debug("slot %d gain -> %.2f", slot_idx + 1, gain)
             else:
                 logger.debug("slot %d gain ignored (empty slot)", slot_idx + 1)
             return
