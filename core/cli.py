@@ -1412,18 +1412,21 @@ class HostCLI(cmd.Cmd):
         self._print(render_status(self.host))
 
     def do_ps(self, arg):
-        """Show daemon processes and threads with resource usage: ps
+        """Show daemon processes and threads with resource usage: ps [all]
 
         Includes the daemon and all descendants (audio, slots, helpers), not
         the separate CLI client. Samples CPU over ~200 ms; 100% is one core.
         Process rows show total CPU, resident memory (MiB), state and thread
         count. Thread rows show native TIDs and CPU, not separate memory.
+        Idle generically named threads are hidden; ps all shows every thread.
+        Main threads and known native render threads remain visible.
         """
-        if arg.strip():
-            self._print("Usage: ps")
+        mode = arg.strip()
+        if mode not in ("", "all"):
+            self._print("Usage: ps [all]")
             return
         try:
-            self._print(render_processes(self.host))
+            self._print(render_processes(self.host, show_all=mode == "all"))
         except (OSError, RuntimeError) as exc:
             self._print(f"Error collecting process resources: {exc}")
 

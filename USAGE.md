@@ -734,7 +734,7 @@ Choice parameters list available choices instead of a numeric range:
 |---|---|
 | `about` | Print the vcpi logo and basic project info |
 | `status` | Print combined system status |
-| `ps` | Show daemon/child processes and threads with sampled CPU and resident memory |
+| `ps [all]` | Show daemon/child processes and threads with sampled CPU and resident memory |
 | `deps` | Check optional dependency availability |
 | `debug [on\|off]` | Show current logging level; enable DEBUG or return to INFO |
 | `shutdown` | Shut down the vcpi daemon process |
@@ -757,6 +757,15 @@ render-callback changes. Other control commands wait during the short sample;
 native audio rendering continues independently. Linux thread names come from
 `/proc`, with Python names for daemon threads; other platforms may show generic
 thread names.
+
+By default, `ps` hides idle threads with generic names such as `python` when
+their sampled CPU rounds to 0.0%. Process main threads, named threads, and
+known output/slot render threads remain visible. `ps all` shows every thread.
+The footer reports how many rows were hidden; process CPU, RSS, and thread
+counts always include hidden threads. This is only a display filter: NumPy,
+BLAS, plugin pools, and audio/control thread behavior are unchanged. Generic
+names do not reliably identify BLAS workers, so other idle unnamed helpers
+are filtered too.
 
 `status` reads shared output-callback health and cached metadata; it does not
 contact native owners or query PortAudio while rendering. `Audio owner`

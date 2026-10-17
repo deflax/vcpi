@@ -157,6 +157,8 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         return empty
     if command == "debug":
         return choices(("on", "off")) if not args else empty
+    if command == "ps":
+        return choices(("all",)) if not args else empty
     if command == "ableton":
         return choices(("link", "cut")) if not args else empty
     if command == "flow":

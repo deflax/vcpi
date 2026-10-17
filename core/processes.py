@@ -55,14 +55,18 @@ def _thread_name(pid: int, tid: int, local_names: dict[int | None, str]) -> str:
         return "thread"
 
 
-def render_processes(host: VcpiCore) -> str:
+def render_processes(host: VcpiCore, *, show_all: bool = False) -> str:
     """Sample the daemon tree over 200 ms, with process totals and thread CPU."""
     root = psutil.Process(os.getpid())
     processes = [root, *root.children(recursive=True)]
     roles = {root.pid: "daemon", host.engine.owner_pid: "audio"}
+    render_threads = {
+        (host.engine.owner_pid, host.engine.output_realtime.get("thread_id")): "output render",
+    }
     for index, slot in enumerate(host.engine.slots, 1):
         if slot is not None and slot.worker_pid:
             roles[slot.worker_pid] = f"slot {index}"
+            render_threads[(slot.worker_pid, slot.worker_realtime.get("thread_id"))] = f"slot {index} render"
     processes.sort(key=lambda process: (process.pid != root.pid, process.pid))
     before = {}
     notes = []
@@ -76,6 +80,7 @@ def render_processes(host: VcpiCore) -> str:
     time.sleep(0.2)
     local_names = {thread.native_id: thread.name for thread in threading.enumerate()}
     rows = [("PID", "TID", "ROLE / NAME", "STATE", "CPU%", "RSS MiB", "THR")]
+    hidden = 0
     for process in processes:
         first = before.get(process.pid)
         if first is None:
@@ -99,8 +104,13 @@ def render_processes(host: VcpiCore) -> str:
             previous = first.threads.get(tid) if first.threads is not None else None
             usage = (f"{max(0.0, total - previous) * 100 / elapsed:.1f}"
                      if previous is not None else "-")
+            name = render_threads.get((process.pid, tid)) or _thread_name(process.pid, tid, local_names)
+            generic = name in ("thread", "python", "python3", last.name)
+            if not show_all and tid != process.pid and generic and usage == "0.0":
+                hidden += 1
+                continue
             rows.append((str(process.pid), str(tid),
-                         "  " + _thread_name(process.pid, tid, local_names),
+                         "  " + name,
                          "-", usage, "-", "-"))
     widths = [max(len(row[column]) for row in rows) for column in range(7)]
     lines = ["vcpi processes and threads (CPU sampled over ~200 ms)"]
@@ -110,5 +120,7 @@ def render_processes(host: VcpiCore) -> str:
                  for row in rows)
     lines.append("CPU: 100% = one core; process totals include threads. RSS is shared by threads.")
     lines.append("'-' = not applicable or no CPU baseline; exited tasks are omitted.")
+    if hidden:
+        lines.append(f"{hidden} idle unnamed threads hidden; use 'ps all' to show them. Totals include hidden threads.")
     lines.extend(notes)
     return "\n".join(lines)
