@@ -121,6 +121,42 @@ Cardinal/VCV helpers:
 - If `audio diagnose` shows MIDI consumed but a slot peak of zero, inspect the
   patch import and internal MIDI/audio wiring before changing output devices.
 
+plugdata/Pure Data helpers:
+
+- Install the **instrument** `plugdata.vst3` bundle from
+  [plugdata v0.9.3-2](https://github.com/plugdata-team/plugdata/releases/tag/v0.9.3-2)
+  for your OS and CPU architecture. The standalone app and `plugdata-fx.vst3`
+  are not substitutes for this slot source. The bundled fetch scripts do not
+  install plugdata.
+- Place the bundle at `vst3/plugdata.vst3` in the repository, or set
+  `PLUGDATA_VST3_PATH` to its full path before starting the daemon. Discovery also
+  checks the working directory's `vst3/`, `~/.vst3`, `/usr/lib/vst3`,
+  `/usr/local/lib/vst3`, and standard user/system macOS VST3 directories.
+- `slot <n> pd <patch_name[.pd]> [--name <label>]` loads from `patches/`,
+  sharing `VCPI_PATCHES_DIR` with Cardinal. Absolute paths and nested patch names
+  are accepted. Quote names containing spaces, or use the same multiword-name
+  syntax as `slot <n> vst`; labels require `--name`.
+- Import runs headlessly in a staged slot process. Failure leaves the previous
+  slot intact. MIDI routing remains explicit: `midi link <ch> <slot>`.
+- Patches must be UTF-8 Pure Data files, at most 16 MiB. Use MIDI objects such as
+  `notein` and audio output such as `dac~`; there is no external audio-input path
+  into an instrument slot. The included `plugdata-midi-sine` patch is a
+  monophonic example.
+- The importer recognizes plugdata's **0.9.3** state layout (the version reported
+  by release v0.9.3-2). Other versions/layouts fail explicitly rather than
+  silently loading an empty instance.
+- Sessions capture the main patch in native plugin state, so restoration does
+  not require its original `.pd` file. Relative abstractions, samples, and other
+  dependencies are **not bundled**; keep them at their original locations.
+  Custom externals must be supported by the installed plugdata build.
+
+```text
+slot 1 pd plugdata-midi-sine
+midi link 1 1
+audio start
+note 1 60 100 500
+```
+
 Examples:
 
 ```bash
@@ -193,6 +229,7 @@ hardware or empty plugin/effect lists may also yield no choices.
 | `slot <slot> vst <path\|vst_name> [--name <label>]` | Load VST instrument into slot |
 | `slot <slot> wav <pack> <sample> [name]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into slot |
 | `slot <slot> vcv <patch_name> [name]` | Load Cardinal into slot from `patches/<patch_name>.vcv` |
+| `slot <slot> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `patches/` or an absolute path |
 | `slot <slot\|master> fx <path\|vst_name> [--name <label>]` | Load effect into slot insert chain or master bus |
 | `slot <slot> clear` | Clear instrument from slot |
 | `slot <slot\|master> fx clear <fx_index>` | Remove effect by index |
@@ -397,7 +434,7 @@ explicitly stops the output owner; slot MIDI overflow or oversized messages
 explicitly fail only that slot. Events for a retired generation cannot affect
 its replacement.
 
-Instrument/WAV/Cardinal loads initialize and warm a new slot process while
+Instrument/WAV/Cardinal/plugdata loads initialize and warm a new slot process while
 existing slots continue playing. A ready replacement switches at a callback
 boundary; only then is the old process retired. Failed loading leaves the old
 source playing. Removal stops only that slot. Insert edits and parameter
@@ -604,6 +641,9 @@ New saves use session format **2**: each VST3 instrument, slot insert, and maste
 effect stores a base64-encoded native state chunk. This preserves plugin-owned
 settings, including settings not exposed as parameters, without replaying MIDI
 helpers or action controls. WAV slots remain path-based.
+Pure Data/plugdata slots also use native chunks, embedding the main patch while
+retaining its original location for resolving external files. Abstractions and
+sample files must remain installed separately.
 
 Saving waits for prior controls/MIDI and captures each slot between render jobs.
 Pending VST3 parameter edits require one MIDI-free processing block before

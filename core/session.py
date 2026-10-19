@@ -1,7 +1,7 @@
 """Session persistence -- save and restore host state to a JSON file.
 
 Saved state includes:
-  - Per-slot: source kind (plugin/wav/vcv), instrument path, name, gain,
+  - Per-slot: source kind (plugin/wav/vcv/pd), instrument path, name, gain,
     enabled, muted, solo, insert effect paths/names, and opaque native VST3 state
   - Master effects: paths, names, and opaque native VST3 state
   - Master gain
@@ -140,6 +140,8 @@ def _snapshot_cached(host: VcpiCore) -> dict:
             slot_entry["native_state"] = _saved_plugin_state(slot.plugin)
         if slot.source_type == "vcv" and slot.vcv_patch_path:
             slot_entry["vcv_patch_path"] = slot.vcv_patch_path
+        if slot.source_type == "pd" and slot.pd_patch_path:
+            slot_entry["pd_patch_path"] = slot.pd_patch_path
         slots_data.append(slot_entry)
 
     master_fx_data = []
@@ -262,6 +264,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                 solo=slot_data.get("solo", False),
                 source_type=slot_kind,
                 vcv_patch_path=slot_data.get("vcv_patch_path", ""),
+                pd_patch_path=slot_data.get("pd_patch_path", ""),
             )
             _restore_plugin_state(
                 host, idx, slot_data, version, wav=slot_kind == "wav")

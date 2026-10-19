@@ -65,6 +65,22 @@ Effects:
 
 - Dragonfly Reverb (GitHub arm64 release)
 
+## Optional plugdata patch runtime
+
+`slot <n> pd <patch>` requires the instrument `plugdata.vst3` from
+[plugdata v0.9.3-2](https://github.com/plugdata-team/plugdata/releases/tag/v0.9.3-2).
+Download the release matching the target OS and CPU architecture, then place
+`plugdata.vst3` in this directory with its `Contents/` tree intact. Alternatively,
+install it in a standard VST3 directory or set `PLUGDATA_VST3_PATH` to the bundle
+before starting vcpi. The standalone app and `plugdata-fx.vst3` are not used by
+the `pd` slot command.
+
+Neither architecture-specific fetch script installs plugdata. Its internal
+0.9.3 patch-state layout is explicitly checked; unsupported layouts are rejected.
+See [USAGE.md](../USAGE.md) for patch loading, routing, and external-file
+requirements. The repository includes `patches/plugdata-midi-sine.pd`.
+
+
 ## How It Works
 
 - Downloads and extractions are performed into `vst3/`.

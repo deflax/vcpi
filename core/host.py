@@ -218,6 +218,28 @@ class VcpiCore:
             result["cardinal_path"], Path(result["patch_path"]),
         )
 
+    def load_pd(self, slot_index: int, pd_path: str,
+                plugdata_path: Optional[str] = None,
+                name: Optional[str] = None) -> tuple[InstrumentSlot, str, str]:
+        """Stage a plugdata patch and publish only after successful import."""
+        result = self.engine.request(
+            "load_pd", slot_index=slot_index, pd_path=pd_path,
+            plugdata_path=plugdata_path, name=name,
+        )
+        return self._loaded_slot(slot_index), result["patch_result"], result["plugdata_path"]
+
+    def load_pd_patch(self, slot_index: int, patch_name: str,
+                      plugdata_path: Optional[str] = None,
+                      name: Optional[str] = None) -> tuple[InstrumentSlot, str, str, Path]:
+        result = self.engine.request(
+            "load_pd_patch", slot_index=slot_index, patch_name=patch_name,
+            plugdata_path=plugdata_path, name=name,
+        )
+        return (
+            self._loaded_slot(slot_index), result["patch_result"],
+            result["plugdata_path"], Path(result["patch_path"]),
+        )
+
     # -- routing -------------------------------------------------------------
 
     def route(self, midi_channel: int, slot_index: int):

@@ -84,6 +84,14 @@ CARDINAL_VST3_CANDIDATES = (
     "~/Library/Audio/Plug-Ins/VST3/Cardinal.vst3",
     "/Library/Audio/Plug-Ins/VST3/Cardinal.vst3",
 )
+PLUGDATA_VST3_ENV = "PLUGDATA_VST3_PATH"
+PLUGDATA_VST3_CANDIDATES = (
+    "~/.vst3/plugdata.vst3",
+    "/usr/lib/vst3/plugdata.vst3",
+    "/usr/local/lib/vst3/plugdata.vst3",
+    "~/Library/Audio/Plug-Ins/VST3/plugdata.vst3",
+    "/Library/Audio/Plug-Ins/VST3/plugdata.vst3",
+)
 PATCHES_DIR_ENV = "VCPI_PATCHES_DIR"
 DEFAULT_PATCHES_DIR = "patches"
 
@@ -183,7 +191,66 @@ class PluginHost:
         )
         return slot, patch_result, str(cardinal_vst_path)
 
-    def _resolve_patch_path(self, patch_name: str) -> Path:
+    def _resolve_plugdata_path(self, plugdata_path: Optional[str]) -> Path:
+        """Resolve an explicit override or discover the installed plugdata bundle."""
+        override = plugdata_path or os.environ.get(PLUGDATA_VST3_ENV)
+        if override:
+            candidates = [Path(override).expanduser()]
+        else:
+            candidates = [
+                Path(__file__).resolve().parents[1] / "vst3" / "plugdata.vst3",
+                Path.cwd() / "vst3" / "plugdata.vst3",
+                *(Path(path).expanduser() for path in PLUGDATA_VST3_CANDIDATES),
+            ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate.resolve()
+        tried = ", ".join(str(candidate) for candidate in candidates)
+        raise FileNotFoundError(
+            "plugdata VST3 not found. Pass plugdata_path, set "
+            f"{PLUGDATA_VST3_ENV}, or install vst3/plugdata.vst3 "
+            f"(tried: {tried})."
+        )
+
+    def load_pd(self, slot_index: int, pd_path: str,
+                plugdata_path: Optional[str] = None,
+                name: Optional[str] = None) -> tuple[InstrumentSlot, str, str]:
+        """Import a Pure Data patch before publishing its plugdata instrument."""
+        if not 0 <= slot_index < NUM_SLOTS:
+            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+        patch_path = Path(pd_path).expanduser().resolve()
+        if not patch_path.is_file():
+            raise FileNotFoundError(f".pd patch not found: {patch_path}")
+        if patch_path.suffix.lower() != ".pd":
+            raise ValueError(f"Pure Data patch must have a .pd extension: {patch_path}")
+        plugin_path = self._resolve_plugdata_path(plugdata_path)
+        plugin = NativePlugin(
+            str(plugin_path), self.sample_rate, self.buffer_size, "instrument")
+        self._set_plugin_info_type(plugin, "Instrument")
+        plugin.load_preset(str(patch_path))
+        slot = InstrumentSlot(
+            name=name or f"plugdata:{patch_path.stem}",
+            path=str(plugin_path),
+            plugin=plugin,
+            source_type="pd",
+            pd_patch_path=str(patch_path),
+        )
+        self.engine.slots[slot_index] = slot
+        patch_result = "patch imported via plugdata VST3 state"
+        logger.info("[PD] slot %d loaded from %s with patch %s (%s)",
+                    slot_index + 1, plugin_path, patch_path, patch_result)
+        return slot, patch_result, str(plugin_path)
+
+    def load_pd_patch(self, slot_index: int, patch_name: str,
+                      plugdata_path: Optional[str] = None,
+                      name: Optional[str] = None) -> tuple[InstrumentSlot, str, str, Path]:
+        """Load a .pd patch from the shared configured patches directory."""
+        patch_path = self._resolve_patch_path(patch_name, ".pd").resolve()
+        slot, patch_result, used_plugdata = self.load_pd(
+            slot_index, str(patch_path), plugdata_path=plugdata_path, name=name)
+        return slot, patch_result, used_plugdata, patch_path
+
+    def _resolve_patch_path(self, patch_name: str, extension: str = ".vcv") -> Path:
         """Resolve a patch file name from the configured patches directory."""
         token = patch_name.strip()
         if not token:
@@ -195,8 +262,8 @@ class PluginHost:
 
         name_path = Path(token)
         candidates = [patches_dir / name_path]
-        if name_path.suffix.lower() != ".vcv":
-            candidates.append(patches_dir / f"{token}.vcv")
+        if name_path.suffix.lower() != extension:
+            candidates.append(patches_dir / f"{token}{extension}")
 
         for candidate in candidates:
             if candidate.exists() and candidate.is_file():

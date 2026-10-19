@@ -23,7 +23,7 @@ class FlowTests(unittest.TestCase):
         self.engine = SimpleNamespace(
             slots=[self.slot] + [None] * 7, master_effects=[], master_gain=1.0,
             channel_map={0: 0, 15: 7}, _failure=None, _closed=False, _health=[1],
-            audio_output_name="Output", backend_label="", sample_rate=48000,
+            audio_output_name="Output", audio_output_index=0, backend_label="", sample_rate=48000,
             buffer_size=256, output_channels=2,
         )
         self.host = SimpleNamespace(

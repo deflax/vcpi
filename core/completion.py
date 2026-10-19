@@ -211,9 +211,9 @@ def complete_line(cli: HostCLI, before: str) -> dict:
             return choices(_indexes(_effects(cli, target)))
         if mode == "fx" and len(args) > 2 and args[2].lower() == "clear":
             return empty
-        if mode in ("vst", "fx") and (target != "master" or mode == "fx"):
-            # _parse_vst_args joins shell tokens, so replace the complete plugin
-            # fragment, including already typed words (e.g. Surge X).
+        if mode in ("vst", "fx", "pd") and (target != "master" or mode == "fx"):
+            # Plugin and PD patch parsers join shell tokens, so replace the
+            # complete name fragment, including already typed words.
             plugin_start = words[2].start if len(words) > 2 else len(rest)
             fragment = rest[plugin_start:]
             plugin_words = _words(fragment, shell=True)
@@ -227,7 +227,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
                     return choices(("--name",), quoted=True, wanted=tokens[-1],
                                    replace=rest_start + plugin_start + plugin_words[-1].start)
                 return empty
-            names = cli._vst_names()
+            names = cli._pd_patch_names() if mode == "pd" else cli._vst_names()
             plugin_prefix = " ".join(tokens).rstrip()
             if fragment[-1:].isspace() and plugin_prefix in names:
                 return choices(("--name",), quoted=True, wanted="", replace=len(before))

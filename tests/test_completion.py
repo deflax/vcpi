@@ -59,6 +59,10 @@ class CompletionTests(unittest.TestCase):
             (root / "samples" / "Drums" / f"{name}.wav").touch()
         for name in ("Bass", "Bad Patch"):
             (root / "patches" / f"{name}.vcv").touch()
+        for name in ("Warm Pad", "Player's Lead"):
+            (root / "patches" / f"{name}.pd").touch()
+        (root / "patches" / "nested").mkdir()
+        (root / "patches" / "nested" / "Bass.pd").touch()
         for name in ("Live Set", "Studio"):
             (root / "sessions" / f"{name}.json").write_text("{}")
         self.root = root
@@ -123,7 +127,7 @@ class CompletionTests(unittest.TestCase):
                 ("ableton ", {"link", "cut"}),
                 ("debug ", {"on", "off"}),
                 ("slot master ", {"fx"}),
-                ("slot 8 ", {"vst", "wav", "vcv", "fx", "clear"})):
+                ("slot 8 ", {"vst", "wav", "vcv", "pd", "fx", "clear"})):
             self.assertEqual(set(self.matches(before)), expected)
         for before in ("midi link 17 ", "midi link 0 ", "seq link 0 ",
                        "seq link 17 ", "slot 9 ", "slot master clear ",
@@ -251,6 +255,22 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.matches("slot 1 fx clear "), ["1"])
         (self.root / "vst" / "Fresh.vst3").mkdir()
         self.assertEqual(self.matches("slot 1 vst Fre"), ["Fresh"])
+
+    def test_pd_patch_completion_preserves_multiword_and_nested_paths(self):
+        for before, name in (
+                ("slot 1 pd Warm P", "Warm Pad"),
+                ('slot 1 pd "Warm P', "Warm Pad"),
+                ("slot 1 pd Player", "Player's Lead"),
+                ("slot 1 pd nested/B", "nested/Bass")):
+            inserted = self.inserted(before, shlex.quote(name))
+            patch_name, label = self.cli._parse_vst_args(inserted.split(maxsplit=3)[3])
+            self.assertEqual(patch_name, name)
+            self.assertIsNone(label)
+            self.assertTrue((self.root / "patches" / f"{patch_name}.pd").is_file())
+        self.assertEqual(self.matches("slot 1 pd 'Warm Pad' "), ["--name"])
+        self.assertEqual(self.matches("slot 1 pd 'Warm Pad' --n"), ["--name"])
+        self.assertEqual(self.matches("slot 1 pd 'Warm Pad' --name "), [])
+        self.assertEqual(self.matches("slot master pd "), [])
 
     def test_readline_bridge_replaces_multiword_plugin_fragment(self):
         before = "slot 1 vst Surge X"

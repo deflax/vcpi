@@ -63,7 +63,7 @@ class HostCLI(cmd.Cmd):
         "Slots are numbered 1-8.  MIDI channels are numbered 1-16."
     )
     prompt = "vcpi> "
-    SLOT_TYPES = ("vst", "wav", "vcv", "fx", "clear")
+    SLOT_TYPES = ("vst", "wav", "vcv", "pd", "fx", "clear")
 
     def __init__(self, host: VcpiCore, stdout=None, owns_host: bool = True):
         super().__init__(stdout=stdout)
@@ -182,6 +182,7 @@ class HostCLI(cmd.Cmd):
             "slot <1-8> vst <path|vst_name> [--name <label>] | "
             "slot <1-8> wav <pack> <sample> [name] | "
             "slot <1-8> vcv <patch_name[.vcv]> [name] | "
+            "slot <1-8> pd <patch_name[.pd]> [--name <label>] | "
             "slot <1-8|master> fx <path|vst_name> [--name <label>] | "
             "slot <1-8> clear | "
             "slot <1-8|master> fx clear <fx_index>"
@@ -352,6 +353,15 @@ class HostCLI(cmd.Cmd):
             patches.append(rel)
         return sorted(patches)
 
+    def _pd_patch_names(self) -> list[str]:
+        root = self._patches_root()
+        if not root.is_dir():
+            return []
+        return sorted(
+            patch.relative_to(root).with_suffix("").as_posix()
+            for patch in root.rglob("*.pd") if patch.is_file()
+        )
+
     def _vst_names(self) -> list[str]:
         return sorted({path.stem for path in self._iter_vst_plugin_paths()})
 
@@ -388,7 +398,7 @@ class HostCLI(cmd.Cmd):
             return None
 
     def do_slot(self, arg):
-        """Slot management: slot <1-8> vst <path|name> [--name <label>] | slot <1-8> wav <pack> <sample> [name] | slot <1-8> vcv <patch> [name] | slot <1-8|master> fx <path|name> [--name <label>] | slot <1-8> clear | slot <1-8|master> fx clear <fx_index>"""
+        """Slot management: slot <1-8> vst <path|name> [--name <label>] | slot <1-8> wav <pack> <sample> [name] | slot <1-8> vcv <patch> [name] | slot <1-8> pd <patch> [--name <label>] | slot <1-8|master> fx <path|name> [--name <label>] | slot <1-8> clear | slot <1-8|master> fx clear <fx_index>"""
         text = arg.strip()
         if not text:
             self._print(f"Usage: {self._slot_usage()}")
@@ -509,6 +519,27 @@ class HostCLI(cmd.Cmd):
             self._print(f"  slot {slot_num} = {slot.name}")
             self._print(f"  patch    : {patch_path}")
             self._print(f"  cardinal : {cardinal_path}")
+            self._print(f"  result   : {patch_result}")
+            self._print(f"  route with: midi link <channel 1-16> {slot_num}")
+            return
+
+        # -- slot <num> pd <patch> [--name <label>] --------------------------
+        if mode == "pd":
+            rest = text.split(maxsplit=2)
+            if len(rest) < 3:
+                self._print("Usage: slot <1-8> pd <patch_name[.pd]> [--name <label>]")
+                return
+            try:
+                patch_name, name = self._parse_vst_args(rest[2])
+                slot, patch_result, plugdata_path, patch_path = self.host.load_pd_patch(
+                    idx, patch_name, name=name,
+                )
+            except Exception as e:
+                self._print(f"Error: {e}")
+                return
+            self._print(f"  slot {slot_num} = {slot.name}")
+            self._print(f"  patch    : {patch_path}")
+            self._print(f"  plugdata : {plugdata_path}")
             self._print(f"  result   : {patch_result}")
             self._print(f"  route with: midi link <channel 1-16> {slot_num}")
             return

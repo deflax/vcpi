@@ -38,7 +38,7 @@ CALLBACK_STALL_TIMEOUT = 2.0
 OWNER_SHUTDOWN_TIMEOUT = 10.0
 LIFECYCLE_OPERATIONS = frozenset({
     "load_instrument", "load_wav", "remove_instrument", "load_effect",
-    "remove_effect", "load_vcv", "load_vcv_patch",
+    "remove_effect", "load_vcv", "load_vcv_patch", "load_pd", "load_pd_patch",
 })
 REMOTE_ERRORS = {
     cls.__name__: cls for cls in
@@ -347,7 +347,10 @@ class _OwnerRuntime:
         return {"output": output, "slots": slots}
 
     def execute(self, operation, arguments):
-        if operation in {"load_instrument", "load_wav", "load_vcv", "load_vcv_patch"}:
+        if operation in {
+            "load_instrument", "load_wav", "load_vcv", "load_vcv_patch",
+            "load_pd", "load_pd_patch",
+        }:
             from core.slot_process import SlotWorker
 
             index = arguments["slot_index"]

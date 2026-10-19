@@ -157,6 +157,7 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
             "enabled": bool(slot.enabled),
             "source_type": slot.source_type,
             "vcv_patch_path": slot.vcv_patch_path,
+            "pd_patch_path": slot.pd_patch_path,
             "generation": generations[index],
             "worker_pid": slot.worker_pid,
             "worker_failure": slot.worker_failure,

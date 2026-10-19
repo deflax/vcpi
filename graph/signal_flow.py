@@ -291,6 +291,8 @@ def _build_flow_snapshot(host, engine) -> dict:
             ])
             if slot.vcv_patch_path:
                 rows.append(["VCV patch", slot.vcv_patch_path, "loaded source patch"])
+            if slot.pd_patch_path:
+                rows.append(["PD patch", slot.pd_patch_path, "loaded source patch; external assets remain on disk"])
             for effect_index, effect in enumerate(slot.effects):
                 rows.append([f"Slot FX {effect_index + 1}", _plugin_name(effect),
                              effect.path_to_plugin_file or "(no cached path)"])

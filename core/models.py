@@ -21,8 +21,9 @@ class InstrumentSlot:
     muted: bool = False
     solo: bool = False
     enabled: bool = True
-    source_type: str = "plugin"  # plugin | wav | vcv
+    source_type: str = "plugin"  # plugin | wav | vcv | pd
     vcv_patch_path: str = ""     # .vcv patch file (when source_type == "vcv")
+    pd_patch_path: str = ""      # .pd patch file (when source_type == "pd")
     generation: int = 0  # protects queued inputs from instrument replacement
     render_owner: object = field(default=None, repr=False, compare=False)
     worker_pid: int | None = None
@@ -39,6 +40,7 @@ class InstrumentSlot:
           sample::<pack>:<stem>   for WAV samples
           vst3::<name>            for VST3 plugins
           vcv::<patch stem>       for VCV/Cardinal patches
+          pd::<patch stem>        for Pure Data/plugdata patches
         """
         if self.source_type == "wav":
             parts = Path(self.path).parts
@@ -52,5 +54,8 @@ class InstrumentSlot:
         if self.source_type == "vcv":
             patch_stem = Path(self.vcv_patch_path).stem if self.vcv_patch_path else self.name
             return f"vcv::{patch_stem}"
+        if self.source_type == "pd":
+            patch_stem = Path(self.pd_patch_path).stem if self.pd_patch_path else self.name
+            return f"pd::{patch_stem}"
         # VST3 / generic plugin
         return f"vst3::{self.name}"

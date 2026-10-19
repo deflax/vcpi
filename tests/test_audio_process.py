@@ -1,5 +1,6 @@
 """Real spawned-owner regressions without opening audio or MIDI hardware."""
 
+import base64
 import json
 import math
 import multiprocessing
@@ -15,8 +16,12 @@ import wave
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
+from core.audio_deps import require_native
 from core.audio_process import AudioProcessError
 from core.host import VcpiCore
+from core.plugin_host import NativePlugin
 
 
 class AudioProcessTests(unittest.TestCase):
@@ -111,6 +116,116 @@ class AudioProcessTests(unittest.TestCase):
         for (slot_index, fx_index), (name, actual) in expected.items():
             plugin = restored.engine._plugin(slot_index, fx_index)
             self.assertAlmostEqual(plugin.values[name], actual)
+
+    def test_plugdata_patch_worker_failure_and_native_session_round_trip(self):
+        configured = os.environ.get("PLUGDATA_VST3_PATH")
+        bundle = (Path(configured).expanduser() if configured else
+                  Path(__file__).resolve().parents[1] / "vst3" / "plugdata.vst3")
+        if sys.platform == "darwin":
+            binary_suffix = Path("Contents/MacOS")
+        elif sys.platform.startswith("linux"):
+            architecture = {"arm64": "aarch64", "amd64": "x86_64"}.get(
+                platform.machine(), platform.machine())
+            binary_suffix = Path("Contents") / f"{architecture}-linux"
+        else:
+            self.skipTest("native audio supports Linux and macOS")
+        if not (bundle / binary_suffix).is_dir():
+            self.skipTest("set PLUGDATA_VST3_PATH or install vst3/plugdata.vst3")
+        bundle = bundle.resolve()
+        patches = self.root / "patches"
+        patches.mkdir()
+        main = patches / "relative.pd"
+        main.write_text(
+            "#N canvas 0 0 400 300 10;\n"
+            "#X obj 20 20 notein;\n"
+            "#X obj 20 60 vcpi-helper;\n"
+            "#X obj 20 100 dac~;\n"
+            "#X connect 0 0 1 0;\n"
+            "#X connect 1 0 2 0;\n"
+            "#X connect 1 0 2 1;\n",
+            encoding="utf-8",
+        )
+        (patches / "vcpi-helper.pd").write_text(
+            "#N canvas 0 0 300 200 10;\n"
+            "#X obj 20 20 inlet;\n"
+            "#X obj 20 50 mtof;\n"
+            "#X obj 20 80 osc~;\n"
+            "#X obj 20 110 outlet~;\n"
+            "#X connect 0 0 1 0;\n"
+            "#X connect 1 0 2 0;\n"
+            "#X connect 2 0 3 0;\n",
+            encoding="utf-8",
+        )
+        (patches / "broken.pd").write_text("not a Pure Data patch", encoding="utf-8")
+        with patch.dict(os.environ, {
+            "VCPI_PATCHES_DIR": str(patches),
+            "PLUGDATA_VST3_PATH": str(bundle),
+        }):
+            host = VcpiCore(session_path=str(self.root / "pd-session.json"))
+            self.addCleanup(host.engine.shutdown)
+            slot, _, used_plugin, used_patch = host.load_pd_patch(
+                0, "relative", name="relative voice")
+            self.assertEqual(used_plugin, str(bundle))
+            self.assertEqual(used_patch, main.resolve())
+            self.assertEqual(slot.source_type, "pd")
+            self.assertEqual(slot.pd_patch_path, str(main.resolve()))
+            self.assertEqual(slot.display_label, "pd::relative")
+            generation, worker_pid = slot.generation, slot.worker_pid
+            self.assertNotEqual(worker_pid, host.engine.owner_pid)
+            with self.assertRaises(ValueError):
+                host.load_pd_patch(0, "broken.pd")
+            retained = host.engine.slots[0]
+            self.assertEqual(retained.generation, generation)
+            self.assertEqual(retained.worker_pid, worker_pid)
+            self.assertEqual(retained.source_type, "pd")
+            self.assertEqual(retained.pd_patch_path, str(main.resolve()))
+            host.engine.set_slot_state(0, gain=0.375)
+            host.save_session()
+            saved = json.loads(host.session_path.read_text())
+            entry = saved["slots"][0]
+            self.assertEqual(saved["version"], 2)
+            self.assertNotIn("params", entry)
+            main.unlink()
+            host.engine.shutdown()
+            restored = VcpiCore(session_path=str(host.session_path))
+            self.addCleanup(restored.engine.shutdown)
+            restored.restore_session()
+            slot = restored.engine.slots[0]
+            self.assertIsNotNone(slot)
+            self.assertEqual(slot.source_type, "pd")
+            self.assertEqual(slot.pd_patch_path, str(main.resolve()))
+            self.assertEqual(slot.display_label, "pd::relative")
+            self.assertEqual(slot.name, "relative voice")
+            self.assertEqual(slot.path, str(bundle))
+            self.assertEqual(slot.gain, 0.375)
+            restored.save_session()
+            restored_entry = json.loads(restored.session_path.read_text())["slots"][0]
+            restored.engine.shutdown()
+
+            # Render the chunk captured after the fresh-process restore. The
+            # deleted main file cannot provide this patch, while its relative
+            # abstraction must still resolve for MIDI to produce the right tone.
+            plugin = NativePlugin(str(bundle), 44100, 512, "instrument")
+            plugin.load_saved_state(base64.b64decode(
+                restored_entry["native_state"], validate=True))
+            backend = require_native()
+            transport = backend.Transport(str(self.root / "pd-restored.mmap"), 512, True)
+            runner = backend.SlotRunner(transport, plugin.native, 44100, 512)
+            try:
+                transport.send_midi(bytes((0x90, 69, 100)))
+                for _ in range(8):
+                    runner.render_once()
+                audio = np.concatenate([runner.render_once() for _ in range(64)])
+                self.assertTrue(np.isfinite(audio).all())
+                self.assertGreater(float(np.abs(audio).max()), 1e-4)
+                signal = audio[:, 0]
+                spectrum = np.abs(np.fft.rfft(signal * np.hanning(len(signal))))
+                frequencies = np.fft.rfftfreq(len(signal), 1 / 44100)
+                self.assertAlmostEqual(
+                    float(frequencies[np.argmax(spectrum)]), 440,
+                    delta=44100 / len(signal))
+            finally:
+                runner.shutdown()
 
     def test_retired_instance_inputs_cannot_change_replacement_state(self):
         host = self.host

@@ -32,7 +32,7 @@ class AudioEngine:
     """Python owns commands and snapshots; native code owns every audio thread."""
 
     _slot_fields = frozenset(
-        ("gain", "muted", "solo", "enabled", "source_type", "vcv_patch_path"))
+        ("gain", "muted", "solo", "enabled", "source_type", "vcv_patch_path", "pd_patch_path"))
     _gain_log_quiet_seconds = 0.3
 
     def __init__(self, sample_rate=44100, buffer_size=512, output_channels=2,

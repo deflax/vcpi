@@ -83,7 +83,7 @@ through a local Unix socket. To use it from another machine, SSH into the host
 and run `./vcpi` there.
 
 Command parsing, session files, MIDI ports, sequencing, and Ableton Link stay in
-the control process. Each slot owns its VST3/Cardinal or WAV source and insert
+the control process. Each slot owns its VST3/Cardinal/plugdata or WAV source and insert
 effects on a native render thread. The native PortAudio callback mixes slot
 audio and runs master effects. Neither the callback nor slot DSP enters Python
 or acquires the GIL. Shared-memory slot transport adds one block of buffering.
@@ -123,7 +123,7 @@ for save/restore behavior and legacy session compatibility.
   controllers/        # Hardware controller modules (generic MIDI input, MIDI Mix)
   graph/              # Flow/status/plugin snapshots and plain-text renderers
   vst3/               # Open-license VST3 plugins (run arch-specific fetch scripts)
-  patches/            # VCV/Cardinal .vcv patch files
+  patches/            # Cardinal .vcv and plugdata .pd patches
   sessions/           # User-saved session files (save/load commands)
   tests/              # Automated Python regression tests
   main.py             # Top-level Python entry point
@@ -326,6 +326,27 @@ vcpi> midi link 1 1
 
 `slot <n> vcv` loads a fresh Cardinal instance into the slot you specify.
 Routing remains explicit via `midi link <ch> <slot>`.
+
+Pure Data patches run through the plugdata VST3 instrument, without opening an
+editor. Install `plugdata.vst3` from
+[plugdata v0.9.3-2](https://github.com/plugdata-team/plugdata/releases/tag/v0.9.3-2)
+for your OS/architecture into `vst3/`, or set `PLUGDATA_VST3_PATH` to the bundle.
+The bundled plugin fetch scripts do not install it.
+
+```text
+vcpi> slot 1 pd plugdata-midi-sine
+vcpi> midi link 1 1
+vcpi> audio start
+vcpi> note 1 60 100 500
+```
+
+`slot <n> pd <patch_name[.pd]> [--name <label>]` shares the `patches/` directory
+and `VCPI_PATCHES_DIR` setting with Cardinal. Names can contain spaces and nested
+paths; Tab completion quotes them as needed. Import supports plugdata's 0.9.3
+state layout and rejects other layouts. Sessions embed the main patch, but its
+relative abstractions, samples, and custom external dependencies must remain
+available. See [plugdata usage](USAGE.md#host-startup-flags) for installation,
+limits, and patch conventions.
 
 Fetch bundled open-license VST3 plugins and load one:
 

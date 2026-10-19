@@ -42,6 +42,7 @@ _REMOTE_ERRORS = {cls.__name__: cls for cls in (
 )}
 _LOAD_OPERATIONS = frozenset((
     "load_instrument", "load_wav", "load_vcv", "load_vcv_patch",
+    "load_pd", "load_pd_patch",
 ))
 
 
@@ -84,6 +85,7 @@ def _slot_state(owner, index, *, capture_native_state=False):
         "enabled": bool(slot.enabled),
         "source_type": slot.source_type,
         "vcv_patch_path": slot.vcv_patch_path,
+        "pd_patch_path": slot.pd_patch_path,
         "generation": slot.generation,
     }
     owner.engine.parameter_values = values
@@ -96,6 +98,11 @@ def _normalized_result(operation, result):
         return {"patch_result": result[1], "cardinal_path": result[2]}
     if operation == "load_vcv_patch":
         return {"patch_result": result[1], "cardinal_path": result[2],
+                "patch_path": str(result[3])}
+    if operation == "load_pd":
+        return {"patch_result": result[1], "plugdata_path": result[2]}
+    if operation == "load_pd_patch":
+        return {"patch_result": result[1], "plugdata_path": result[2],
                 "patch_path": str(result[3])}
     return None
 
