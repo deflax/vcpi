@@ -128,6 +128,9 @@ plugdata/Pure Data helpers:
   for your OS and CPU architecture. The standalone app and `plugdata-fx.vst3`
   are not substitutes for this slot source. The bundled fetch scripts do not
   install plugdata.
+- Pi images built with `rpi-build/prepare-image.sh` install this pinned ARM64
+  instrument bundle automatically at `/usr/local/lib/vst3/plugdata.vst3`.
+  No manual plugin install, path override, or first-boot download is needed.
 - Place the bundle at `vst3/plugdata.vst3` in the repository, or set
   `PLUGDATA_VST3_PATH` to its full path before starting the daemon. Discovery also
   checks the working directory's `vst3/`, `~/.vst3`, `/usr/lib/vst3`,

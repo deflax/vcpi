@@ -75,6 +75,12 @@ install it in a standard VST3 directory or set `PLUGDATA_VST3_PATH` to the bundl
 before starting vcpi. The standalone app and `plugdata-fx.vst3` are not used by
 the `pd` slot command.
 
+Pi image provisioning installs the pinned ARM64 instrument bundle automatically
+at `/usr/local/lib/vst3/plugdata.vst3`, verifies its checksum and runtime libraries,
+and renders the example patch headlessly during the build. No manual install or
+`PLUGDATA_VST3_PATH` is needed in those images. See
+[the Pi build guide](../rpi-build/README.md).
+
 Neither architecture-specific fetch script installs plugdata. Its internal
 0.9.3 patch-state layout is explicitly checked; unsupported layouts are rejected.
 See [USAGE.md](../USAGE.md) for patch loading, routing, and external-file

@@ -480,8 +480,8 @@ cd rpi-build
 sudo ./prepare-image.sh <raspios-image-url>
 ```
 
-The build host installs OS/Python dependencies, Cardinal and the ARM64 native
-extension into the image before flashing. The Pi needs no Internet access on
+The build host installs OS/Python dependencies, Cardinal, pinned plugdata v0.9.3-2,
+and the ARM64 native extension into the image before flashing. The Pi needs no Internet access on
 first boot; SSH and Ableton Link work over the local network. Build on Linux with
 root/loop-mount access and, on x86_64, ARM64 QEMU/binfmt support. See the Pi guide
 for prerequisites and verification limits.

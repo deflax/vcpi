@@ -88,6 +88,10 @@ sudo IMAGE_EXTRA_GIB=12 ./rpi-build/prepare-image.sh <raspios-image-url>
 
 # Override the pinned Cardinal release or download URL
 sudo CARDINAL_VERSION=26.01 ./rpi-build/prepare-image.sh <raspios-image-url>
+
+# Use a mirror of the exact pinned plugdata archive (checksum remains enforced)
+sudo PLUGDATA_URL=https://mirror.example/plugdata-Debian-aarch64.tar.xz \
+  ./rpi-build/prepare-image.sh <raspios-image-url>
 ```
 
 ## What Is Installed During Build
@@ -101,8 +105,17 @@ sudo CARDINAL_VERSION=26.01 ./rpi-build/prepare-image.sh <raspios-image-url>
 - Python venv is created at `/home/pi/vcpi/.venv`, including the launcher dependency
   stamp so `./vcpi` does not run pip on first use.
 - Cardinal 26.01 ARM64 VST3 is installed at `/usr/local/lib/vst3/Cardinal.vst3`.
-- The native C++ extension is built and a WAV/MIDI/mixer smoke runs without an audio
-  device. Native build dependencies are retained for offline incremental builds.
+- plugdata v0.9.3-2 Debian ARM64 instrument VST3 is installed at
+  `/usr/local/lib/vst3/plugdata.vst3`, alongside Cardinal. Its architecture and
+  runtime libraries are checked before installation. The archive's SHA-256 is
+  pinned to `776d1c0c38e0bcc7f03bb222e6afc466432e9847f30e7cce92610f64570b627a`.
+  `PLUGDATA_URL` may select a mirror, not a different release: the native patch
+  importer supports the 0.9.3 state layout reported by v0.9.3-2.
+- The native C++ extension is built, then WAV/MIDI/mixer and installed-plugdata
+  smoke checks run as `pi` without a display or audio device. The plugdata check
+  imports `patches/plugdata-midi-sine.pd`, verifies a MIDI-selected tone, and
+  checks silence after note-off. Native build dependencies are retained for
+  offline incremental builds.
 - Temporary build-host DNS, service-start suppression and the copied QEMU
   interpreter are removed/restored before the output image is published.
 
@@ -132,16 +145,29 @@ midi link 1 1
 audio start
 ```
 
+Or use the included plugdata patch; no plugin-path environment setting is needed:
+
+```text
+slot 1 pd plugdata-midi-sine
+midi link 1 1
+audio start
+note 1 60 100 500
+```
+
 Check the VCV command's `result` output: loading Cardinal does not alone prove
 the patch was applied. Physical audio and Cardinal loading must be checked on
-the Pi; the build's WAV smoke does not verify either.
+the Pi; neither is verified by the build's offline smoke checks.
 
 Offline-image implementation verification: source staging, builder preflight and
 temporary DNS/service-policy restoration were exercised in the development
-workspace. A complete privileged image build, first boot without Internet, and
-physical Pi audio were not exercised there. Run the builder on a capable Linux
-host, then boot the flashed Pi with WAN access disconnected to validate the
-deployment end to end. This is separate from the historical realtime checks below.
+workspace. The plugdata installer was additionally exercised against the real
+pinned ARM64 archive in an isolated installation directory: checksum rejection
+preserved an existing installation, and the actual image smoke code rendered
+the installed plugin headlessly as a non-root user. A complete privileged image
+build, first boot without Internet, and physical Pi audio were not exercised
+there. Run the builder on a capable Linux host, then boot the flashed Pi with
+WAN access disconnected to validate deployment end to end. This is separate
+from the historical realtime checks below.
 
 ## Selective Realtime Scheduling
 

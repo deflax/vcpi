@@ -16,6 +16,11 @@ PROJECT_DIR=/home/pi/vcpi
 CARDINAL_VERSION="${CARDINAL_VERSION:-26.01}"
 CARDINAL_ARCHIVE="Cardinal-linux-aarch64-${CARDINAL_VERSION}.tar.gz"
 CARDINAL_URL="${CARDINAL_URL:-https://github.com/DISTRHO/Cardinal/releases/download/${CARDINAL_VERSION}/${CARDINAL_ARCHIVE}}"
+# The native .pd importer supports the 0.9.3 layout reported by this release.
+PLUGDATA_VERSION="0.9.3-2"
+PLUGDATA_ARCHIVE="plugdata-Debian-aarch64.tar.xz"
+PLUGDATA_URL="${PLUGDATA_URL:-https://github.com/plugdata-team/plugdata/releases/download/v${PLUGDATA_VERSION}/${PLUGDATA_ARCHIVE}}"
+PLUGDATA_SHA256="776d1c0c38e0bcc7f03bb222e6afc466432e9847f30e7cce92610f64570b627a"
 
 if [ "$EUID" -ne 0 ] || [ "$(dpkg --print-architecture)" != arm64 ]; then
   echo "ERROR: target provisioning requires root inside an ARM64 Raspberry Pi OS image" >&2
@@ -66,12 +71,48 @@ install_cardinal_vst3() {
   trap - EXIT
 }
 
+install_plugdata_vst3() {
+  local destination="${1:-/usr/local/lib/vst3}"
+  local tmp_dir archive_path bundle binary dependencies
+  tmp_dir="$(mktemp -d /var/tmp/plugdata.XXXXXX)"
+  trap "rm -rf '$tmp_dir'" EXIT
+  archive_path="$tmp_dir/$PLUGDATA_ARCHIVE"
+  bundle="$tmp_dir/plugdata/VST3/plugdata.vst3"
+
+  echo "Downloading plugdata VST3 $PLUGDATA_VERSION: $PLUGDATA_URL"
+  curl -fL --retry 6 --retry-delay 2 --retry-all-errors "$PLUGDATA_URL" -o "$archive_path"
+  printf '%s  %s\n' "$PLUGDATA_SHA256" "$archive_path" | sha256sum --check --strict
+  # Install only the instrument bundle, not the standalone app or FX variant.
+  tar -xJf "$archive_path" -C "$tmp_dir" plugdata/VST3/plugdata.vst3
+  binary="$bundle/Contents/aarch64-linux/plugdata.so"
+  if [ ! -f "$binary" ]; then
+    echo "ERROR: plugdata bundle has no ARM64 VST3 binary" >&2
+    exit 1
+  fi
+  if [[ "$(LC_ALL=C readelf -h "$binary")" != *"AArch64"* ]]; then
+    echo "ERROR: plugdata VST3 binary is not AArch64" >&2
+    exit 1
+  fi
+  dependencies="$(ldd "$binary")"
+  if [[ "$dependencies" == *"not found"* ]]; then
+    printf 'ERROR: plugdata runtime libraries are missing:\n%s\n' "$dependencies" >&2
+    exit 1
+  fi
+
+  mkdir -p "$destination"
+  rm -rf "$destination/plugdata.vst3"
+  cp -aL "$bundle" "$destination/plugdata.vst3"
+  chmod -R a+rX "$destination/plugdata.vst3"
+  rm -rf "$tmp_dir"
+  trap - EXIT
+}
+
 # Install only what provisioning/runtime need; do not upgrade the entire image.
 # policy-rc.d installed by prepare-image.sh prevents package service starts here.
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates curl git openssh-server sudo \
-  build-essential cmake pkg-config \
+  ca-certificates curl git openssh-server sudo xz-utils \
+  build-essential binutils cmake pkg-config libatomic1 \
   python3-dev python3-pip python3-venv \
   libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev \
   libfreetype6-dev libfontconfig1-dev \
@@ -100,6 +141,7 @@ chown pi:pi /home/pi/.jackdrc
 # No ufw enable: chroot shares the build host's networking/netfilter namespace.
 # Realtime scheduling is granted by the installed service's LimitRTPRIO setting.
 install_cardinal_vst3
+install_plugdata_vst3
 
 cd "$PROJECT_DIR"
 python3 -m venv "$PROJECT_DIR/.venv"
@@ -129,7 +171,7 @@ chown -R pi:pi "$PROJECT_DIR"
 
 # Run as the eventual service user, without needing a device, display or network.
 # Exercise the installed native extension, MIDI, mmap handoff and engine mixer.
-runuser -u pi -- "$PYTHON" - <<'PY'
+runuser -u pi -- env -u DISPLAY -u WAYLAND_DISPLAY "$PYTHON" - <<'PY'
 from pathlib import Path
 import struct
 import tempfile
@@ -142,6 +184,7 @@ import prompt_toolkit
 import rich
 import rtmidi
 from core.audio_deps import require_native
+from core.plugin_host import NativePlugin
 
 native = require_native()
 with tempfile.TemporaryDirectory(prefix="vcpi-image-smoke-") as directory:
@@ -174,6 +217,36 @@ with tempfile.TemporaryDirectory(prefix="vcpi-image-smoke-") as directory:
         if runner is not None:
             runner.shutdown()
     del runner, engine, plugin, transport
+
+# Use the installed bundle and repository patch, never the editor or a device.
+with tempfile.TemporaryDirectory(prefix="vcpi-plugdata-image-smoke-") as directory:
+    root = Path(directory)
+    plugin = NativePlugin("/usr/local/lib/vst3/plugdata.vst3", 44100, 512, "instrument")
+    plugin.load_preset(str(Path("patches/plugdata-midi-sine.pd").resolve()))
+    transport = native.Transport(str(root / "audio.mmap"), 512, True)
+    runner = native.SlotRunner(transport, plugin.native, 44100, 512)
+    try:
+        def render(blocks):
+            audio = np.concatenate([runner.render_once() for _ in range(blocks)])
+            if not np.isfinite(audio).all():
+                raise RuntimeError("plugdata image smoke produced nonfinite audio")
+            return audio
+
+        if np.max(np.abs(render(8))) > 1e-6:
+            raise RuntimeError("plugdata image smoke was not silent before MIDI")
+        transport.send_midi(bytes(mido.Message("note_on", note=60, velocity=100).bytes()))
+        audio = render(40)[4096:, 0]
+        spectrum = np.abs(np.fft.rfft(audio * np.hanning(len(audio))))
+        frequency = np.fft.rfftfreq(len(audio), 1 / 44100)[np.argmax(spectrum)]
+        if np.max(np.abs(audio)) < 0.01 or abs(frequency - 261.6256) > 3:
+            raise RuntimeError(f"plugdata image smoke failed MIDI tone check: {frequency} Hz")
+        transport.send_midi(bytes(mido.Message("note_off", note=60).bytes()))
+        if np.max(np.abs(render(16)[4096:])) > 1e-6:
+            raise RuntimeError("plugdata image smoke did not release its MIDI note")
+        print(f"Installed plugdata patch import and offline MIDI rendering passed ({frequency:.2f} Hz)")
+    finally:
+        runner.shutdown()
+    del runner, plugin, transport
 PY
 
 apt-get clean

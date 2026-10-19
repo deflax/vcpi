@@ -194,6 +194,7 @@ VCPI_IMAGE_BUILD=1 \
 VCPI_USERCONF="$USERCONF_LINE" \
 CARDINAL_VERSION="${CARDINAL_VERSION:-26.01}" \
 CARDINAL_URL="${CARDINAL_URL:-}" \
+PLUGDATA_URL="${PLUGDATA_URL:-}" \
 CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-2}" \
   chroot "$MOUNT_DIR" /bin/bash /root/provision-target.sh
 rm "$MOUNT_DIR/root/provision-target.sh" "$MOUNT_DIR/root/.vcpi-image-build"
