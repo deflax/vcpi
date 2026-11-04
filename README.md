@@ -315,7 +315,7 @@ vcpi> midi link 5 1      # keyboard ch 5 -> track 1
   - Channel faders 1-8 -> track gain
   - Master fader -> master gain
   - 3 knobs per strip -> first 3 musical controls of that track's instrument plugin,
-    skipping plugin settings, MIDI helpers, and unused slots
+    skipping plugin settings, MIDI helpers, unused slots, and plugdata's global volume
   - MUTE buttons -> mute toggle
   - REC ARM buttons -> solo toggle
 

@@ -104,7 +104,7 @@ def _control_rows(index, track, input_name, output_name) -> list[list[str]]:
         state = "inactive: empty track"
     rows = [[f"{label} fader", f"CC {FADER_CCS[index]} (0-127)",
              f"{label} gain", f"{_value(track.gain) if track else '-'}; range 0 .. 1", state]]
-    parameters = (list(islice(track.plugin.parameter_items("controls"), 3))
+    parameters = (list(islice(track.plugin.knob_parameter_items(), 3))
                   if track is not None and track.plugin is not None else [])
     for knob, cc in enumerate(KNOB_CCS[index]):
         if knob < len(parameters):

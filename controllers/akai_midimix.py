@@ -83,7 +83,7 @@ class MidiMixController:
             self.invalidate_param_cache(track_index)
             return []
         entries: list[tuple[str, tuple[float, float]]] = []
-        for name, parameter in islice(track.plugin.parameter_items("controls"), 3):
+        for name, parameter in islice(track.plugin.knob_parameter_items(), 3):
             if parameter.kind == "bool":
                 bounds = (0.0, 1.0)
             elif parameter.kind == "enum":

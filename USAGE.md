@@ -383,7 +383,9 @@ includes controls and settings, excluding MIDI and unused slots. Explicit MIDI
 names remain readable and writable; setting an unused slot fails before any
 engine mutation. MIDI CC input, raw cached parameters, and native plugin state
 chunks are unchanged. Automatic knob mapping uses controls only, skipping
-settings, MIDI parameters, and unused slots.
+settings, MIDI parameters, unused slots, and plugdata's global `volume`.
+The MIDI Mix fader continues to control vcpi's track gain; the separate plugdata
+volume remains accessible through `get`/`set` but does not consume a knob.
 
 ### Mixer Commands
 
@@ -833,8 +835,8 @@ use the same colours. Labels remain visible without colour; a reported
 
 Generic MIDI inputs share the channel map; sequencer banks target tracks directly.
 MIDI Mix knobs map to the first three **instrument sound controls** in insertion
-order, skipping plugin settings, MIDI parameters, and unused slots—not insert or
-master-effect parameters. Zero and non-automatable sound
+order, skipping plugin settings, MIDI parameters, unused slots, and plugdata's global
+volume—not insert or master-effect parameters. Zero and non-automatable sound
 controls remain eligible.
 Disconnected ports and unbound
 controls are explicit. Mute/solo, disabled tracks, zero gains, stopped audio, and
