@@ -101,6 +101,7 @@ def _boot_host(args) -> "VcpiCore":
 
 def _cmd_serve(args):
     """Run the host as a headless server."""
+    from core.cli import VCPI_ASCII_LOGO
     from core.server import run_server
 
     # Prevent accidental duplicate instances.
@@ -113,6 +114,8 @@ def _cmd_serve(args):
             file=sys.stderr,
         )
         sys.exit(1)
+
+    print(f"\n{VCPI_ASCII_LOGO}\n", flush=True)
 
     with native_output("daemon"):
         level = configure_logging()

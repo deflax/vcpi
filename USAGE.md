@@ -24,6 +24,9 @@ Source of truth:
 | `python main.py serve` | Starts headless server with Unix socket control |
 | `python main.py cli` | Connects to a running headless server |
 
+Server startup displays the vcpi logo regardless of `LOG_LEVEL`, before
+initializing the host.
+
 Both launchers install `requirements.txt` when the environment is new, when
 upgrading an older environment without a dependency snapshot, or when the
 requirements file changes. Successful installs are recorded in
