@@ -144,7 +144,11 @@ plugdata/Pure Data helpers:
 - Patches must be UTF-8 Pure Data files, at most 16 MiB. Use MIDI objects such as
   `notein` and audio output such as `dac~`; there is no external audio-input path
   into an instrument slot. The included `plugdata-midi-sine` patch is a
-  monophonic example.
+  monophonic example. `plugdata-poly-pad` is a self-contained eight-voice stereo
+  pad with oldest-note stealing, velocity sensitivity, detuned saw oscillators,
+  a sine body, and a 1.8 kHz low-pass filter. Its squared amplitude envelope has
+  an 800 ms attack and 2200 ms release; hold notes for at least a second to hear
+  the full swell. It uses only vanilla Pd objects, with no external assets.
 - The importer recognizes plugdata's **0.9.3** state layout (the version reported
   by release v0.9.3-2). Other versions/layouts fail explicitly rather than
   silently loading an empty instance.
@@ -159,6 +163,26 @@ midi link 1 1
 audio start
 note 1 60 100 500
 ```
+
+Load the polyphonic pad and play it from MIDI channel 1:
+
+```text
+slot 1 pd plugdata-poly-pad
+midi link 1 1
+audio start
+note 1 60 100 3000
+```
+
+Open `patches/plugdata-poly-pad.pd` in Pure Data or plugdata to edit the sound.
+Each `pd voice-*` subpatch contains its oscillator detuning (`* 0.997` and
+`* 1.003`), filter (`lop~ 1800`), attack (`pack f 800`), release (`0 2200`),
+and output gain (`*~ 0.09`). Apply sound changes to all eight voices.
+The pad's output is 6 dB louder than the original example while retaining
+headroom for chords. Reload it with `slot 1 pd plugdata-poly-pad` after updating
+the file; a running instance or saved session can still contain the older patch.
+In standalone Pure Data, enable DSP and configure a MIDI input; vcpi handles
+audio processing when hosted in plugdata. The patch itself accepts all MIDI
+channels, so use vcpi's routing to select which channel reaches the slot.
 
 Examples:
 
