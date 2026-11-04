@@ -100,6 +100,14 @@ def _get_table(lines: list[str]) -> Table | None:
         return None
     table = _table("Parameters", "Parameter", "Value", "Range / choices")
     for line in lines:
+        if line in ("Controls:", "Plugin settings:", "MIDI parameters:", "Unused parameters:"):
+            if table.row_count:
+                table.add_section()
+            table.add_row(Text(line, style="bold"), Text(""), Text(""))
+            continue
+        if line == "  No parameters":
+            table.add_row(Text("No parameters"), Text(""), Text(""))
+            continue
         if not line.startswith("  ") or " = " not in line:
             return None
         name, value = line.strip().split(" = ", 1)

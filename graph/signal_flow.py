@@ -97,14 +97,14 @@ def _parameter_detail(plugin, name, parameter) -> str:
 
 
 def _control_rows(index, track, input_name, output_name) -> list[list[str]]:
-    """Mirror the controller's instrument insertion-order mapping exactly."""
+    """Mirror the controller's first-three sound-control mapping exactly."""
     label = f"Track {index + 1}"
     state = "active" if input_name else "inactive: MIDI Mix input disconnected"
     if track is None:
         state = "inactive: empty track"
     rows = [[f"{label} fader", f"CC {FADER_CCS[index]} (0-127)",
              f"{label} gain", f"{_value(track.gain) if track else '-'}; range 0 .. 1", state]]
-    parameters = (list(islice(track.plugin.parameters.items(), 3))
+    parameters = (list(islice(track.plugin.parameter_items("controls"), 3))
                   if track is not None and track.plugin is not None else [])
     for knob, cc in enumerate(KNOB_CCS[index]):
         if knob < len(parameters):
@@ -218,7 +218,7 @@ def _build_flow_snapshot(host, engine) -> dict:
         ["MIDI inputs", "; ".join(open_names) or "(none connected)",
          "all generic inputs share the channel map"],
         ["MIDI Mix", f"input: {input_name or '(disconnected)'}; LED output: {output_name or '(disconnected)'}",
-         "faders -> gains; knobs -> first 3 instrument parameters; buttons -> mute/solo"],
+         "faders -> gains; knobs -> first 3 instrument sound controls; buttons -> mute/solo"],
         ["Sequencer / clock", clock,
          f"{'running' if sequencer_running else 'stopped'}; {timing}; bank links below"],
     ]
@@ -271,7 +271,7 @@ def _build_flow_snapshot(host, engine) -> dict:
          "connected" if input_name else "disconnected"],
         ["MIDI Mix LED output", output_name or "(disconnected)", "mute / solo LED notes on channel 1",
          "cached applied state; on=127, off=0", "connected" if output_name else "disconnected"],
-        ["Knob mapping", "CC 0-127 -> parameter range", "first three instrument parameters in insertion order",
+        ["Knob mapping", "CC 0-127 -> parameter range", "first three instrument sound controls in insertion order",
          "not track FX or master FX parameters", "unbound knobs are inactive"],
     ]
     for rows in control_rows:

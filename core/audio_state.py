@@ -3,10 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from collections.abc import Iterator
 from pathlib import Path
 import re
 
 from core.models import InstrumentTrack
+
+
+PARAMETER_GROUPS = ("controls", "settings", "midi", "unused")
+_CARDINAL_SETTINGS = frozenset((
+    "bypass", "show_tooltips", "cable_opacity", "cable_tension",
+    "room_brightness", "light_bloom", "knob_mode", "scroll_wheel_knob_control",
+    "scroll_wheel_knob_sensitivity", "lock_module_positions", "update_rate_limit",
+    "browser_sort", "browser_zoom", "invert_zoom", "auto_squeeze_module_positions",
+))
+_CARDINAL_NAMES = frozenset((
+    "cardinal", "cardinalfx", "cardinalsynth", "cardinalmini", "cardinalnative",
+))
+_JUCE_MIDI_PARAMETER = re.compile(r"MIDI CC ([0-9]+)\|([0-9]+)")
+_CARDINAL_MIDI_PARAMETER = re.compile(r"midi_ch_([0-9]+)_cc_([0-9]+)")
 
 
 @dataclass(slots=True)
@@ -22,10 +37,6 @@ class ParameterSnapshot:
     is_boolean: bool = False
     is_discrete: bool = False
 
-    @property
-    def is_midi_cc_helper(self) -> bool:
-        """Identify JUCE's generated MIDI controller parameters by exact label."""
-        return re.fullmatch(r"MIDI CC [0-9]+\|[0-9]+", self.label) is not None
 
 
 @dataclass(slots=True)
@@ -43,6 +54,40 @@ class PluginSnapshot:
     parameters: dict[str, ParameterSnapshot] = field(default_factory=dict)
     values: dict = field(default_factory=dict)
     native_state: bytes | None = None
+
+    def parameter_group(self, name: str) -> str:
+        """Classify host controls using cached identity and published parameter labels.
+
+        plugdata marks unused automation slots with ``(DISABLED)`` in its title.
+        Cardinal has a fixed host-parameter interface for MIDI and window settings.
+        Never infer visibility from a control's value or automation capability.
+        """
+        parameter = self.parameters[name]
+        midi = _JUCE_MIDI_PARAMETER.fullmatch(parameter.label)
+        if midi and 0 <= int(midi[1]) < 16 and 0 <= int(midi[2]) < 130:
+            return "midi"
+        plugin_name = self.name.casefold().replace(" ", "")
+        manufacturer = self.manufacturer_name.casefold()
+        if manufacturer == "plugdata" and plugin_name in {"plugdata", "plugdata-fx"}:
+            if parameter.label.startswith("(DISABLED) "):
+                return "unused"
+            if name in {"bypass", "program"}:
+                return "settings"
+        elif manufacturer == "distrho" and plugin_name in _CARDINAL_NAMES:
+            midi = _CARDINAL_MIDI_PARAMETER.fullmatch(name)
+            if midi and 1 <= int(midi[1]) <= 16 and 0 <= int(midi[2]) < 130:
+                return "midi"
+            if name in _CARDINAL_SETTINGS:
+                return "settings"
+        return "controls"
+
+    def parameter_items(self, group: str = "controls") -> Iterator[tuple[str, ParameterSnapshot]]:
+        """Select cached parameters in plugin order, retaining the complete inventory."""
+        if group not in (*PARAMETER_GROUPS, "all"):
+            raise ValueError(f"unknown parameter group '{group}'")
+        for name, parameter in self.parameters.items():
+            if group == "all" or self.parameter_group(name) == group:
+                yield name, parameter
 
 
 def plain_value(value, value_type=None):

@@ -121,8 +121,12 @@ class FlowTests(unittest.TestCase):
             with self.subTest(metadata=value):
                 self.assertIn(value, text)
         by_field = {row[0].strip().lower(): row[1] for row in rows}
-        for field, count in zip(("parameters", "automatable", "boolean", "discrete"), counts):
+        for field, count in zip(("reported parameters", "automatable parameters (reported)",
+                                 "boolean parameters (reported)", "discrete parameters (reported)"), counts):
             self.assertEqual(by_field[field], str(count))
+        self.assertEqual(by_field["sound controls"], str(counts[0]))
+        for field in ("plugin settings", "midi parameters", "unused parameters"):
+            self.assertEqual(by_field[field], "0")
 
     def test_effect_sections_preserve_full_metadata_and_render_in_all(self):
         snapshot = build_flow_snapshot(self.host)

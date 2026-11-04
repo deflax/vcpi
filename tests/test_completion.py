@@ -208,9 +208,9 @@ class CompletionTests(unittest.TestCase):
         self.assertIn("fx", self.matches("get 1 "))
         self.assertIn("mode", self.matches("set 1 "))
         self.assertNotIn("midi_cc_0_1", self.matches("get 1 "))
-        self.assertEqual(self.matches("get 1 fx 1 "), ["mix"])
+        self.assertEqual(self.matches("get 1 fx 1 "), ["--group", "mix"])
         self.assertIn("enabled", self.matches("get master "))
-        self.assertEqual(self.matches("get master 2 "), ["mix"])
+        self.assertEqual(self.matches("get master 2 "), ["--group", "mix"])
         self.assertEqual(self.matches("set 1 bypass "), ["false", "true"])
         self.assertEqual(self.matches("set master 1 enabled t"), ["true"])
         for before in ("set 1 cutoff ", "set 1 absent ", "set 1 midi_cc_0_1 ",
@@ -220,6 +220,53 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.matches("set 1 mode "), ["'New Choice'"])
         del self.instrument.parameters["mode"]
         self.assertNotIn("mode", self.matches("set 1 "))
+
+    def test_parameter_groups_keep_completion_focused_and_settings_discoverable(self):
+        self.instrument.name = "plugdata"
+        self.instrument.manufacturer_name = "plugdata"
+        self.instrument.parameters["bypass"].label = "Bypass"
+        self.instrument.parameters.update({
+            "program": ParameterSnapshot(label="Program", kind="enum",
+                                         valid_values=("Default", "Alternate")),
+            "unused": ParameterSnapshot(label="(DISABLED) Param 1", kind="bool"),
+            "zero_control": ParameterSnapshot(label="Volume", is_automatable=False),
+        })
+        self.instrument.values["zero_control"] = 0.0
+        self.assertIn("zero_control", self.matches("get 1 "))
+        self.assertIn("zero_control", self.matches("set 1 "))
+        for name in ("bypass", "program", "midi_cc_0_1", "unused"):
+            self.assertNotIn(name, self.matches("get 1 "))
+        for name in ("bypass", "program"):
+            self.assertIn(name, self.matches("set 1 "))
+        for name in ("midi_cc_0_1", "unused"):
+            self.assertNotIn(name, self.matches("set 1 "))
+        self.assertEqual(self.matches("set 1 unused "), [])
+        self.assertEqual(self.matches("set 1 bypass "), ["false", "true"])
+        self.assertEqual(self.matches("set 1 program "), ["Alternate", "Default"])
+        self.assertIn("--group", self.matches("get 1 "))
+        self.assertEqual(self.matches("get 1 --group s"), ["settings"])
+        self.cli.onecmd("get 1 --group settings")
+        self.assertIn("  bypass = ", self.cli.stdout.getvalue())
+        self.assertIn("  program = ", self.cli.stdout.getvalue())
+        self.assertNotIn("  unused = ", self.cli.stdout.getvalue())
+
+    def test_group_completion_works_for_every_target_and_stops_after_group(self):
+        groups = ["all", "controls", "midi", "settings", "unused"]
+        for target in ("1", "1 fx 1", "master", "master 1"):
+            with self.subTest(target=target):
+                self.assertIn("--group", self.matches(f"get {target} "))
+                self.assertEqual(self.matches(f"get {target} --group "), groups)
+                for group in groups:
+                    self.assertEqual(self.matches(f"get {target} --group {group} "), [])
+                self.assertEqual(self.matches(f"get {target} --group invalid "), [])
+                self.assertEqual(self.matches(f"get {target} cutoff --group "), [])
+        self.assertNotIn("--group", self.matches("set 1 "))
+        self.assertEqual(self.matches("set 1 --group "), [])
+
+    def test_explicit_midi_names_retain_finite_value_completion(self):
+        self.instrument.parameters["midi_cc_0_1"].kind = "bool"
+        self.assertNotIn("midi_cc_0_1", self.matches("set 1 "))
+        self.assertEqual(self.matches("set 1 midi_cc_0_1 "), ["false", "true"])
 
     def test_reserved_parameter_names_only_appear_at_unambiguous_positions(self):
         for name in ("0", "99", "+2", "--1"):

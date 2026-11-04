@@ -638,41 +638,63 @@ class HostCLI(cmd.Cmd):
     def do_get(self, arg):
         """Read cached plugin parameters, including units, ranges, and choices.
 
-        get <track 1-8> [name]
-        get <track 1-8> fx <fx_index> [name]
-        get master [fx_index] [name]
+        get <track 1-8> [name | --group <group>]
+        get <track 1-8> fx <fx_index> [name | --group <group>]
+        get master [fx_index] [name | --group <group>]
 
-        Omit name to list all parameters; master defaults to its first effect.
-        MIDI CC helpers are hidden. This command never calls live plugin getters.
-        Examples: get 1; get 1 cutoff; get 1 fx 2; get master 1 cutoff
+        Groups: controls (default), settings, midi, unused, all.
+        Group selection affects listings only; an exact name reads any parameter.
+        Master defaults to its first effect. Reads use cached metadata only.
+        Examples: get 1; get 1 --group all; get 1 fx 2; get master 1 cutoff
         """
         try:
             _, _, plugin, remaining = self._parameter_target(shlex.split(arg))
-            if len(remaining) > 1:
-                raise ValueError("expected at most one parameter name")
-            parameters = {name: param for name, param in plugin.parameters.items()
-                          if not param.is_midi_cc_helper}
+            groups = {
+                "controls": "Controls:",
+                "settings": "Plugin settings:",
+                "midi": "MIDI parameters:",
+                "unused": "Unused parameters:",
+            }
+            group = "controls"
+            if remaining and remaining[0] == "--group":
+                if len(remaining) != 2 or remaining[1] not in (*groups, "all"):
+                    raise ValueError("--group requires controls, settings, midi, unused, or all")
+                group = remaining[1]
+                remaining = []
+            elif len(remaining) > 1:
+                raise ValueError("expected one parameter name or --group <group>, not both")
             if remaining:
                 name = remaining[0]
-                if name not in parameters:
+                if name not in plugin.parameters:
                     raise ValueError(f"unknown parameter '{name}'")
-                parameters = {name: parameters[name]}
-            if not parameters:
-                self._print("  No parameters")
-            for name, parameter in parameters.items():
-                value = plugin.values.get(name, parameter.string_value or "???")
-                units = f" {parameter.units}" if parameter.units else ""
-                details = ""
-                if parameter.kind == "enum" and parameter.valid_values:
-                    details = f"  (choices {', '.join(parameter.valid_values)})"
-                elif parameter.kind == "float" and len(parameter.range) >= 2:
-                    low, high = parameter.range[:2]
-                    if low is not None and high is not None:
-                        details = f"  (range {low:.4g} .. {high:.4g})"
-                self._print(f"  {name} = {value}{units}{details}")
+                sections = [(None, [(name, plugin.parameters[name])])]
+            elif group == "all":
+                sections = [(heading, plugin.parameter_items(key))
+                            for key, heading in groups.items()]
+            else:
+                sections = [(None, plugin.parameter_items(group))]
+            for heading, parameters in sections:
+                if heading:
+                    self._print(heading)
+                found = False
+                for name, parameter in parameters:
+                    found = True
+                    value = plugin.values.get(name, parameter.string_value or "???")
+                    units = f" {parameter.units}" if parameter.units else ""
+                    details = ""
+                    if parameter.kind == "enum" and parameter.valid_values:
+                        details = f"  (choices {', '.join(parameter.valid_values)})"
+                    elif parameter.kind == "float" and len(parameter.range) >= 2:
+                        low, high = parameter.range[:2]
+                        if low is not None and high is not None:
+                            details = f"  (range {low:.4g} .. {high:.4g})"
+                    self._print(f"  {name} = {value}{units}{details}")
+                if not found:
+                    self._print("  No parameters")
         except ValueError as error:
             self._print(f"Error: {error}")
-            self._print("Usage: get <track> [fx <index>] [name] | get master [index] [name]")
+            self._print("Usage: get <track> [fx <index>] [name | --group <group>] | "
+                        "get master [index] [name | --group <group>]")
 
     def do_set(self, arg):
         """Set a plugin parameter and show its actual applied value.
@@ -682,6 +704,7 @@ class HostCLI(cmd.Cmd):
         set master <fx_index> <name> <value>
 
         Boolean values accept true/false; quote enum values containing spaces.
+        Unused plugin slots cannot be set; explicit MIDI parameter names are allowed.
         Examples: set 1 cutoff 1000; set 1 fx 2 bypass true
                   set master 1 mode "Quiet Mode"
         """
@@ -694,6 +717,8 @@ class HostCLI(cmd.Cmd):
             parameter = plugin.parameters.get(pname)
             if parameter is None:
                 raise ValueError(f"unknown parameter '{pname}'")
+            if plugin.parameter_group(pname) == "unused":
+                raise ValueError(f"parameter '{pname}' is an unused plugin slot and cannot be set")
             if parameter.kind != "enum":
                 try:
                     pval = float(pval)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from itertools import islice
 from threading import RLock
 from typing import Optional
 
@@ -56,27 +57,33 @@ class MidiMixController:
         # track_index -> [(param_name, (min, max)), ...]
         self._param_cache: dict[int, list[tuple[str, tuple[float, float]]]] = {}
         self._param_generations: dict[int, int] = {}
+        # Full metadata refreshes replace this mapping even within a generation;
+        # ordinary value updates only change raw_value/string_value in place.
+        self._param_metadata: dict[int, object] = {}
         self._led_lock = RLock()
         # Optimism is controller-local; engine snapshots only contain applied state.
         self._optimistic_state: dict[int, tuple[int, dict[str, bool]]] = {}
 
     def invalidate_param_cache(self, track_index: Optional[int] = None):
-        """Clear cached parameter names/ranges. Call when instruments are loaded/removed."""
+        """Clear cached parameter names/ranges and their metadata references."""
         if track_index is not None:
             self._param_cache.pop(track_index, None)
             self._param_generations.pop(track_index, None)
+            self._param_metadata.pop(track_index, None)
         else:
             self._param_cache.clear()
             self._param_generations.clear()
+            self._param_metadata.clear()
 
     def _build_param_cache(self, track_index: int, track=None) -> list[tuple[str, tuple[float, float]]]:
-        """Cache ranges from one captured instrument generation."""
+        """Cache the first three sound controls from one metadata snapshot."""
         if track is None:
             track = self._engine.tracks[track_index]
         if track is None or track.plugin is None:
+            self.invalidate_param_cache(track_index)
             return []
         entries: list[tuple[str, tuple[float, float]]] = []
-        for name, parameter in track.plugin.parameters.items():
+        for name, parameter in islice(track.plugin.parameter_items("controls"), 3):
             if parameter.kind == "bool":
                 bounds = (0.0, 1.0)
             elif parameter.kind == "enum":
@@ -86,6 +93,7 @@ class MidiMixController:
             entries.append((name, bounds))
         self._param_cache[track_index] = entries
         self._param_generations[track_index] = track.generation
+        self._param_metadata[track_index] = track.plugin.parameters
         return entries
 
     @property
@@ -209,7 +217,10 @@ class MidiMixController:
 
         # Metadata is plain cached state, safe to read on the rtmidi thread.
         params = self._param_cache.get(track_idx)
-        if params is None or self._param_generations.get(track_idx) != track.generation:
+        metadata = track.plugin.parameters if track.plugin is not None else None
+        if (params is None
+                or self._param_generations.get(track_idx) != track.generation
+                or self._param_metadata.get(track_idx) is not metadata):
             params = self._build_param_cache(track_idx, track)
         if not params:
             logger.debug("track %d knob ignored (no mapped params)", track_idx + 1)

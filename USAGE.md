@@ -264,7 +264,9 @@ parameters.
 | `gain` / `mute` / `solo` / `note` | Valid track targets; `gain` also offers `master` |
 | `track` | Track types, installed plugins, patch names, sample packs/samples, and loaded effect indexes for `fx clear` |
 | `show` / `get` / `set` | View or plugin targets and actual loaded effect indexes |
-| `get` / `set` parameter names | Cached visible parameters, excluding MIDI CC helpers |
+| `get` parameter names | Cached musical controls and `--group` |
+| `get <target> --group` | `controls`, `settings`, `midi`, `unused`, `all`; no further arguments |
+| `set` parameter names | Cached controls and plugin settings; no MIDI or unused slots |
 | `set` value | Boolean literals and enum choices, quoted when necessary |
 | `save` / `load` | Saved session names from the daemon's sessions directory |
 
@@ -285,9 +287,9 @@ hardware or empty plugin/effect lists may also yield no choices.
 | `track <track\|master> fx <path\|vst_name> [--name <label>]` | Load effect into track insert chain or master bus |
 | `track <track> clear` | Clear instrument from track |
 | `track <track\|master> fx clear <fx_index>` | Remove effect by index |
-| `get <track> [name]` | Read all visible instrument parameters, or one named parameter |
-| `get <track> fx <fx_index> [name]` | Read all visible track-effect parameters, or one named parameter |
-| `get master [fx_index] [name]` | Read master-effect parameters; effect index defaults to 1 |
+| `get <track> [name \| --group <group>]` | Read instrument controls, a selected group, or one exact parameter |
+| `get <track> fx <fx_index> [name \| --group <group>]` | Read track-effect controls, a selected group, or one exact parameter |
+| `get master [fx_index] [name \| --group <group>]` | Read master-effect controls, a selected group, or one exact parameter; index defaults to 1 |
 | `set <track> <name> <value>` | Set instrument parameter |
 | `set <track> fx <fx_index> <name> <value>` | Set track-effect parameter |
 | `set master <fx_index> <name> <value>` | Set master-effect parameter; explicit index required |
@@ -301,10 +303,13 @@ To override the display label, use `track 1 vst Acid V --name Bass`.
 The same syntax applies to `track <track|master> fx`; trailing words without
 `--name` are part of the plugin name, not a custom label.
 
-For `get`, omit `name` to list all visible parameters or supply a single name
-to read only that parameter. Use parameter names from the listing; quote names
-or values containing spaces. An unknown name produces an error. Track-effect
-targets require `fx <fx_index>`; an index alone is not a track-effect target.
+For `get`, omit `name` to list musical controls, or supply a single exact name
+to read any cached parameter, including MIDI helpers and unused slots.
+Alternatively, use `--group controls|settings|midi|unused|all` to choose a listing.
+The group option affects listing only and cannot be combined with a parameter
+name. Use parameter names from the listing; quote names or values containing
+spaces. An unknown name produces an error. Track-effect targets require
+`fx <fx_index>`; an index alone is not a track-effect target.
 In `get master`, a numeric token immediately after `master` is always an
 effect index, not a parameter name. With no index, `get master` and
 `get master <name>` read the first master effect. All `set` forms require
@@ -315,13 +320,17 @@ Examples (parameter names and choices depend on the loaded plugin):
 
 ```text
 get 1
+get 1 --group settings
+get 1 --group all
 get 1 cutoff_hz
 get 1 fx 2
 get 1 fx 2 wet
+get 1 fx 2 --group midi
 get master
 get master 2
 get master 2 threshold_db
 get master threshold_db
+get master --group unused
 set 1 cutoff_hz 880
 set 1 fx 2 wet 0.5
 set master 2 threshold_db -6
@@ -333,6 +342,10 @@ Each parameter prints a line `  name = value`, with units when available.
 When metadata is available, the same line ends with either
 `  (range low .. high)` or `  (choices choice1, choice2)`. There are no
 slider bars. An empty parameter list prints `  No parameters`.
+`--group all` emits `Controls:`, `Plugin settings:`, `MIDI parameters:`, and
+`Unused parameters:` sections, preserving the same parameter rows within each.
+The interactive Rich table retains those section headings. Single-group
+listings use the normal ungrouped format, including `No parameters` if empty.
 
 `set` waits for the owning process to apply the change between render blocks
 and prints the actual applied value, including plugin clamping. Boolean values
@@ -345,10 +358,32 @@ the output stream stopped. A parameter setter returns only its actual value,
 raw/display delta, and acknowledgment—not a fresh catalog of all parameters.
 Plugin-side changes between full captures can make diagnostics temporarily stale.
 
-`get` omits JUCE-generated MIDI controller helper parameters
-whose labels have the form `MIDI CC <channel>|<controller>`. Ordinary plugin
-parameters, including non-automatable controls, remain visible. This is only a
-display filter; MIDI CC input and underlying parameter access are unchanged.
+Parameter groups distinguish plugin controls from infrastructure:
+
+- `controls` (default): musical controls, including legitimate zero values and
+  non-automatable controls. Cardinal's 24 CV `Parameter N` controls remain here.
+- `settings`: known plugdata bypass/program controls and Cardinal bypass/window
+  settings, such as tooltips, cable opacity, and knob mode.
+- `midi`: JUCE-generated `MIDI CC <channel>|<controller>` helpers and Cardinal's
+  `MIDI Ch <channel> CC <controller>` bank.
+- `unused`: plugdata slots whose raw labels begin with `(DISABLED)`.
+- `all`: every cached parameter, separated into the four groups above.
+
+Plugin-specific grouping is identity-scoped; unrelated plugin controls are not
+classified as settings or unused merely because of their name or value.
+The plugdata rule follows its documented
+[`(DISABLED)` parameter titles](https://github.com/plugdata-team/plugdata/blob/v0.9.3/Source/Utility/PluginParameter.h);
+Cardinal's settings follow its
+[host parameter definitions](https://github.com/DISTRHO/Cardinal/blob/26.02/src/CardinalPlugin.cpp).
+These groups do not create patch connections: a Pure Data patch must export
+automation controls, and Cardinal's host parameters must be wired inside the patch.
+`get` name completion suggests controls and the group option; use
+`get <target> --group settings` to discover setting names. `set` name completion
+includes controls and settings, excluding MIDI and unused slots. Explicit MIDI
+names remain readable and writable; setting an unused slot fails before any
+engine mutation. MIDI CC input, raw cached parameters, and native plugin state
+chunks are unchanged. Automatic knob mapping uses controls only, skipping
+settings, MIDI parameters, and unused slots.
 
 ### Mixer Commands
 
@@ -771,6 +806,9 @@ The command is named `show` (formerly `flow`); the old command name is not an al
 Effect metadata views require an explicit 1-based index. `show master` remains
 the master routing/mixer/output view; it does not select an effect implicitly.
 Loaded effect sections also appear in the explorer's view cycle.
+Plugin metadata separates reported parameter totals from sound controls, plugin
+settings, MIDI parameters, and unused slots. Automatable, boolean, and discrete
+counts describe all reported parameters, not just the sound-control group.
 
 Inside `show explore`:
 
@@ -794,8 +832,11 @@ use the same colours. Labels remain visible without colour; a reported
 `failure: none` is not marked as a failure.
 
 Generic MIDI inputs share the channel map; sequencer banks target tracks directly.
-MIDI Mix knobs map to the first three **instrument** parameters in insertion
-order, not insert or master-effect parameters. Disconnected ports and unbound
+MIDI Mix knobs map to the first three **instrument sound controls** in insertion
+order, skipping plugin settings, MIDI parameters, and unused slots—not insert or
+master-effect parameters. Zero and non-automatable sound
+controls remain eligible.
+Disconnected ports and unbound
 controls are explicit. Mute/solo, disabled tracks, zero gains, stopped audio, and
 worker/owner failures are shown as output blockers.
 

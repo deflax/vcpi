@@ -1,12 +1,16 @@
-"""Cached parameter reads, target selection, and MIDI helper filtering."""
+"""Cached parameter groups, explicit access, target selection, and presentation."""
 
 import io
 from types import SimpleNamespace
 from typing import cast
 import unittest
+from unittest.mock import Mock
+
+from rich.console import Console
 
 from core.audio_state import ParameterSnapshot, PluginSnapshot
 from core.cli import HostCLI
+from core.client_display import _get_table, display_response
 from core.host import VcpiCore
 
 
@@ -76,7 +80,7 @@ class ParameterDisplayTests(unittest.TestCase):
         for command in ("get", "get 0", "get 2", "get 1 fx", "get 1 fx 0",
                         "get 1 fx 2", "get master 0", "get master -1",
                         "get master 3", "get 1 missing", "get 1 cutoff extra",
-                        "get 1 midi_cc_0_1", 'get 1 "unterminated'):
+                        'get 1 "unterminated'):
             with self.subTest(command=command):
                 text = self.execute(command)
                 self.assertTrue(text.startswith("Error:"), text)
@@ -90,6 +94,140 @@ class ParameterDisplayTests(unittest.TestCase):
         self.effect.parameters.clear()
         self.effect.values.clear()
         self.assertIn("No parameters", self.execute("get 1 fx 1"))
+
+    def group_instrument(self):
+        self.instrument.name = "plugdata"
+        self.instrument.manufacturer_name = "plugdata"
+        self.instrument.parameters.update({
+            "volume": ParameterSnapshot(label="Volume", is_automatable=False),
+            "bypass": ParameterSnapshot(label="Bypass", kind="bool"),
+            "program": ParameterSnapshot(label="Program", kind="enum",
+                                         valid_values=("Default", "Alternate")),
+            "disabled_param": ParameterSnapshot(label="(DISABLED) Param 1"),
+        })
+        self.instrument.values.update({
+            "volume": 0.0, "bypass": False, "program": "Default", "disabled_param": 0.0,
+        })
+
+    @staticmethod
+    def parameter_names(text):
+        return [line[2:].split(" = ", 1)[0] for line in text.splitlines()
+                if line.startswith("  ") and " = " in line]
+
+    def test_group_listings_and_exact_reads_preserve_raw_state(self):
+        self.group_instrument()
+        self.instrument.native_state = b"native plugin chunk"
+        parameters = dict(self.instrument.parameters)
+        values = dict(self.instrument.values)
+        expected = {
+            "controls": ["cutoff", "manual", "mode", "midi_depth", "custom", "volume"],
+            "settings": ["bypass", "program"],
+            "midi": ["midi_cc_0_1", "midi_cc_15_129"],
+            "unused": ["disabled_param"],
+        }
+        self.assertEqual(self.parameter_names(self.execute("get 1")), expected["controls"])
+        for group, names in expected.items():
+            with self.subTest(group=group):
+                text = self.execute(f"get 1 --group {group}")
+                self.assertEqual(self.parameter_names(text), names)
+                self.assertFalse(any(line.endswith(":") for line in text.splitlines()))
+                for name in names:
+                    self.assertEqual(self.parameter_names(self.execute(f"get 1 {name}")), [name])
+        text = self.execute("get 1 --group all")
+        sections = {}
+        for line in text.splitlines():
+            if not line.startswith("  "):
+                section = sections.setdefault(line, [])
+            elif " = " in line:
+                section.append(line[2:].split(" = ", 1)[0])
+        self.assertEqual(sections, {
+            "Controls:": expected["controls"], "Plugin settings:": expected["settings"],
+            "MIDI parameters:": expected["midi"], "Unused parameters:": expected["unused"],
+        })
+        self.assertEqual(self.instrument.parameters, parameters)
+        self.assertEqual(self.instrument.values, values)
+        self.assertEqual(self.instrument.native_state, b"native plugin chunk")
+
+    def test_groups_work_for_track_and_master_effect_targets(self):
+        self.effect.parameters["midi"] = ParameterSnapshot(label="MIDI CC 0|1")
+        self.effect.values["midi"] = 0.5
+        for target in ("1 fx 1", "master 2"):
+            with self.subTest(target=target):
+                self.assertEqual(self.parameter_names(self.execute(f"get {target}")), ["mix"])
+                self.assertEqual(self.parameter_names(
+                    self.execute(f"get {target} --group midi")), ["midi"])
+                self.assertEqual(self.parameter_names(self.execute(f"get {target} midi")), ["midi"])
+        self.assertEqual(self.parameter_names(self.execute("get master --group controls")), ["gain"])
+
+    def test_cardinal_listing_separates_midi_and_window_settings_from_cv_controls(self):
+        self.effect.name = "Cardinal"
+        self.effect.manufacturer_name = "DISTRHO"
+        self.effect.parameters = {
+            "midi_ch_1_cc_0": ParameterSnapshot(label="MIDI Ch 1 CC 0"),
+            "parameter_1": ParameterSnapshot(label="Parameter 1", is_automatable=False),
+            "parameter_24": ParameterSnapshot(label="Parameter 24"),
+            "midi_ch_16_cc_129": ParameterSnapshot(label="MIDI Ch 16 CC 129"),
+            "show_tooltips": ParameterSnapshot(label="Show tooltips", kind="bool"),
+            "midi_ch_17_cc_0": ParameterSnapshot(label="MIDI Ch 17 CC 0"),
+        }
+        self.effect.values = {name: 0.0 for name in self.effect.parameters}
+        self.assertEqual(self.parameter_names(self.execute("get 1 fx 1")),
+                         ["parameter_1", "parameter_24", "midi_ch_17_cc_0"])
+        self.assertEqual(self.parameter_names(self.execute("get 1 fx 1 --group settings")),
+                         ["show_tooltips"])
+        self.assertEqual(self.parameter_names(self.execute("get 1 fx 1 --group midi")),
+                         ["midi_ch_1_cc_0", "midi_ch_16_cc_129"])
+        self.assertEqual(self.parameter_names(self.execute("get 1 fx 1 midi_ch_1_cc_0")),
+                         ["midi_ch_1_cc_0"])
+
+    def test_group_option_cannot_be_combined_with_a_name_or_extra_arguments(self):
+        for target in ("1", "1 fx 1", "master", "master 1"):
+            for arguments in ("--group", "--group unknown", "--group settings extra",
+                              "--group controls cutoff", "cutoff --group controls",
+                              "--group all --group midi"):
+                with self.subTest(target=target, arguments=arguments):
+                    text = self.execute(f"get {target} {arguments}")
+                    self.assertTrue(text.startswith("Error:"), text)
+                    self.assertEqual(self.parameter_names(text), [])
+
+    def test_unused_slots_are_rejected_before_set_but_other_groups_remain_writable(self):
+        self.group_instrument()
+        setter = Mock(return_value=0.0)
+        self.cli.host.engine.set_parameter = setter
+        self.cli.host.engine.master_effects[0] = self.instrument
+        self.cli.host.engine.tracks[0].effects[0] = self.instrument
+        for target in ("1", "1 fx 1", "master 1"):
+            with self.subTest(target=target):
+                text = self.execute(f"set {target} disabled_param 0.5")
+                self.assertTrue(text.startswith("Error:"), text)
+                self.assertIn("disabled_param", text)
+                setter.assert_not_called()
+        for name, value, applied in (("volume", "0", 0.0), ("bypass", "true", True),
+                                     ("program", "Alternate", "Alternate"),
+                                     ("midi_cc_0_1", "0.5", 0.5)):
+            with self.subTest(name=name):
+                text = self.execute(f"set 1 {name} {value}")
+                self.assertFalse(text.startswith("Error:"), text)
+                setter.assert_called_once_with(0, name, applied, fx_index=None)
+                setter.reset_mock()
+
+    def test_grouped_response_remains_a_rich_table_including_empty_groups(self):
+        self.group_instrument()
+        lines = self.execute("get 1 --group all").splitlines()
+        table = _get_table(lines)
+        self.assertIsNotNone(table)
+        self.assertEqual(table.row_count, len(self.instrument.parameters) + 4)
+        rendered = io.StringIO()
+        display_response(Console(file=rendered, width=140, color_system=None),
+                         "get 1 --group all", lines)
+        for heading in ("Controls:", "Plugin settings:", "MIDI parameters:", "Unused parameters:"):
+            self.assertIn(heading, rendered.getvalue())
+        self.assertIn("Range / choices", rendered.getvalue())
+        lines = self.execute("get master --group all").splitlines()
+        table = _get_table(lines)
+        self.assertIsNotNone(table)
+        self.assertEqual(table.row_count, 8)
+        self.assertIsNone(_get_table(["Controls:", "Error: failed"]))
 
 
 if __name__ == "__main__":

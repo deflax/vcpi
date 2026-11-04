@@ -173,8 +173,9 @@ Full CLI and startup flag reference: [USAGE.md](USAGE.md).
 Inside `./vcpi`, press `Tab` for command and argument suggestions. Completion
 comes from the daemon: audio/MIDI subcommands, routing channels and tracks,
 sequencer banks, mixer targets, help topics, and debug modes are supported.
-`get`/`set` suggest cached plugin parameters and boolean/enum choices; effect
-indexes reflect loaded chains. Plugin, patch, sample, and session names are
+`get` suggests cached controls and `--group`; `set` suggests controls, plugin
+settings, and boolean/enum choices. Effect indexes reflect loaded chains.
+Plugin, patch, sample, and session names are
 discovered on the daemon, including names containing spaces where the command
 supports them. Free-form numeric values are left for you to enter.
 
@@ -214,16 +215,18 @@ For VST instruments, install a compatible plugin first, then use
 Read or change instrument, track-effect, and master-effect parameters:
 
 ```text
-get <track> [name]
-get <track> fx <index> [name]
-get master [index] [name]
+get <track> [name | --group <group>]
+get <track> fx <index> [name | --group <group>]
+get master [index] [name | --group <group>]
 set <track> <name> <value>
 set <track> fx <index> <name> <value>
 set master <index> <name> <value>
 ```
 
-Tracks are 1–8 and effect indexes are 1-based. Omit `name` to read all visible
-parameters or supply one name to read just that parameter. For `get master`,
+Tracks are 1–8 and effect indexes are 1-based. Omit `name` to list musical
+controls, or supply one exact name to inspect any cached parameter, including
+MIDI and unused slots. Instead of a name, use `--group controls|settings|midi|unused|all`
+to select a listing; a group and name cannot be combined. For `get master`,
 the effect index defaults to 1; a numeric token immediately after `master`
 is always an index. `set master` requires an explicit index. Track effects
 require the `fx <index>` tokens. Use `help get` and `help set` for detailed
@@ -232,15 +235,22 @@ syntax and examples.
 Plain-text `get` output prints `  name = value`, including units when available,
 with `  (range low .. high)` or `  (choices choice1, choice2)` on the same line.
 An empty parameter list prints `  No parameters`; an unknown name is an error.
-JUCE-generated `MIDI CC <channel>|<controller>` helpers are hidden, while
-ordinary controls, including non-automatable ones, remain visible.
+`--group all` separates Controls, Plugin settings, MIDI parameters, and Unused
+parameters, with section headings in both plain text and the interactive table.
+JUCE MIDI helpers and Cardinal's MIDI CC bank belong to `midi`; plugdata's
+disabled slots belong to `unused`. Known plugdata/Cardinal host and window
+settings belong to `settings`. Ordinary controls remain visible even when zero
+or non-automatable; Cardinal's 24 CV parameters remain controls.
+The group option affects listing only: raw parameter snapshots, native plugin
+state chunks, and MIDI input are unchanged. Explicit MIDI parameters can still
+be set; unused slots are rejected before mutation.
 `get` and `show` read cached metadata rather than calling live plugin getters;
 plugin-side changes can remain stale until a full capture. `set` waits for
 the owning process and reports the actual applied value, including clamping.
 See [USAGE.md](USAGE.md#plugin-commands) for capture details and parameter examples.
 
 `show <track>` includes instrument vendor, version, category, type, ID, latency,
-description, and parameter counts alongside routing, mixer, and worker state.
+description, and grouped parameter counts alongside routing, mixer, and worker state.
 Use `show <track> fx <index>` or `show master fx <index>` for full effect metadata;
 both require an explicit 1-based effect index.
 
@@ -304,7 +314,8 @@ vcpi> midi link 5 1      # keyboard ch 5 -> track 1
 - Factory mapping is used by default:
   - Channel faders 1-8 -> track gain
   - Master fader -> master gain
-  - 3 knobs per strip -> first 3 parameters of that track's instrument plugin
+  - 3 knobs per strip -> first 3 musical controls of that track's instrument plugin,
+    skipping plugin settings, MIDI helpers, and unused slots
   - MUTE buttons -> mute toggle
   - REC ARM buttons -> solo toggle
 
@@ -445,9 +456,10 @@ vcpi> show controls     # exact MIDI Mix bindings and cached parameter targets
 vcpi> show 1            # track state and full cached instrument metadata
 vcpi> show 1 fx 1       # full metadata for track 1's first effect
 vcpi> show master fx 1  # full metadata for the first master effect
-vcpi> get 1             # all visible instrument parameters
-vcpi> get 1 fx 1        # parameters for track 1's first effect
-vcpi> get master 1     # parameters for the first master effect
+vcpi> get 1             # instrument controls
+vcpi> get 1 --group all # controls, settings, MIDI, and unused slots, grouped
+vcpi> get 1 fx 1        # controls for track 1's first effect
+vcpi> get master 1     # controls for the first master effect
 ```
 
 Headless server + local CLI (or run both commands on the host over SSH):

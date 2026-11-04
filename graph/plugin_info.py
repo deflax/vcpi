@@ -33,6 +33,9 @@ def plugin_metadata_rows(plugin: PluginSnapshot) -> list[tuple[str, str]]:
     # -- parameters summary --------------------------------------------------
     params = plugin.parameters
     param_count = len(params)
+    group_counts = {"controls": 0, "settings": 0, "midi": 0, "unused": 0}
+    for parameter_name in params:
+        group_counts[plugin.parameter_group(parameter_name)] += 1
     automatable = sum(param.is_automatable for param in params.values())
     boolean_count = sum(param.is_boolean for param in params.values())
     discrete_count = sum(param.is_discrete for param in params.values())
@@ -52,10 +55,14 @@ def plugin_metadata_rows(plugin: PluginSnapshot) -> list[tuple[str, str]]:
     if path:
         rows.append(("Path", path))
     rows.append(("Latency", f"{latency} samples"))
-    rows.append(("Parameters", str(param_count)))
+    rows.append(("Reported parameters", str(param_count)))
+    rows.append(("Sound controls", str(group_counts["controls"])))
+    rows.append(("Plugin settings", str(group_counts["settings"])))
+    rows.append(("MIDI parameters", str(group_counts["midi"])))
+    rows.append(("Unused parameters", str(group_counts["unused"])))
     if param_count > 0:
-        rows.append(("Automatable", str(automatable)))
-        rows.append(("Boolean", str(boolean_count)))
-        rows.append(("Discrete", str(discrete_count)))
+        rows.append(("Automatable parameters (reported)", str(automatable)))
+        rows.append(("Boolean parameters (reported)", str(boolean_count)))
+        rows.append(("Discrete parameters (reported)", str(discrete_count)))
 
     return rows

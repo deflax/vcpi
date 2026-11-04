@@ -277,10 +277,12 @@ def complete_line(cli: HostCLI, before: str) -> dict:
                 args, require_master_index=command == "set")
         except (ValueError, IndexError):
             return choices(target_choices)
-        parameters = {name: parameter for name, parameter in plugin.parameters.items()
-                      if not parameter.is_midi_cc_helper}
+        if command == "get" and remaining == ["--group"]:
+            return choices(("controls", "settings", "midi", "unused", "all"))
         if not remaining:
-            names = list(parameters)
+            names = [name for name, _ in plugin.parameter_items()]
+            if command == "set":
+                names.extend(name for name, _ in plugin.parameter_items("settings"))
             if len(args) == 1:
                 if target == "master":
                     # These strings select an effect index before a parameter.
@@ -288,9 +290,14 @@ def complete_line(cli: HostCLI, before: str) -> dict:
                 else:
                     # Quoting cannot escape the instrument-target fx keyword.
                     names = [name for name in names if name != "fx"]
+            if command == "get":
+                names = [name for name in names if name != "--group"]
+                names.append("--group")
             return choices([*target_choices, *names])
         if command == "set" and len(remaining) == 1:
-            parameter = parameters.get(remaining[0])
+            parameter = plugin.parameters.get(remaining[0])
+            if parameter is not None and plugin.parameter_group(remaining[0]) == "unused":
+                return empty
             if parameter is not None:
                 if parameter.kind == "bool":
                     return choices(("true", "false"))
