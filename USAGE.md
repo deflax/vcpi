@@ -252,8 +252,9 @@ Server/client specific:
 
 ## Interactive Commands
 
-Type `help` for commands grouped by purpose. System-related groups come first:
-save & load sessions; status, signal & logging; and help, exit & shutdown.
+Type `help` for commands grouped by purpose. The overview command, `show`,
+comes first, followed by the system-related groups: save & load sessions;
+status, signal & logging; and help, exit & shutdown.
 A horizontal separator precedes the sound-related groups: instruments & effects;
 volume, mute & solo; audio devices & output; MIDI ports & routing; and
 sequencing, tempo & Link. The separator appears in both plain and interactive output.

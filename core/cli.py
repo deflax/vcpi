@@ -149,8 +149,9 @@ class HostCLI(cmd.Cmd):
         width = max(len(name) for name, _ in entries)
         self._print("Available commands:")
         groups = (
+            ("Overview", {"show"}),
             ("Save & load sessions", {"save", "load"}),
-            ("Status, signal & logging", {"status", "ps", "show", "deps", "debug"}),
+            ("Status, signal & logging", {"status", "ps", "deps", "debug"}),
             ("Help, exit & shutdown", {"help", "about", "quit", "exit", "shutdown"}),
             None,
             ("Instruments & effects", {"track", "get", "set"}),
