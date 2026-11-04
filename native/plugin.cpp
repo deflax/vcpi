@@ -274,8 +274,20 @@ Plugin::Plugin(const std::string& path, double rate, int size, const std::string
     juce::Process::setDockIconVisible(false);
    #endif
     validateAudio(rate, size);
-    if (kind != "wav" && kind != "instrument" && kind != "effect")
-        throw std::invalid_argument("Plugin kind must be instrument, effect or wav");
+    if (kind != "wav" && kind != "instrument" && kind != "effect" && kind != "deck")
+        throw std::invalid_argument("Plugin kind must be instrument, effect, wav or deck");
+    if (kind == "deck") {
+        deck = std::make_unique<Deck>(path, rate);
+        description.path = deck->bankPath();
+        description.name = deck->bankId();
+        description.descriptiveName = description.name;
+        description.manufacturer = "vcpi";
+        description.category = "Deck";
+        description.version = "1";
+        description.identifier = "deck:" + deck->bankId();
+        description.infoType = "Deck";
+        return;
+    }
     const juce::File file(juce::String::fromUTF8(path.c_str()));
     if (!file.exists()) throw std::runtime_error("Plugin file not found: " + path);
     description.path = file.getFullPathName().toStdString();
@@ -466,6 +478,7 @@ PluginMetadata Plugin::metadata() {
     return result;
 }
 std::vector<ParameterSnapshot> Plugin::parameters() {
+    if (deck) return {deckParameter("track_select"), deckParameter("play"), deckParameter("pitch"), deckParameter("nudge")};
     ControlOwnership lock(ownership);
     std::vector<ParameterSnapshot> result;
     result.reserve(parameterInfos.size());
@@ -473,6 +486,7 @@ std::vector<ParameterSnapshot> Plugin::parameters() {
     return result;
 }
 ParameterSnapshot Plugin::parameterSnapshot(const std::string& key) {
+    if (deck) return deckParameter(key);
     ControlOwnership lock(ownership);
     return snapshot(parameter(key));
 }
@@ -486,10 +500,22 @@ Scalar Plugin::parameterValue(const ParameterInfo& info) const {
     return numericText(text, info.descriptor.units, physical) ? physical : raw;
 }
 Scalar Plugin::getParameter(const std::string& key) {
+    if (deck) {
+        const auto value = deck->parameter(key);
+        return key == "play" ? Scalar(value != 0) : Scalar(value);
+    }
     ControlOwnership lock(ownership);
     return parameterValue(parameter(key));
 }
 Scalar Plugin::setParameter(const std::string& key, const Scalar& value) {
+    if (deck) {
+        ControlOwnership lock(ownership);
+        const auto* number = std::get_if<double>(&value);
+        const auto* boolean = std::get_if<bool>(&value);
+        if (!number && !boolean) throw std::invalid_argument("Deck parameters require numeric or boolean values");
+        const auto result = deck->setParameter(key, number ? *number : (*boolean ? 1.0 : 0.0));
+        return key == "play" ? Scalar(result != 0) : Scalar(result);
+    }
     ControlOwnership lock(ownership);
     auto& info = parameter(key);
     float normalized = 0.0f;
@@ -556,6 +582,7 @@ Scalar Plugin::setParameter(const std::string& key, const Scalar& value) {
     return parameterValue(info);
 }
 void Plugin::loadPreset(const std::string& path) {
+    if (deck) throw std::invalid_argument("Deck sources do not support plugin presets");
     ControlOwnership lock(ownership);
     if (!instance) throw std::invalid_argument("WAV instruments do not support presets");
     const juce::File file{juce::String(path)};
@@ -645,6 +672,7 @@ void Plugin::loadPreset(const std::string& path) {
     discoverParameters();
 }
 juce::MemoryBlock Plugin::getState() {
+    if (deck) throw std::invalid_argument("Deck sources use explicit session fields, not plugin state chunks");
     ControlOwnership lock(ownership);
     if (!instance) throw std::invalid_argument("WAV instruments do not support state chunks");
     // Commit acknowledged edits before serialization. Some VST3s ignore
@@ -664,12 +692,14 @@ juce::MemoryBlock Plugin::getState() {
     return data;
 }
 void Plugin::loadState(const std::string& data) {
+    if (deck) throw std::invalid_argument("Deck sources use explicit session fields, not plugin state chunks");
     ControlOwnership lock(ownership);
     if (!instance) throw std::invalid_argument("WAV instruments do not support state chunks");
     if (data.empty() || data.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) throw std::invalid_argument("Invalid state chunk size");
     applyState(data);
 }
 void Plugin::loadSavedState(const std::string& data) {
+    if (deck) throw std::invalid_argument("Deck sources use explicit session fields, not plugin state chunks");
     ControlOwnership lock(ownership);
     if (!instance) throw std::invalid_argument("WAV instruments do not support state chunks");
     validateSavedState(data.data(), data.size());
@@ -704,6 +734,44 @@ void Plugin::applyState(const std::string& data) {
     parametersPending = false;
     discoverParameters();
 }
+ParameterSnapshot Plugin::deckParameter(const std::string& key) const {
+    ParameterSnapshot result;
+    result.key = result.label = key;
+    result.automatable = true;
+    result.rawValue = deck->parameter(key);
+    result.value = result.rawValue;
+    result.stringValue = juce::String(result.rawValue).toStdString();
+    result.kind = "float";
+    if (key == "track_select") {
+        result.kind = "int";
+        result.low = 1;
+        result.high = deck->trackCount();
+        result.discrete = true;
+    } else if (key == "play") {
+        result.kind = "bool";
+        result.boolean = result.discrete = true;
+        result.value = result.rawValue != 0;
+        result.stringValue = result.rawValue != 0 ? "true" : "false";
+    } else if (key == "pitch") {
+        result.low = -16;
+        result.high = 16;
+        result.units = "%";
+    } else if (key == "nudge") {
+        result.low = -1;
+        result.high = 1;
+    }
+    result.rawValue = result.high > result.low ? (result.rawValue - result.low) / (result.high - result.low) : 0.0;
+    return result;
+}
+DeckStatus Plugin::deckStatus() const {
+    if (!deck) throw std::invalid_argument("Source is not a deck");
+    return deck->status();
+}
+void Plugin::deckCommand(const std::string& action, double value) {
+    if (!deck) throw std::invalid_argument("Source is not a deck");
+    ControlOwnership lock(ownership);
+    deck->command(action, value);
+}
 void Plugin::renderWav(float* left, float* right, const juce::MidiBuffer& midi) noexcept {
     std::fill_n(left, frames, 0.0f);
     std::fill_n(right, frames, 0.0f);
@@ -734,6 +802,7 @@ void Plugin::renderWav(float* left, float* right, const juce::MidiBuffer& midi) 
     voiceCount = alive;
 }
 void Plugin::process(float* left, float* right, juce::MidiBuffer& midi) {
+    if (deck) { deck->render(left, right, frames); return; }
     if (wav) { renderWav(left, right, midi); return; }
     audio.clear();
     if (effect) {

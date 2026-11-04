@@ -62,7 +62,7 @@ class HostCLI(cmd.Cmd):
         "Tracks are numbered 1-8.  MIDI channels are numbered 1-16."
     )
     prompt = "vcpi> "
-    TRACK_TYPES = ("vst", "wav", "vcv", "pd", "fx", "clear")
+    TRACK_TYPES = ("vst", "wav", "deck", "vcv", "pd", "fx", "clear")
 
     def __init__(self, host: VcpiCore, stdout=None, owns_host: bool = True):
         super().__init__(stdout=stdout)
@@ -186,6 +186,8 @@ class HostCLI(cmd.Cmd):
         return (
             "track <1-8> vst <path|vst_name> [--name <label>] | "
             "track <1-8> wav <pack> <sample> [name] | "
+            "track <1-8> deck <bank.json> [name] | "
+            "track <1-8> deck status|seek <seconds>|cue [set] | "
             "track <1-8> vcv <patch_name[.vcv]> [name] | "
             "track <1-8> pd <patch_name[.pd]> [--name <label>] | "
             "track <1-8|master> fx <path|vst_name> [--name <label>] | "
@@ -401,7 +403,17 @@ class HostCLI(cmd.Cmd):
             return None
 
     def do_track(self, arg):
-        """Track management: track <1-8> vst <path|name> [--name <label>] | track <1-8> wav <pack> <sample> [name] | track <1-8> vcv <patch> [name] | track <1-8> pd <patch> [--name <label>] | track <1-8|master> fx <path|name> [--name <label>] | track <1-8> clear | track <1-8|master> fx clear <fx_index>"""
+        """Track management: track <1-8> vst <path|name> [--name <label>] | track <1-8> wav <pack> <sample> [name] | track <1-8> deck <bank.json> [name] | track <1-8> vcv <patch> [name] | track <1-8> pd <patch> [--name <label>] | track <1-8|master> fx <path|name> [--name <label>] | track <1-8> clear | track <1-8|master> fx clear <fx_index>
+
+        Deck transport (independent of Link):
+          track <1-8> deck status          cached requested/applied transport
+          track <1-8> deck seek <seconds>  absolute source time; retain play state
+          track <1-8> deck cue set         store current position
+          track <1-8> deck cue             recall cue and pause
+        Quote bank paths containing spaces. New selections load paused at zero.
+        set <track> track_select <1..N> accepts a request, not a completed load.
+        set <track> play true|false; pitch -16..16 (%); nudge -1..1.
+        """
         text = arg.strip()
         if not text:
             self._print(f"Usage: {self._track_usage()}")
@@ -487,6 +499,37 @@ class HostCLI(cmd.Cmd):
             return
 
         idx = _track_to_internal(track_num)
+
+        if mode == "deck":
+            try:
+                tokens = shlex.split(text)[2:]
+                if not tokens:
+                    raise ValueError("expected bank path, status, seek <seconds>, or cue [set]")
+                action = tokens[0]
+                if action in ("status", "seek", "cue"):
+                    track = self.host.engine.tracks[idx]
+                    if track is None or track.source_type != "deck":
+                        raise ValueError(f"Track {track_num} is not a deck")
+                    if tokens == ["status"]:
+                        self._print_deck_status(track)
+                    elif action == "seek" and len(tokens) == 2:
+                        self.host.engine.deck_command(idx, "seek", float(tokens[1]))
+                        self._print("  seek accepted")
+                    elif tokens in (["cue"], ["cue", "set"]):
+                        command = "cue_set" if len(tokens) == 2 else "cue"
+                        self.host.engine.deck_command(idx, command)
+                        self._print(f"  {command} accepted")
+                    else:
+                        raise ValueError("expected status, seek <seconds>, or cue [set]")
+                else:
+                    track = self.host.load_deck(
+                        idx, str(Path(action).expanduser()),
+                        " ".join(tokens[1:]) or None)
+                    self._print(f"  track {track_num} = {track.name}")
+                    self._print_deck_status(track)
+            except Exception as error:
+                self._print(f"Error: {error}")
+            return
 
         # -- track <num> vst <path|name> [--name <label>] ----------------------
         if mode == "vst":
@@ -591,6 +634,16 @@ class HostCLI(cmd.Cmd):
         self._print(f"Error: unknown subcommand '{mode}'")
         self._print(f"Usage: {self._track_usage()}")
 
+    def _print_deck_status(self, track):
+        """Render only the daemon snapshot, never synchronizing with a worker."""
+        status = track.deck
+        for key in ("bank_path", "bank_id", "track_id", "track_title",
+                    "requested_track_id", "request_id", "state", "play",
+                    "position", "duration", "cue", "pitch", "nudge", "error"):
+            self._print(f"  {key} = {status.get(key, '(not cached)')}")
+        for ordinal, entry in enumerate(status.get("tracks", []), 1):
+            self._print(f"  {ordinal}: {entry['id']} — {entry.get('title') or entry['id']}")
+
     def _parameter_target(self, parts, *, require_master_index=False):
         """Resolve a cached plugin and leave parameter/value arguments unconsumed."""
         if not parts:
@@ -649,7 +702,11 @@ class HostCLI(cmd.Cmd):
         Examples: get 1; get 1 --group all; get 1 fx 2; get master 1 cutoff
         """
         try:
-            _, _, plugin, remaining = self._parameter_target(shlex.split(arg))
+            idx, fx_idx, plugin, remaining = self._parameter_target(shlex.split(arg))
+            if idx is not None and fx_idx is None and not remaining:
+                track = self.host.engine.tracks[idx]
+                if track.source_type == "deck":
+                    self._print_deck_status(track)
             groups = {
                 "controls": "Controls:",
                 "settings": "Plugin settings:",
@@ -685,7 +742,7 @@ class HostCLI(cmd.Cmd):
                     details = ""
                     if parameter.kind == "enum" and parameter.valid_values:
                         details = f"  (choices {', '.join(parameter.valid_values)})"
-                    elif parameter.kind == "float" and len(parameter.range) >= 2:
+                    elif parameter.kind in ("float", "int") and len(parameter.range) >= 2:
                         low, high = parameter.range[:2]
                         if low is not None and high is not None:
                             details = f"  (range {low:.4g} .. {high:.4g})"
@@ -732,7 +789,11 @@ class HostCLI(cmd.Cmd):
             return
         try:
             actual = self.host.engine.set_parameter(idx, pname, pval, fx_index=fx_idx)
-            self._print(f"  {pname} = {actual}")
+            if (idx is not None and fx_idx is None and pname == "track_select"
+                    and self.host.engine.tracks[idx].source_type == "deck"):
+                self._print(f"  track_select request accepted = {actual}; use deck status for applied selection")
+            else:
+                self._print(f"  {pname} = {actual}")
         except Exception as error:
             self._print(f"Error: {error}")
 

@@ -312,6 +312,7 @@ hardware or empty plugin/effect lists may also yield no choices.
 |---|---|
 | `track <track> vst <path\|vst_name> [--name <label>]` | Load VST instrument into track |
 | `track <track> wav <pack> <sample> [name]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into track |
+| `track <track> deck <bank.json> [name]` | Prepare a native streaming deck, initially paused |
 | `track <track> vcv <patch_name> [name]` | Load Cardinal into track from `patches/<patch_name>.vcv` |
 | `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `patches/` or an absolute path |
 | `track <track\|master> fx <path\|vst_name> [--name <label>]` | Load effect into track insert chain or master bus |
@@ -416,6 +417,95 @@ chunks are unchanged. Automatic knob mapping uses controls only, skipping
 settings, MIDI parameters, unused slots, and plugdata's global `volume`.
 The MIDI Mix fader continues to control vcpi's track gain; the separate plugdata
 volume remains accessible through `get`/`set` but does not consume a knob.
+
+### Deck Commands
+
+Decks play continuous tracks independently of Link/global transport. They are
+not the MIDI-triggered `wav` sampler. Create up to eight ordinary mixer tracks:
+
+```text
+track 1 deck /music/live-set.json Deck-A
+track 2 deck /music/live-set.json Deck-B
+audio start
+set 1 play true
+set 2 pitch -1.25
+set 2 play true
+```
+
+A music bank is a version-1 JSON manifest (separate from sequencer banks):
+
+```json
+{
+  "version": 1,
+  "id": "live-set",
+  "tracks": [
+    {"id": "opening", "path": "music/opening.wav", "title": "Opening"},
+    {"id": "second", "path": "music/second.wav", "title": "Second"}
+  ]
+}
+```
+
+Manifest order supplies 1-based selection values; stable IDs identify saved
+tracks. Bank/track IDs must be nonempty, track IDs unique, and the bank nonempty.
+Titles default to the track ID. Relative asset paths resolve against the manifest
+directory; absolute paths are accepted. Only the selected asset is decoded.
+Reopening reloads the manifest; there is no automatic rescan. Manifest and resolved
+catalog each have a 512 KiB transfer budget, with 1024-byte text fields; there is
+no 128-track limit. Large catalogs use bounded multipart IPC, not larger frames.
+
+Supported audio is mono (duplicated to stereo) or stereo WAV, including supported
+PCM/float encodings, at source rates from 8 kHz to 768 kHz. MP3, FLAC and other
+layouts/formats are rejected. Audio is streamed through bounded read-ahead storage
+and retained sinc resampling with an anti-alias prefilter, not loaded in full.
+
+| Command | Behaviour |
+|---|---|
+| `get 1` / `track 1 deck status` | Cached catalog, requested/applied identity, transport and errors |
+| `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
+| `set 1 play true` / `set 1 play false` | Resume / pause, preserving source position |
+| `set 1 pitch -1.25` | Vinyl-style speed and pitch, -16 to +16 percent |
+| `set 1 nudge 1` / `set 1 nudge 0` | Temporary speed offset (-1..+1 gives up to ±2%); release to zero |
+| `track 1 deck seek 90` | Seek in original-track seconds, bounded to track duration; retain play state |
+| `track 1 deck cue set` | Store current source position without moving |
+| `track 1 deck cue` | Recall cue and pause |
+
+Pitch and nudge are smoothed; pitch changes pitch as well as speed (no key lock).
+Selections/seek prepare outside rendering; the old track remains usable until an
+audio-side commit. Successful selection fades out, resets cue/position to zero,
+clears nudge and pauses, retaining pitch, mixer, routing and inserts. Newest
+selection wins; selecting the active entry cancels a pending selection. A failed
+load keeps current playback and reports the requested identity and error.
+
+Mute continues transport. Stopping output freezes position without changing the
+deck play flag; pending prepared changes commit when rendering resumes. EOF stops
+at duration without wrapping; Play from ended restarts at cue. Temporary shortages
+fade to silence and hold position until matching data arrives. Status progress is
+capped at 10 Hz. There is no automatic sync, beat detection, time stretching,
+scratching, reverse, looping, waveform UI or crossfader.
+
+Routed generic MIDI input uses the following local deck mapping. Route the device
+channel explicitly with `midi link <channel> <track>`, then open its input port.
+Other source types retain their usual MIDI behaviour.
+
+| MIDI message | Deck action |
+|---|---|
+| Note 60 press | Toggle play/pause |
+| Note 61 press | Recall cue and pause |
+| Note 62 press | Set cue |
+| Note 63 press/release | Hold/release negative nudge |
+| Note 64 press/release | Hold/release positive nudge |
+| CC 20, value 0..127 | Pitch linearly -16..+16 percent |
+| CC 21, value 0..127 | Nearest bank selection 1..N (7-bit resolution) |
+
+Note-off and velocity-zero note-on both release; opposing nudge holds cancel.
+Closing the input, removing its channel route or replacing the deck clears held
+nudge. MIDI Mix mute/solo buttons are unchanged and are not nudge bindings.
+Use CLI integer selection to address every entry in banks larger than MIDI's
+7-bit selection resolution.
+
+Physical listening/manual-beatmatching acceptance on Linux and macOS and
+read-ahead/deadline measurements on the intended Pi hardware remain unverified;
+hardware-free rendering does not establish live hardware suitability.
 
 ### Mixer Commands
 
@@ -763,6 +853,14 @@ helpers or action controls. WAV tracks remain path-based.
 Pure Data/plugdata tracks also use native chunks, embedding the main patch while
 retaining its original location for resolving external files. Abstractions and
 sample files must remain installed separately.
+Decks instead store an explicit `deck` payload with `bank_path`, `bank_id`,
+committed stable `track_id`, `cue` seconds and `pitch`. They do not store a VST3
+chunk for the source; insert chunks are preserved normally. Restore resolves the
+selected ID even if the manifest order changed, prepares at cue paused, and sets
+nudge to zero. Missing banks/IDs or a bank-ID mismatch are reported per track;
+unaffected tracks continue restoring. A pending selection is never persisted in
+place of the committed track.
+
 
 Format 3 stores mixer instruments under `tracks` and sequencer destinations
 under `sequences[].linked_track`. New saves write only these names. Formats 1

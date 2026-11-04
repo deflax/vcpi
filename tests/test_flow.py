@@ -65,6 +65,29 @@ class FlowTests(unittest.TestCase):
     def track_state(self):
         return self.rows('track1')[0][1]
 
+    def test_deck_titles_transport_and_midi_mapping_are_cached(self):
+        self.track.source_type = "deck"
+        self.track.deck = {
+            "track_id": "opening", "track_title": "Opening title",
+            "requested_track_id": "next", "state": "loading", "play": False,
+            "position": 12, "duration": 90, "cue": 4, "pitch": -1.25,
+            "nudge": 0, "tracks": [{"id": "opening", "title": "Opening title"}],
+        }
+        self.engine.request = Mock(side_effect=AssertionError("cache-only"))
+        snapshot = build_flow_snapshot(self.host)
+        text = render_flow_snapshot(snapshot)
+        self.assertIn("Deck: Opening title", text)
+        self.assertIn("deck paused", text)
+        rows = {row[0]: row[1] for row in self.rows("track1")}
+        self.assertEqual(rows["Deck track_id"], "opening")
+        self.assertEqual(rows["Deck requested_track_id"], "next")
+        self.assertEqual(rows["Deck selection 1"], "Opening title")
+        midi = {row[0]: row[1] for row in self.rows("midi")}
+        self.assertEqual(midi["Deck note 63"], "nudge_down")
+        self.assertEqual(midi["Deck note 64"], "nudge_up")
+        self.assertIn("pitch", midi["Deck CC 20"])
+        self.engine.request.assert_not_called()
+
     def test_output_eligibility_tracks_independent_blockers(self):
         self.assertIn('eligible', self.track_state())
         for field, value, reason in (

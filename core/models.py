@@ -21,9 +21,10 @@ class InstrumentTrack:
     muted: bool = False
     solo: bool = False
     enabled: bool = True
-    source_type: str = "plugin"  # plugin | wav | vcv | pd
+    source_type: str = "plugin"  # plugin | wav | vcv | pd | deck
     vcv_patch_path: str = ""     # .vcv patch file (when source_type == "vcv")
     pd_patch_path: str = ""      # .pd patch file (when source_type == "pd")
+    deck: dict = field(default_factory=dict)  # control-side transport/catalog cache
     generation: int = 0  # protects queued inputs from instrument replacement
     render_owner: object = field(default=None, repr=False, compare=False)
     worker_pid: int | None = None
@@ -42,6 +43,8 @@ class InstrumentTrack:
           vcv::<patch stem>       for VCV/Cardinal patches
           pd::<patch stem>        for Pure Data/plugdata patches
         """
+        if self.source_type == "deck":
+            return f"deck::{self.deck.get('bank_id', '?')}:{self.deck.get('track_title', self.name)}"
         if self.source_type == "wav":
             parts = Path(self.path).parts
             try:

@@ -18,7 +18,8 @@ from collections import deque
 from itertools import islice
 from multiprocessing.connection import wait as wait_connections
 
-from core.audio_state import capture_state, hydrate_tracks
+from core.audio_state import apply_deck_status, capture_state, hydrate_tracks
+from core.deck_bank import encode_deck_message
 from core.models import NUM_TRACKS
 from core.logging_setup import configure_logging, set_log_level
 from core.native_output import native_output, output_destination
@@ -38,7 +39,7 @@ CALLBACK_STALL_TIMEOUT = 2.0
 OWNER_SHUTDOWN_TIMEOUT = 10.0
 LIFECYCLE_OPERATIONS = frozenset({
     "load_instrument", "load_wav", "remove_instrument", "load_effect",
-    "remove_effect", "load_vcv", "load_vcv_patch", "load_pd", "load_pd_patch",
+    "remove_effect", "load_vcv", "load_vcv_patch", "load_pd", "load_pd_patch", "load_deck",
 })
 REMOTE_ERRORS = {
     cls.__name__: cls for cls in
@@ -134,6 +135,8 @@ class _OwnerRuntime:
                 self.engine.enqueue_param_change(index, payload[0], payload[1])
             else:
                 self.pending_parameters.append((index, generation, payload[0], payload[1]))
+        elif kind == "deck":
+            self.pending_parameters.append((index, generation, payload[0], payload[1], "deck"))
         elif kind == "track":
             self.engine.enqueue_track_change(index, **payload)
         elif kind == "master_gain":
@@ -232,7 +235,11 @@ class _OwnerRuntime:
         track = self.engine.tracks[index]
         track.plugin = worker.track.plugin
         track.effects = worker.track.effects
+        track.deck = worker.track.deck
         self.engine._applied_updates.extend(reply.get("updates", ()))
+        if reply.get("deck") is not None:
+            self.engine._applied_updates.append(
+                ("deck", index, self.generations[index], reply["deck"]))
         return reply.get("result")
 
     def apply_track_parameters(self):
@@ -240,10 +247,13 @@ class _OwnerRuntime:
         # mixer callback or inspect a processing plugin from the output owner.
         count = min(64, len(self.pending_parameters))
         for _ in range(count):
-            index, generation, name, value = self.pending_parameters.popleft()
+            index, generation, name, value, *kind = self.pending_parameters.popleft()
             if generation != self.generations[index]:
                 continue
             try:
+                if kind:
+                    self.track_request(index, "deck_command", action=name, value=value)
+                    continue
                 actual = self.track_request(index, "set_parameter", name=name, value=value)
                 self._pending_parameter_logs[index, name] = (
                     generation, actual, time.monotonic() + self._parameter_log_quiet_seconds)
@@ -280,6 +290,11 @@ class _OwnerRuntime:
                 continue
             worker = track.render_owner
             worker.poll_failure()
+            status = worker.poll_deck_status() if track.source_type == "deck" else None
+            if status is not None:
+                track.deck.update(status)
+                self.engine._applied_updates.append(
+                    ("deck", index, self.generations[index], status))
             fields = {"worker_pid": worker.pid, "worker_failure": worker.failure,
                       "worker_misses": worker.misses,
                       "worker_realtime": worker.realtime,
@@ -368,7 +383,7 @@ class _OwnerRuntime:
     def execute(self, operation, arguments):
         if operation in {
             "load_instrument", "load_wav", "load_vcv", "load_vcv_patch",
-            "load_pd", "load_pd_patch",
+            "load_pd", "load_pd_patch", "load_deck",
         }:
             from core.track_process import TrackWorker
 
@@ -466,6 +481,10 @@ class _OwnerRuntime:
             else:
                 forwarded = {key: value for key, value in arguments.items() if key != "track_index"}
                 result = self.track_request(index, operation, **forwarded)
+        elif operation == "deck_command":
+            result = self.track_request(arguments["track_index"], operation,
+                                        action=arguments["action"],
+                                        value=arguments.get("value", 0))
         elif operation == "set_parameters":
             index = arguments.get("track_index")
             if index is not None:
@@ -538,6 +557,8 @@ class _OwnerRuntime:
                 operation = request["operation"]
                 if operation == "load_plugin_state":
                     validate_native_message(request, CONTROL_LIMIT)
+                elif operation == "load_deck":
+                    encode_deck_message(request, CONTROL_LIMIT)
                 else:
                     _encode(request, CONTROL_LIMIT)
                 try:
@@ -814,6 +835,12 @@ class RemoteAudioEngine:
                                 if raw is not None:
                                     descriptor.raw_value = raw
                                 descriptor.string_value = str(value) if display is None else display
+                    elif kind == "deck":
+                        _, index, generation, status = update
+                        track = self.tracks[index]
+                        if track is not None and track.generation == generation:
+                            apply_deck_status(track, status)
+                            changed_tracks.add(index)
                     elif kind == "track":
                         _, index, fields = update
                         track = self.tracks[index]
@@ -897,6 +924,9 @@ class RemoteAudioEngine:
     def enqueue_param_change(self, track_index, name, value, generation=None):
         self._enqueue("parameter", track_index, (name, value), generation)
 
+    def enqueue_deck_command(self, track_index, action, value=0, generation=None):
+        self._enqueue("deck", track_index, (action, value), generation)
+
     def enqueue_track_change(self, track_index, generation=None, **fields):
         self._enqueue("track", track_index, fields, generation)
 
@@ -956,9 +986,11 @@ class RemoteAudioEngine:
             after = self._last_input
         request = {"operation": operation, "arguments": arguments, "after": after}
         message = (encode_native_message(request, CONTROL_LIMIT)
-                   if operation == "load_plugin_state" else _encode(request, CONTROL_LIMIT))
+                   if operation == "load_plugin_state" else
+                   encode_deck_message(request, CONTROL_LIMIT)
+                   if operation == "load_deck" else _encode(request, CONTROL_LIMIT))
         try:
-            if operation in {"sync_state", "load_plugin_state"}:
+            if operation in {"sync_state", "load_plugin_state", "load_deck"}:
                 reply = self._exchange_native(message, operation, timeout)
             else:
                 send_frame(self._control, message, CONTROL_LIMIT)
@@ -1006,6 +1038,10 @@ class RemoteAudioEngine:
 
     def set_parameter(self, track_index, name, value, fx_index=None):
         return self.request("set_parameter", track_index=track_index, name=name, value=value, fx_index=fx_index)
+
+    def deck_command(self, track_index, action, value=0):
+        return self.request("deck_command", track_index=track_index,
+                            action=action, value=value)
 
     def load_plugin_state(self, track_index, state, fx_index=None):
         """Load one saved native chunk and return refreshed lightweight metadata."""

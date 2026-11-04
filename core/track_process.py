@@ -16,8 +16,9 @@ import time
 import tempfile
 from multiprocessing.connection import wait as wait_connections
 
-from core.audio_state import capture_plugin
+from core.audio_state import apply_deck_status, capture_plugin
 from core.audio_deps import require_native
+from core.deck_bank import encode_deck_message
 from core.models import InstrumentTrack, NUM_TRACKS
 from core.logging_setup import configure_logging, set_log_level
 from core.native_output import native_output, output_destination
@@ -42,7 +43,7 @@ _REMOTE_ERRORS = {cls.__name__: cls for cls in (
 )}
 _LOAD_OPERATIONS = frozenset((
     "load_instrument", "load_wav", "load_vcv", "load_vcv_patch",
-    "load_pd", "load_pd_patch",
+    "load_pd", "load_pd_patch", "load_deck",
 ))
 
 
@@ -70,6 +71,9 @@ def _capture_native_plugin(plugin, values, readers, *, capture_native_state=Fals
 def _track_state(owner, index, *, capture_native_state=False):
     track = owner.engine.tracks[index]
     values, readers = {}, {}
+    if track.source_type == "deck":
+        track.deck.update(track.plugin.native.deck_status())
+        track.deck["status_time"] = time.monotonic()
     state = {
         "name": track.name,
         "path": track.path,
@@ -86,6 +90,7 @@ def _track_state(owner, index, *, capture_native_state=False):
         "source_type": track.source_type,
         "vcv_patch_path": track.vcv_patch_path,
         "pd_patch_path": track.pd_patch_path,
+        "deck": dict(track.deck),
         "generation": track.generation,
     }
     owner.engine.parameter_values = values
@@ -172,6 +177,8 @@ def _execute(owner, index, operation, arguments):
         if arguments:
             raise TypeError("sync_state takes no arguments")
         result = None
+    elif operation == "deck_command":
+        result = owner.engine.deck_command(index, **arguments)
     elif operation == "load_plugin_state":
         owner.engine.load_plugin_state(track_index=index, **arguments)
         result = None
@@ -188,7 +195,11 @@ def _execute(owner, index, operation, arguments):
     updates = list(owner.engine._applied_updates)
     owner.engine._applied_updates.clear()
     reply = {"ok": True, "result": result, "updates": updates}
-    if operation not in {"set_parameter", "set_parameters"}:
+    track = owner.engine.tracks[index]
+    if track.source_type == "deck" and operation in {"set_parameter", "set_parameters", "deck_command"}:
+        reply["deck"] = dict(track.plugin.native.deck_status())
+        reply["deck"]["status_time"] = time.monotonic()
+    if operation not in {"set_parameter", "set_parameters", "deck_command"}:
         reply["state"] = _track_state(
             owner, index, capture_native_state=operation == "sync_state")
         if operation == "load_plugin_state":
@@ -199,14 +210,14 @@ def _execute(owner, index, operation, arguments):
 
 
 def _track_owner(sample_rate, frames, index, operation, arguments,
-                transport_path, control, lifeline, output):
+                 transport_path, control, lifeline, output, status):
     with native_output(f"track {index + 1}", output):
         _run_track_owner(sample_rate, frames, index, operation, arguments,
-                        transport_path, control, lifeline)
+                         transport_path, control, lifeline, status)
 
 
 def _run_track_owner(sample_rate, frames, index, operation, arguments,
-                    transport_path, control, lifeline):
+                     transport_path, control, lifeline, status):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     configure_logging()
     owner = None
@@ -222,6 +233,12 @@ def _run_track_owner(sample_rate, frames, index, operation, arguments,
 
         backend = require_native()
         transport = backend.Transport(transport_path, frames, False)
+        if operation == "load_deck":
+            request = receive_frame(control, CONTROL_LIMIT, native_state=True)
+            if request.get("operation") != operation:
+                raise ValueError("invalid initial deck catalog envelope")
+            encode_deck_message(request, CONTROL_LIMIT)
+            arguments = request["arguments"]
         owner = PluginHost(sample_rate=sample_rate, buffer_size=frames, track_mode=True)
         loaded = getattr(owner, operation)(track_index=index, **arguments)
         owner.engine.runner = backend.TrackRunner(
@@ -232,7 +249,21 @@ def _run_track_owner(sample_rate, frames, index, operation, arguments,
             "state": _track_state(owner, index), "updates": [],
         }, STATE_LIMIT))
         ready = True
+        last_status = 0.0
         while True:
+            now = time.monotonic()
+            track = owner.engine.tracks[index]
+            if track.source_type == "deck" and now - last_status >= 0.1:
+                last_status = now
+                current = dict(track.plugin.native.deck_status())
+                current["status_time"] = now
+                track.deck.update(current)
+                # A single pending snapshot bounds memory and never stalls DSP
+                # or control if the output owner is busy staging another source.
+                try:
+                    status.put_nowait(_encode(current, CONTROL_LIMIT))
+                except queue.Full:
+                    pass
             if not control.poll(0.05):
                 continue
             request = receive_frame(control, CONTROL_LIMIT, native_state=True)
@@ -278,6 +309,8 @@ def _run_track_owner(sample_rate, frames, index, operation, arguments,
         # closed lifeline must not make the watchdog short-circuit either.
         stopping.set()
         control.close()
+        status.cancel_join_thread()
+        status.close()
         try:
             if owner is not None:
                 owner.shutdown()
@@ -302,7 +335,11 @@ class TrackWorker:
         if arguments.pop("track_index", track_index) != track_index:
             raise ValueError("load targets a different track")
         # Check message size before spawning or allocating process resources.
-        _encode({"operation": operation, "arguments": arguments}, CONTROL_LIMIT)
+        startup = {"operation": operation, "arguments": arguments}
+        initial_data = (encode_deck_message(startup, CONTROL_LIMIT)
+                        if operation == "load_deck" else None)
+        if initial_data is None:
+            _encode(startup, CONTROL_LIMIT)
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
         self.track_index = track_index
@@ -329,10 +366,13 @@ class TrackWorker:
             raise
         self._control, child_control = context.Pipe(duplex=True)
         child_lifeline, self._lifeline = context.Pipe(duplex=False)
+        self._status = context.Queue(maxsize=1)
         self._process = context.Process(
             target=_track_owner,
-            args=(sample_rate, buffer_size, track_index, operation, arguments,
-                  self.transport_path, child_control, child_lifeline, output_destination()),
+            args=(sample_rate, buffer_size, track_index, operation,
+                  {} if operation == "load_deck" else arguments,
+                  self.transport_path, child_control, child_lifeline,
+                  output_destination(), self._status),
             name=f"vcpi-track-{track_index + 1}", daemon=False,
         )
         self._io_thread = threading.Thread(target=self._io_loop,
@@ -343,7 +383,7 @@ class TrackWorker:
             child_control.close()
             child_lifeline.close()
             self._io_thread.start()
-            reply = self._exchange(None, STARTUP_TIMEOUT, wait_hook)
+            reply = self._exchange(initial_data, STARTUP_TIMEOUT, wait_hook)
             self._accept(reply)
             self.result = reply.get("result")
         except BaseException:
@@ -419,6 +459,9 @@ class TrackWorker:
                 # Gain, routing, generation and mute/solo are mixer-owned.
                 self.track.plugin = state["plugin"]
                 self.track.effects = state["effects"]
+                self.track.deck = state.get("deck", {})
+        if reply.get("deck") is not None:
+            apply_deck_status(self.track, reply["deck"])
         for update in reply.get("updates", ()):
             if update[0] != "parameter":
                 continue
@@ -456,6 +499,23 @@ class TrackWorker:
             self._rpc_active = False
             self._progress_time = time.monotonic()
 
+
+    def poll_deck_status(self):
+        """Drain the bounded latest-status channel without a control RPC."""
+        if self.track is None or self.track.source_type != "deck":
+            return None
+        latest = None
+        try:
+            while True:
+                latest = pickle.loads(self._status.get_nowait())
+        except queue.Empty:
+            pass
+        if (latest is not None
+                and latest.get("status_time", 0) > self.track.deck.get("status_time", 0)):
+            apply_deck_status(self.track, latest)
+        else:
+            latest = None
+        return latest
 
     def poll_failure(self):
         """Detect local exit/stall and reap failed children outside the callback."""
@@ -511,6 +571,7 @@ class TrackWorker:
         self._io_stop.set()
         self._lifeline.close()
         self._control.close()
+        self._status.close()
         if self._io_thread.is_alive():
             self._io_thread.join(SHUTDOWN_TIMEOUT)
         if hasattr(self.transport, "close"):

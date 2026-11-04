@@ -59,7 +59,7 @@ class RuntimeLoggingTests(unittest.TestCase):
 
 class AppliedKnobLoggingTests(unittest.TestCase):
     def runtime(self):
-        track = SimpleNamespace(plugin=None, effects=[])
+        track = SimpleNamespace(plugin=None, effects=[], deck={})
         worker = Mock(track=track, failure=None)
         worker.request.return_value = {"result": 0.75}
         track.render_owner = worker

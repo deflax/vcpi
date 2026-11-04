@@ -50,6 +50,29 @@ py::dict parameterDict(const std::vector<ParameterSnapshot>& parameters) {
         result[py::str(info.key)] = parameterDescriptor(info);
     return result;
 }
+py::dict deckDict(const DeckStatus& info) {
+    py::dict result;
+    result["bank_id"] = info.bankId;
+    result["track_id"] = info.trackId;
+    result["track_title"] = info.trackTitle;
+    result["track_select"] = info.trackSelect;
+    result["requested_track_id"] = info.requestedTrackId;
+    result["requested_track_select"] = info.requestedTrackSelect;
+    result["request_id"] = info.requestId;
+    result["state"] = info.state;
+    result["loading"] = info.loading;
+    result["ready"] = info.ready;
+    result["buffering"] = info.buffering;
+    result["ended"] = info.ended;
+    result["play"] = info.play;
+    result["position"] = info.position;
+    result["duration"] = info.duration;
+    result["cue"] = info.cue;
+    result["pitch"] = info.pitch;
+    result["nudge"] = info.nudge;
+    result["error"] = info.error;
+    return result;
+}
 py::dict realtimeDict(const RealtimeStats& info) {
     py::dict result;
     result["state"] = info.state;
@@ -136,6 +159,13 @@ PYBIND11_MODULE(_vcpi_native, module) {
             { py::gil_scoped_release release; result = plugin.setParameter(key, input); }
             return pythonScalar(result);
         }, py::arg("name"), py::arg("value"))
+        .def("deck_status", [](Plugin& plugin) {
+            DeckStatus result;
+            { py::gil_scoped_release release; result = plugin.deckStatus(); }
+            return deckDict(result);
+        })
+        .def("deck_command", &Plugin::deckCommand, py::arg("action"), py::arg("value") = 0.0,
+             py::call_guard<py::gil_scoped_release>())
         .def("load_preset", &Plugin::loadPreset, py::arg("path"), py::call_guard<py::gil_scoped_release>())
         .def("get_state", [](Plugin& plugin) {
             juce::MemoryBlock result;

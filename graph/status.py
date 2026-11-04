@@ -99,6 +99,16 @@ def render_status(host: VcpiCore) -> str:
         rows.append((f"Track {index + 1} worker",
                      f"PID {track.worker_pid}  {state}  missing blocks: {track.worker_misses}"))
         rows.append((f"Track {index + 1} realtime", format_realtime(track.worker_realtime)))
+        if track.source_type == "deck":
+            deck = track.deck
+            title = deck.get("track_title") or deck.get("track_id", "(loading)")
+            rows.append((f"Track {index + 1} deck",
+                         f"{title} | {deck.get('state', 'unknown')} | "
+                         f"{'playing' if deck.get('play') else 'paused'} | "
+                         f"{deck.get('position', 0):.2f}/{deck.get('duration', 0):.2f}s | "
+                         f"pitch {deck.get('pitch', 0):+.2f}%"))
+            if deck.get("error"):
+                rows.append((f"Track {index + 1} deck error", str(deck["error"])))
 
     rows.append(("", ""))  # spacer
 

@@ -1,9 +1,10 @@
 """Session persistence -- save and restore host state to a JSON file.
 
 Saved state includes:
-  - Per-track: source kind (plugin/wav/vcv/pd), instrument path, name, gain,
+  - Per-track: source kind (plugin/wav/deck/vcv/pd), instrument path, name, gain,
     enabled, muted, solo, insert effect paths/names, and opaque native VST3 state
   - Master effects: paths, names, and opaque native VST3 state
+  - Decks: bank locator/ID, committed stable track ID, cue and pitch; no VST chunk
   - Master gain
   - MIDI channel -> track routing
   - Link BPM and enabled state
@@ -136,7 +137,16 @@ def _snapshot_cached(host: VcpiCore) -> dict:
             "solo": track.solo,
             "effects": effects_data,
         }
-        if track.source_type != "wav":
+        if track.source_type == "deck":
+            status = track.deck
+            track_entry["deck"] = {
+                "bank_path": status["bank_path"],
+                "bank_id": status["bank_id"],
+                "track_id": status["track_id"],
+                "cue": status["cue"],
+                "pitch": status["pitch"],
+            }
+        elif track.source_type != "wav":
             track_entry["native_state"] = _saved_plugin_state(track.plugin)
         if track.source_type == "vcv" and track.vcv_patch_path:
             track_entry["vcv_patch_path"] = track.vcv_patch_path
@@ -236,12 +246,23 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
             break
         if track_data is None:
             continue
-        plugin_path = track_data.get("path")
-        if not plugin_path:
-            continue
         track_kind = track_data.get("kind", "plugin")
+        plugin_path = track_data.get("path")
+        if track_kind != "deck" and not plugin_path:
+            continue
         try:
             match track_kind:
+                case "deck":
+                    deck = track_data.get("deck")
+                    if not isinstance(deck, dict):
+                        raise ValueError("deck payload is required")
+                    for key in ("bank_path", "bank_id", "track_id"):
+                        if not isinstance(deck.get(key), str) or not deck[key].strip():
+                            raise ValueError(f"deck {key} is required")
+                    track = host.load_deck(
+                        idx, deck["bank_path"], track_data.get("name"),
+                        bank_id=deck["bank_id"], track_id=deck["track_id"],
+                        cue=deck["cue"], pitch=deck["pitch"])
                 case "wav":
                     track = host.load_wav(idx, plugin_path, track_data.get("name"))
                 case "vcv":
@@ -266,8 +287,9 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                 vcv_patch_path=track_data.get("vcv_patch_path", ""),
                 pd_patch_path=track_data.get("pd_patch_path", ""),
             )
-            _restore_plugin_state(
-                host, idx, track_data, version, wav=track_kind == "wav")
+            if track_kind != "deck":
+                _restore_plugin_state(
+                    host, idx, track_data, version, wav=track_kind == "wav")
             logger.info("[session] track %d: %s", idx + 1, track.name)
 
             for fx_data in track_data.get("effects", []):

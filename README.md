@@ -99,7 +99,7 @@ through a local Unix socket. To use it from another machine, SSH into the host
 and run `./vcpi` there.
 
 Command parsing, session files, MIDI ports, sequencing, and Ableton Link stay in
-the control process. Each track owns its VST3/Cardinal/plugdata or WAV source and insert
+the control process. Each track owns its VST3/Cardinal/plugdata, WAV sampler or deck source and insert
 effects on a native render thread. The native PortAudio callback mixes track
 audio and runs master effects. Neither the callback nor track DSP enters Python
 or acquires the GIL. Shared-memory track transport adds one block of buffering.
@@ -107,8 +107,15 @@ Loading or replacing a track does not stop unrelated tracks; read-only plugin
 commands use cached snapshots.
 
 Sessions save native VST3 state chunks for instruments, track inserts, and master
-effects; WAV tracks remain path-based. See [session commands](USAGE.md#session-commands)
+effects; WAV tracks remain path-based, while decks save bank/track identity, cue
+and pitch and restore paused. See [session commands](USAGE.md#session-commands)
 for save/restore behavior and legacy session compatibility.
+
+Native decks stream mono/stereo WAV tracks from JSON music banks for manual DJ
+beatmatching. Each has independent play/pause, vinyl-style pitch, momentary nudge,
+seek and one cue point; Link does not drive deck playback. See
+[deck commands and MIDI bindings](USAGE.md#deck-commands) for the manifest format
+and controls. There is no automatic sync, key lock, looping or crossfader.
 
 ## Repository Layout
 
@@ -414,6 +421,27 @@ vcpi> midi input 0
 `track <n> wav` resolves to `sampler/samples/<pack>/<sample>.wav` (for example,
 `sampler/samples/909/bassdrum.wav`) and plays one-shot sample voices on note-on.
 You can include or omit the `.wav` extension in `<sample>`.
+
+For continuous deck playback instead of MIDI-triggered sample voices:
+
+```text
+vcpi> track 1 deck /music/live-set.json Deck-A
+vcpi> track 2 deck /music/live-set.json Deck-B
+vcpi> audio start
+vcpi> set 1 play true
+vcpi> set 2 pitch -1.25
+vcpi> set 2 play true
+vcpi> set 2 nudge 1
+vcpi> set 2 nudge 0
+vcpi> track 2 deck cue set
+```
+
+Both decks initially load paused. Select bank entries with
+`set 1 track_select 2`; selection is asynchronous and commits paused without
+replacing the worker or inserts. Inspect `track 1 deck status` for requested
+versus applied identity and load errors. Deck streaming has hardware-free Linux
+coverage; audible Linux/macOS acceptance and intended-Pi read-ahead/deadline
+measurements are still required before claiming live-set suitability there.
 
 Built-in packs include drums (`808`, `909`) plus melodic/synth packs:
 

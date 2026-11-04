@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_formats/juce_audio_formats.h>
+#include "deck.hpp"
 #include <array>
 #include <atomic>
 #include <map>
@@ -62,6 +63,8 @@ public:
     void loadState(const std::string& data);
     void loadSavedState(const std::string& data);
     bool isEffect() const noexcept { return effect; }
+    DeckStatus deckStatus() const;
+    void deckCommand(const std::string& action, double value = 0);
     bool compatible(double rate, int size) const noexcept { return sampleRate == rate && frames == size; }
     bool tryAcquire() noexcept { return ownership.tryAcquire(); }
     void release() noexcept { ownership.release(); }
@@ -83,6 +86,7 @@ private:
     void applyState(const std::string& data);
     void loadWav(const juce::File& path);
     void renderWav(float* left, float* right, const juce::MidiBuffer& midi) noexcept;
+    ParameterSnapshot deckParameter(const std::string& key) const;
     // Declared first, destroyed last. JUCE's own scoped reference count keeps
     // the message manager alive until every plugin instance has been destroyed,
     // then shuts it down on the owner's control thread, not during C++ atexit.
@@ -94,6 +98,7 @@ private:
     bool parametersPending = false;
     PluginMetadata description;
     std::unique_ptr<juce::AudioPluginInstance> instance;
+    std::unique_ptr<Deck> deck;
     juce::AudioBuffer<float> audio;
     std::vector<ParameterInfo> parameterInfos;
     std::map<std::string, std::size_t> parameterIndex;

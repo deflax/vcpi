@@ -10,7 +10,9 @@ in place. Playback is independent of Link and global musical transport.
 
 No automatic sync, beat detection, time stretching/key lock, crossfader,
 scratching/reverse playback, waveform UI or looping is required by this design.
-This document is a proposed implementation contract, not implemented commands.
+The implementation below is now present; the original design contract is retained
+for reference. See implementation verification at the end for exercised gates
+and the remaining physical-hardware acceptance limits.
 
 ## Verified repository foundation
 
@@ -265,3 +267,35 @@ unavailable in the current Python environment, so rendered array conversion
 could not be inspected; native transport statistics verified the render. This
 checks the existing integration foundation, not any proposed deck behaviour.
 No deck implementation or automated test suite was run as part of this plan.
+
+## Implementation verification
+
+Implemented the native streaming deck, owner/control integration, headless
+commands and routed MIDI bindings, and format-3 stable-identity persistence.
+User-facing examples and bank/MIDI details are in README.md and USAGE.md.
+
+Verified on Linux/aarch64:
+
+- `python build_native.py` builds the native extension successfully.
+- Full suite with a real DragonflyRoomReverb insert enabled:
+  `DECK_TEST_EFFECT=/workspaces/vcpi-305d644615af/vst3/DragonflyRoomReverb.vst3 /tmp/vcpi-deck-venv/bin/python -m pytest -q tests`
+  produced **195 passed, 10 skipped**. Deck cases cover generated mono/stereo,
+  different source rates, PCM24/float WAV, pitch/nudge tone and cursor changes,
+  pause, seek/cue/EOF (including cue restored at duration), cancellation/failure,
+  starvation recovery, isolated decks, insert preservation, large catalogs,
+  actual routed MIDI releases/lifecycle, and paused stable-ID session restore.
+- A separate real daemon process and Unix-socket client exercised two deck
+  creations, cached get/status, typed play/pitch/nudge controls, seek/cue,
+  save, reordered-manifest restore and clean shutdown. With output stopped,
+  prepared seek/selection commits correctly remain pending until rendering.
+- A throwaway standalone C++ render harness instrumented allocation/deallocation
+  and file-operation calls while rendering and issuing pitch/nudge/seek/cue and
+  selection controls: **0 render allocations, 0 frees, 0 file-I/O calls**.
+- A sparse two-hour stereo 48 kHz WAV (1,382,400,044 logical bytes) reported the
+  correct 7200-second duration. Adding its deck alongside a short-file deck
+  increased resident memory by **6272 KiB**, rather than loading track duration.
+
+Physical audible/manual-beatmatching acceptance is **not verified**: this
+workspace has no audio device. macOS listening and intended-Pi read-ahead/CPU/
+deadline measurements also remain unperformed. No live-hardware suitability
+claim follows from the hardware-free results above.

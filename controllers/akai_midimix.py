@@ -241,6 +241,8 @@ class MidiMixController:
             if not parameter.valid_values:
                 return
             mapped = parameter.valid_values[round(value / 127.0 * hi)]
+        elif parameter.kind == "int":
+            mapped = round(lo + (value / 127.0) * (hi - lo))
         else:
             mapped = lo + (value / 127.0) * (hi - lo)
         self._engine.enqueue_param_change(

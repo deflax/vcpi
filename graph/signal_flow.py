@@ -14,6 +14,7 @@ from pathlib import Path
 from controllers.akai_midimix import (
     FADER_CCS, KNOB_CCS, MASTER_FADER_CC, MUTE_NOTES, SOLO_NOTES,
 )
+from controllers.midi_input import DECK_NOTE_BINDINGS, DECK_PITCH_CC, DECK_SELECT_CC
 from core.models import NUM_TRACKS
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
 from graph.plugin_info import plugin_metadata_rows
@@ -74,8 +75,11 @@ def _target(tracks, index) -> str:
 def _chain(track) -> str:
     if track is None:
         return "(empty)"
-    return " -> ".join([_plugin_name(track.plugin),
-                        *[_plugin_name(effect) for effect in track.effects]])
+    source = _plugin_name(track.plugin)
+    if track.source_type == "deck":
+        status = track.deck
+        source = f"Deck: {status.get('track_title') or status.get('track_id', '(loading)')}"
+    return " -> ".join([source, *[_plugin_name(effect) for effect in track.effects]])
 
 
 def _parameter_detail(plugin, name, parameter) -> str:
@@ -147,6 +151,8 @@ def _track_state(track, any_solo, running, failure, master_gain) -> str:
         blocked.append("solo-excluded")
     if track.gain == 0:
         blocked.append("track gain zero")
+    if track.source_type == "deck" and not track.deck.get("play", False):
+        blocked.append("deck paused")
     if master_gain == 0:
         blocked.append("master gain zero")
     return ("blocked: " + "; ".join(blocked) if blocked else
@@ -253,6 +259,15 @@ def _build_flow_snapshot(host, engine) -> dict:
          f"{'running' if sequencer_running else 'stopped'}; one bar = 4 beats; {timing}"],
         ["Clock", clock, "peer tempo/activity not queried"],
     ])
+    midi_rows.extend([
+        [f"Deck note {note}", action,
+         "routed generic input only; press once, note-off/velocity-zero releases nudge"]
+        for note, action in DECK_NOTE_BINDINGS.items()
+    ])
+    midi_rows.extend([
+        [f"Deck CC {DECK_PITCH_CC}", "pitch -16 .. +16%", "routed generic input; linear 0-127"],
+        [f"Deck CC {DECK_SELECT_CC}", "track_select 1 .. N", "scaled 0-127; CLI selects every ordinal"],
+    ])
     for index in range(NUM_SEQ_BANKS):
         bank = banks[index] if index < len(banks) else None
         target = bank.linked_track if bank is not None else None
@@ -315,6 +330,15 @@ def _build_flow_snapshot(host, engine) -> dict:
                  f"failure: {track.worker_failure or 'none'}; missed blocks: {track.worker_misses}"],
                 ["Worker buffering", f"{track.buffering_samples} samples", "cached worker configuration"],
             ])
+            if track.source_type == "deck":
+                for field in ("bank_id", "track_id", "track_title", "requested_track_id",
+                              "request_id", "state", "play", "position", "duration",
+                              "cue", "pitch", "nudge", "error"):
+                    rows.append([f"Deck {field}", _value(track.deck.get(field, "(not cached)")),
+                                 "cached transport; independent of Link"])
+                for ordinal, entry in enumerate(track.deck.get("tracks", []), 1):
+                    rows.append([f"Deck selection {ordinal}", entry.get("title") or entry["id"],
+                                 entry["id"]])
             if track.plugin is not None:
                 rows.extend([field, value, "cached instrument metadata"]
                             for field, value in plugin_metadata_rows(track.plugin)

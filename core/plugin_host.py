@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import re
 import time
@@ -22,11 +23,15 @@ class NativePlugin:
     def __init__(self, path, sample_rate, frames, kind):
         from types import SimpleNamespace
 
-        path = Path(path).expanduser().resolve()
-        if not path.exists():
-            raise FileNotFoundError(f"plugin or WAV not found: {path}")
+        if kind == "deck":
+            native_path = path
+        else:
+            path = Path(path).expanduser().resolve()
+            if not path.exists():
+                raise FileNotFoundError(f"plugin or WAV not found: {path}")
+            native_path = str(path)
         object.__setattr__(self, "native", deps.require_native().Plugin(
-            str(path), sample_rate, frames, kind))
+            native_path, sample_rate, frames, kind))
         object.__setattr__(self, "_kind", kind)
         object.__setattr__(self, "_descriptor_type", SimpleNamespace)
         object.__setattr__(self, "_parameter_names", frozenset(self.native.parameters()))
@@ -62,8 +67,8 @@ class NativePlugin:
         return result
 
     def get_state(self) -> bytes | None:
-        """Capture a native VST3 chunk; WAV instruments persist only their path."""
-        return None if self._kind == "wav" else self.native.get_state()
+        """Capture VST3 chunks only; file-backed sources persist explicit fields."""
+        return None if self._kind in {"wav", "deck"} else self.native.get_state()
 
     def load_state(self, state):
         result = self.native.load_state(state)
@@ -343,6 +348,26 @@ class PluginHost:
         )
         self.engine.tracks[track_index] = track
         logger.info("[WAV] track %d loaded from %s", track_index + 1, resolved)
+        return track
+
+    def load_deck(self, track_index: int, catalog: str,
+                  name: Optional[str] = None) -> InstrumentTrack:
+        """Prepare the selected bank asset before publishing any replacement."""
+        from core.deck_bank import validate_catalog
+
+        if not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
+        bank = json.loads(validate_catalog(catalog))
+        plugin = NativePlugin(catalog, self.sample_rate, self.buffer_size, "deck")
+        object.__setattr__(plugin, "_vcpi_path", bank["bank_path"])
+        self._set_plugin_info_type(plugin, "Deck")
+        deck = dict(plugin.native.deck_status())
+        deck.update(bank_path=bank["bank_path"], bank_id=bank["id"],
+                    tracks=[{"id": item["id"], "title": item["title"]}
+                            for item in bank["tracks"]])
+        track = InstrumentTrack(name=name or bank["id"], path=bank["bank_path"],
+                                plugin=plugin, source_type="deck", deck=deck)
+        self.engine.tracks[track_index] = track
         return track
 
     def remove_instrument(self, track_index: int) -> InstrumentTrack:

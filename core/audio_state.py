@@ -96,6 +96,8 @@ class PluginSnapshot:
             and self.name.casefold().replace(" ", "") in {"plugdata", "plugdata-fx"}
         )
         for name, parameter in self.parameter_items("controls"):
+            if self.info_type == "Deck" and name == "nudge":
+                continue
             if skip_volume and name == "volume":
                 continue
             yield name, parameter
@@ -182,6 +184,24 @@ def capture_plugin(plugin, values, readers, *, capture_native_state=False):
     return snapshot
 
 
+def apply_deck_status(track, status):
+    """Refresh transport and typed parameter caches from one applied snapshot."""
+    track.deck.update(status)
+    plugin = track.plugin
+    for name in ("track_select", "play", "pitch", "nudge"):
+        if name not in status:
+            continue
+        value = status[name]
+        plugin.values[name] = value
+        descriptor = plugin.parameters.get(name)
+        if descriptor is not None:
+            descriptor.string_value = str(value)
+            if len(descriptor.range) == 2:
+                low, high = descriptor.range
+                if low is not None and high is not None and high > low:
+                    descriptor.raw_value = (float(value) - low) / (high - low)
+
+
 def capture_state(owner, generations, epoch, devices, cached_master_effects=None,
                   *, capture_native_state=False):
     """Copy remote track state; inspect native plugins only when stopped."""
@@ -214,6 +234,7 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
             "source_type": track.source_type,
             "vcv_patch_path": track.vcv_patch_path,
             "pd_patch_path": track.pd_patch_path,
+            "deck": dict(track.deck),
             "generation": generations[index],
             "worker_pid": track.worker_pid,
             "worker_failure": track.worker_failure,

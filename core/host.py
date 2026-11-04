@@ -155,6 +155,10 @@ class VcpiCore:
 
     # -- plugin management ---------------------------------------------------
 
+    def _clear_deck_holds(self, *, track_index=None, channel=None):
+        for controller in self.midi_inputs:
+            controller.clear_deck_holds(track_index=track_index, channel=channel)
+
     def _loaded_track(self, track_index: int) -> InstrumentTrack:
         track = self.engine.tracks[track_index]
         if track is None:
@@ -166,13 +170,29 @@ class VcpiCore:
     def load_instrument(self, track_index: int, path: str,
                         name: Optional[str] = None) -> InstrumentTrack:
         """Stage a native track process and return its published cached state."""
+        self._clear_deck_holds(track_index=track_index)
         self.engine.request("load_instrument", track_index=track_index, path=path, name=name)
         return self._loaded_track(track_index)
 
     def load_wav(self, track_index: int, wav_path: str,
                  name: Optional[str] = None) -> InstrumentTrack:
         """Stage a sampler track process and return its published cached state."""
+        self._clear_deck_holds(track_index=track_index)
         self.engine.request("load_wav", track_index=track_index, wav_path=wav_path, name=name)
+        return self._loaded_track(track_index)
+
+    def load_deck(self, track_index: int, bank_path: str,
+                  name: Optional[str] = None, *, track_id=None, bank_id=None,
+                  cue=0, pitch=0) -> InstrumentTrack:
+        """Validate a bank on the control side and stage its saved selection."""
+        from core.deck_bank import load_bank
+
+        if not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
+        catalog = load_bank(bank_path, track_id=track_id, bank_id=bank_id,
+                            cue=cue, pitch=pitch)
+        self._clear_deck_holds(track_index=track_index)
+        self.engine.request("load_deck", track_index=track_index, catalog=catalog, name=name)
         return self._loaded_track(track_index)
 
     def remove_instrument(self, track_index: int) -> InstrumentTrack:
@@ -182,6 +202,7 @@ class VcpiCore:
         track = self.engine.tracks[track_index]
         if track is None:
             raise ValueError(f"Track {track_index + 1} is already empty")
+        self._clear_deck_holds(track_index=track_index)
         self.engine.request("remove_instrument", track_index=track_index)
         self.midimix.invalidate_param_cache(track_index)
         return track
@@ -200,6 +221,7 @@ class VcpiCore:
     def load_vcv(self, track_index: int, vcv_path: str,
                  cardinal_path: Optional[str] = None,
                  name: Optional[str] = None) -> tuple[InstrumentTrack, str, str]:
+        self._clear_deck_holds(track_index=track_index)
         result = self.engine.request(
             "load_vcv", track_index=track_index, vcv_path=vcv_path,
             cardinal_path=cardinal_path, name=name,
@@ -209,6 +231,7 @@ class VcpiCore:
     def load_vcv_patch(self, track_index: int, patch_name: str,
                        cardinal_path: Optional[str] = None,
                        name: Optional[str] = None) -> tuple[InstrumentTrack, str, str, Path]:
+        self._clear_deck_holds(track_index=track_index)
         result = self.engine.request(
             "load_vcv_patch", track_index=track_index, patch_name=patch_name,
             cardinal_path=cardinal_path, name=name,
@@ -222,6 +245,7 @@ class VcpiCore:
                 plugdata_path: Optional[str] = None,
                 name: Optional[str] = None) -> tuple[InstrumentTrack, str, str]:
         """Stage a plugdata patch and publish only after successful import."""
+        self._clear_deck_holds(track_index=track_index)
         result = self.engine.request(
             "load_pd", track_index=track_index, pd_path=pd_path,
             plugdata_path=plugdata_path, name=name,
@@ -231,6 +255,7 @@ class VcpiCore:
     def load_pd_patch(self, track_index: int, patch_name: str,
                       plugdata_path: Optional[str] = None,
                       name: Optional[str] = None) -> tuple[InstrumentTrack, str, str, Path]:
+        self._clear_deck_holds(track_index=track_index)
         result = self.engine.request(
             "load_pd_patch", track_index=track_index, patch_name=patch_name,
             plugdata_path=plugdata_path, name=name,
@@ -243,9 +268,11 @@ class VcpiCore:
     # -- routing -------------------------------------------------------------
 
     def route(self, midi_channel: int, track_index: int):
+        self._clear_deck_holds(channel=midi_channel)
         self.engine.route(midi_channel, track_index)
 
     def unroute(self, midi_channel: int):
+        self._clear_deck_holds(channel=midi_channel)
         self.engine.unroute(midi_channel)
 
     # -- MIDI controllers ----------------------------------------------------

@@ -86,6 +86,7 @@ class AudioEngine:
             raise ValueError(f"track must be 1-{NUM_TRACKS}")
         previous = self.channel_map.get(midi_channel)
         if previous is not None and self.tracks[previous] is not None:
+            self._clear_deck_nudge(previous)
             self.tracks[previous].midi_channels.discard(midi_channel)
         self.channel_map[midi_channel] = track_index
         if self.tracks[track_index] is not None:
@@ -94,7 +95,17 @@ class AudioEngine:
     def unroute(self, midi_channel):
         index = self.channel_map.pop(midi_channel, None)
         if index is not None and self.tracks[index] is not None:
+            self._clear_deck_nudge(index)
             self.tracks[index].midi_channels.discard(midi_channel)
+
+    def _clear_deck_nudge(self, index):
+        track = self.tracks[index]
+        if track.source_type != "deck":
+            return
+        if track.render_owner is not None:
+            track.render_owner.request("set_parameter", name="nudge", value=0)
+        else:
+            self.set_parameter(index, "nudge", 0)
 
     def _control_track(self, index):
         if not isinstance(index, int) or not 0 <= index < NUM_TRACKS:
@@ -179,7 +190,11 @@ class AudioEngine:
             self._pending_gain_logs.pop(index, None)
             return retired
         if operation == "parameter":
-            index, fx_index, name, value = arguments
+            index, fx_index, name, value, *guard = arguments
+            if guard and guard[0] is not None:
+                current = self.tracks[index]
+                if current is None or current.generation != guard[0]:
+                    return
             if index is None:
                 if fx_index is None:
                     raise ValueError("master parameter requires an effect index")
@@ -208,6 +223,17 @@ class AudioEngine:
                 self._applied_updates.append(
                     ("parameter", index, fx_index, name, actual, raw, display))
             return actual
+        if operation == "deck":
+            index, action, value, generation = arguments
+            track = self._control_track(index)
+            if generation is not None and generation != track.generation:
+                return
+            if track.source_type != "deck":
+                raise ValueError(f"track {index + 1} is not a deck")
+            if track.render_owner is not None:
+                return track.render_owner.request(
+                    "deck_command", action=action, value=value).get("result")
+            return track.plugin.native.deck_command(action, value)
         if operation == "barrier":
             if self.control_error is not None:
                 raise self.control_error
@@ -330,6 +356,12 @@ class AudioEngine:
     def set_parameter(self, track_index, name, value, fx_index=None):
         return self._submit_control("parameter", (track_index, fx_index, name, value), True)
 
+    def deck_command(self, track_index, action, value=0):
+        return self._submit_control("deck", (track_index, action, value, None), True)
+
+    def enqueue_deck_command(self, track_index, action, value=0, generation=None):
+        self._submit_control("deck", (track_index, action, value, generation), False)
+
     def load_plugin_state(self, track_index, state, fx_index=None):
         """Restore an opaque chunk on its native control owner."""
         from core.state_transport import validate_native_state
@@ -364,8 +396,10 @@ class AudioEngine:
     def set_master_gain(self, value):
         return self._submit_control("master_gain", (value,), True)
 
-    def enqueue_param_change(self, track_index, param_name, value, fx_index=None):
-        self._submit_control("parameter", (track_index, fx_index, param_name, value), False)
+    def enqueue_param_change(self, track_index, param_name, value, fx_index=None,
+                             generation=None):
+        self._submit_control("parameter",
+                             (track_index, fx_index, param_name, value, generation), False)
 
     def enqueue_track_change(self, index, **fields):
         self._submit_control("track", (index, fields), False)

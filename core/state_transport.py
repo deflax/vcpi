@@ -1,7 +1,8 @@
-"""Bounded multipart control frames for explicit opaque plugin-state transfers.
+"""Bounded multipart control frames for plugin state and resolved deck catalogs.
 
-Ordinary RPC frames retain their existing limits. Only state capture/load may
-use the separate, finite native-state allowance; each pipe frame stays bounded.
+Ordinary RPC frames retain their existing limits. State capture/load has a
+separate finite native-state allowance; deck construction validates its own
+smaller catalog budget before reusing framing. Each pipe frame stays bounded.
 """
 
 import pickle

@@ -28,7 +28,7 @@ class CompletionTests(unittest.TestCase):
         }, values={"cutoff": 1000.0, "bypass": False, "mode": "Quiet Mode"})
         self.effect = PluginSnapshot(2, parameters={"mix": ParameterSnapshot()})
         self.master = PluginSnapshot(3, parameters={"enabled": ParameterSnapshot(kind="bool")})
-        self.track = SimpleNamespace(plugin=self.instrument, effects=[self.effect])
+        self.track = SimpleNamespace(plugin=self.instrument, effects=[self.effect], source_type="plugin")
         self.forbidden = Mock(side_effect=AssertionError("completion requested live state or mutation"))
         self.engine = SimpleNamespace(
             tracks=[self.track] + [None] * (NUM_TRACKS - 1),
@@ -131,7 +131,7 @@ class CompletionTests(unittest.TestCase):
                 ("ableton ", {"link", "cut"}),
                 ("debug ", {"on", "off"}),
                 ("track master ", {"fx"}),
-                ("track 8 ", {"vst", "wav", "vcv", "pd", "fx", "clear"})):
+                ("track 8 ", {"vst", "wav", "deck", "vcv", "pd", "fx", "clear"})):
             self.assertEqual(set(self.matches(before)), expected)
         for before in ("midi link 17 ", "midi link 0 ", "seq link 0 ",
                        "seq link 17 ", "track 9 ", "track master clear ",

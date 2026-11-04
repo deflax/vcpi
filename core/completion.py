@@ -246,6 +246,12 @@ def complete_line(cli: HostCLI, before: str) -> dict:
                            replace=rest_start + plugin_start)
         if target == "master":
             return empty
+        if mode == "deck":
+            if len(args) == 2:
+                return choices(("status", "seek", "cue"))
+            if args[2:] == ["cue"]:
+                return choices(("set",))
+            return empty
         if mode == "vcv" and len(args) == 2:
             return choices(asset_tokens(cli._vcv_patch_names()))
         if mode == "wav":
@@ -273,7 +279,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         else:
             target_choices = []
         try:
-            _, _, plugin, remaining = cli._parameter_target(
+            track_index, fx_index, plugin, remaining = cli._parameter_target(
                 args, require_master_index=command == "set")
         except (ValueError, IndexError):
             return choices(target_choices)
@@ -299,6 +305,12 @@ def complete_line(cli: HostCLI, before: str) -> dict:
             if parameter is not None and plugin.parameter_group(remaining[0]) == "unused":
                 return empty
             if parameter is not None:
+                if (remaining[0] == "track_select" and track_index is not None
+                        and fx_index is None):
+                    track = cli.host.engine.tracks[track_index]
+                    if track.source_type == "deck":
+                        return choices(str(index) for index in
+                                       range(1, len(track.deck.get("tracks", [])) + 1))
                 if parameter.kind == "bool":
                     return choices(("true", "false"))
                 if parameter.kind == "enum":
