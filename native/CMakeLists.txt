@@ -1,4 +1,39 @@
 cmake_minimum_required(VERSION 3.22)
+# Resolve the SDK before project() initializes C, C++, and Objective-C compilers.
+# CMake 4 no longer chooses a default sysroot, and non-Apple Clang may need one.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    if(EXISTS "${CMAKE_OSX_SYSROOT}/usr/include/assert.h"
+            AND EXISTS "${CMAKE_OSX_SYSROOT}/usr/include/TargetConditionals.h")
+        set(vcpi_macos_sdk "${CMAKE_OSX_SYSROOT}")
+    elseif(NOT "$ENV{SDKROOT}" STREQUAL "")
+        set(vcpi_macos_sdk "$ENV{SDKROOT}")
+    else()
+        set(vcpi_macos_sdk_name macosx)
+        if(CMAKE_OSX_SYSROOT AND NOT IS_ABSOLUTE "${CMAKE_OSX_SYSROOT}")
+            set(vcpi_macos_sdk_name "${CMAKE_OSX_SYSROOT}")
+        endif()
+        execute_process(
+            COMMAND xcrun --sdk "${vcpi_macos_sdk_name}" --show-sdk-path
+            OUTPUT_VARIABLE vcpi_macos_sdk
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_VARIABLE vcpi_macos_sdk_error
+            RESULT_VARIABLE vcpi_macos_sdk_result)
+        if(NOT vcpi_macos_sdk_result STREQUAL "0" OR vcpi_macos_sdk STREQUAL "")
+            message(FATAL_ERROR
+                "Cannot locate the macOS SDK: ${vcpi_macos_sdk_error}\n"
+                "Install Apple's command-line tools with xcode-select --install "
+                "and check xcrun --sdk macosx --show-sdk-path.")
+        endif()
+    endif()
+    if(NOT EXISTS "${vcpi_macos_sdk}/usr/include/assert.h"
+            OR NOT EXISTS "${vcpi_macos_sdk}/usr/include/TargetConditionals.h")
+        message(FATAL_ERROR
+            "macOS SDK '${vcpi_macos_sdk}' is missing assert.h or TargetConditionals.h. "
+            "Check SDKROOT and xcode-select, and install or repair Apple's command-line tools.")
+    endif()
+    # Refresh obsolete cached SDK paths without discarding fetched dependencies.
+    set(CMAKE_OSX_SYSROOT "${vcpi_macos_sdk}" CACHE PATH "macOS SDK" FORCE)
+endif()
 project(vcpi_native LANGUAGES C CXX)
 if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "vcpi native audio supports Linux and macOS")

@@ -26,6 +26,18 @@ xcode-select --install
 brew install python cmake git
 ```
 
+The native build resolves the macOS SDK with `xcrun` before initializing the
+compilers, including when an existing build cache has an empty or obsolete
+sysroot. A CMake `CMAKE_OSX_SYSROOT` containing the required headers takes
+precedence, followed by `SDKROOT`, then SDK discovery through `xcrun`. SDK names
+passed as `CMAKE_OSX_SYSROOT` are also resolved through `xcrun`.
+If compilation reports missing SDK headers such as `TargetConditionals.h` or
+`assert.h`, check `xcrun --sdk macosx --show-sdk-path` and that the reported SDK
+still exists. After an Xcode/command-line-tools update, repair the active
+developer directory with `xcode-select` if necessary, and unset an obsolete
+`SDKROOT`. Cached SDK paths missing the required headers are refreshed automatically.
+Then rerun `./vcpid`; deleting downloaded build dependencies is not required.
+
 ### Quick start (from repo root)
 
 ```bash
