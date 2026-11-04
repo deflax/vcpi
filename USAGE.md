@@ -143,8 +143,13 @@ plugdata/Pure Data helpers:
   slot intact. MIDI routing remains explicit: `midi link <ch> <slot>`.
 - Patches must be UTF-8 Pure Data files, at most 16 MiB. Use MIDI objects such as
   `notein` and audio output such as `dac~`; there is no external audio-input path
-  into an instrument slot. The included `plugdata-midi-sine` patch is a
-  monophonic example. `plugdata-poly-pad` is a self-contained eight-voice stereo
+  into an instrument slot. The included `sine` patch is a velocity-sensitive
+  monophonic sine instrument with 5 ms fades and a full-velocity peak of 0.6.
+  `classic-subtractive-synth` keeps the tutorial's oversampled oscillator and
+  `bob~` filter, with MIDI input and a self-contained amplitude/filter envelope
+  (5 ms attack, 150 ms decay, 65% sustain, 180 ms release). Neither requires
+  GUI interaction or the tutorial's `output~` / `adsr` abstractions.
+  `poly-pad` is a self-contained eight-voice stereo
   pad with oldest-note stealing, velocity sensitivity, detuned saw oscillators,
   a sine body, and a 1.8 kHz low-pass filter. Its squared amplitude envelope has
   an 800 ms attack and 2200 ms release; hold notes for at least a second to hear
@@ -158,7 +163,7 @@ plugdata/Pure Data helpers:
   Custom externals must be supported by the installed plugdata build.
 
 ```text
-slot 1 pd plugdata-midi-sine
+slot 1 pd sine
 midi link 1 1
 audio start
 note 1 60 100 500
@@ -167,22 +172,37 @@ note 1 60 100 500
 Load the polyphonic pad and play it from MIDI channel 1:
 
 ```text
-slot 1 pd plugdata-poly-pad
+slot 1 pd poly-pad
 midi link 1 1
 audio start
 note 1 60 100 3000
 ```
 
-Open `patches/plugdata-poly-pad.pd` in Pure Data or plugdata to edit the sound.
+Open `patches/poly-pad.pd` in Pure Data or plugdata to edit the sound.
 Each `pd voice-*` subpatch contains its oscillator detuning (`* 0.997` and
 `* 1.003`), filter (`lop~ 1800`), attack (`pack f 800`), release (`0 2200`),
 and output gain (`*~ 0.09`). Apply sound changes to all eight voices.
 The pad's output is 6 dB louder than the original example while retaining
-headroom for chords. Reload it with `slot 1 pd plugdata-poly-pad` after updating
+headroom for chords. Reload it with `slot 1 pd poly-pad` after updating
 the file; a running instance or saved session can still contain the older patch.
 In standalone Pure Data, enable DSP and configure a MIDI input; vcpi handles
 audio processing when hosted in plugdata. The patch itself accepts all MIDI
 channels, so use vcpi's routing to select which channel reaches the slot.
+
+For short sequencer notes, use `sine` or `classic-subtractive-synth` rather
+than the pad's slow swell. For example:
+
+```text
+slot 1 pd classic-subtractive-synth
+audio start
+note 1 60 127 100
+```
+
+Both monophonic patches accept note-on/note-off on all MIDI channels and replace
+the current note when a newer note arrives. Releasing a stolen older note does
+not stop the newer one. Use `midi link <ch> <slot>` for external MIDI routing,
+or `seq link <bank> <slot>` for vcpi's internal sequencer. Reload a patch after
+updating its file; previously saved sessions retain their embedded old version.
 
 Examples:
 

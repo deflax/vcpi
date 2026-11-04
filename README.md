@@ -334,7 +334,7 @@ for your OS/architecture into `vst3/`, or set `PLUGDATA_VST3_PATH` to the bundle
 The bundled plugin fetch scripts do not install it.
 
 ```text
-vcpi> slot 1 pd plugdata-midi-sine
+vcpi> slot 1 pd sine
 vcpi> midi link 1 1
 vcpi> audio start
 vcpi> note 1 60 100 500
