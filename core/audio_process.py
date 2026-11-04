@@ -83,6 +83,8 @@ def _discover_devices():
 class _OwnerRuntime:
     """Output dispatcher; only native master/device edits quiesce the stream."""
 
+    _parameter_log_quiet_seconds = 0.3
+
     def __init__(self, owner, control, inputs, updates, cancelled):
         self.owner = owner
         self.engine = owner.engine
@@ -97,6 +99,7 @@ class _OwnerRuntime:
         self.update_serial = 0
         self.devices = _discover_devices()
         self.pending_parameters = deque()
+        self._pending_parameter_logs = {}
         self.master_snapshots = []
         self._last_track_health = 0.0
         self._last_output_realtime = None
@@ -241,11 +244,26 @@ class _OwnerRuntime:
             if generation != self.generations[index]:
                 continue
             try:
-                self.track_request(index, "set_parameter", name=name, value=value)
+                actual = self.track_request(index, "set_parameter", name=name, value=value)
+                self._pending_parameter_logs[index, name] = (
+                    generation, actual, time.monotonic() + self._parameter_log_quiet_seconds)
             except Exception as error:
                 worker = self._track_worker(index)
                 worker.failure = f"parameter update failed: {error}"
         self.send_updates()
+        self._flush_parameter_logs()
+
+    def _flush_parameter_logs(self, *, force=False):
+        now = time.monotonic()
+        for (index, name), (generation, actual, deadline) in tuple(
+                self._pending_parameter_logs.items()):
+            if generation != self.generations[index]:
+                del self._pending_parameter_logs[index, name]
+                continue
+            if not force and now < deadline:
+                continue
+            logger.info("track %d %s -> %s (applied)", index + 1, name, actual)
+            del self._pending_parameter_logs[index, name]
 
     def publish_track_health(self):
         now = time.monotonic()
@@ -293,6 +311,7 @@ class _OwnerRuntime:
                 else _encode(reply, STATE_LIMIT))
 
     def shutdown_tracks(self):
+        self._flush_parameter_logs(force=True)
         for index, track in enumerate(self.engine.tracks):
             if track is not None and track.render_owner is not None:
                 try:

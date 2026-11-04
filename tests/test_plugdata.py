@@ -233,6 +233,74 @@ class PlugdataPatchTests(unittest.TestCase):
             np.linalg.norm(actual_spectrum - expected_spectrum)
             / np.linalg.norm(expected_spectrum), 0.05)
 
+    def test_poly_pad_controls_change_every_voice_and_survive_native_restore(self):
+        bundle = self.plugdata_bundle()
+        directory = self.temporary_directory()
+        source = Path(__file__).resolve().parents[1] / "patches" / "poly-pad.pd"
+        patch = directory / source.name
+        patch.write_bytes(source.read_bytes())
+        plugin = NativePlugin(str(bundle), 44100, 512, "instrument")
+        plugin.load_preset(str(patch))
+        transport, runner = self.runner(plugin, directory, "pad")
+        snapshot = capture_plugin(plugin, {}, {})
+        self.assertEqual([name for name, _ in snapshot.knob_parameter_items()],
+                         ["cutoff", "attack", "release"])
+        for name, default, bounds in (
+            ("cutoff", 1800, (20, 12000)),
+            ("attack", 800, (1, 5000)),
+            ("release", 2200, (1, 10000)),
+        ):
+            self.assertEqual(snapshot.parameters[name].range, bounds)
+            self.assertAlmostEqual(snapshot.values[name], default, delta=0.01)
+
+        def rms(audio):
+            self.assertTrue(np.isfinite(audio).all())
+            return float(np.sqrt(np.mean(audio ** 2)))
+
+        def render_note(note, *, cutoff=1800, attack=1, release=1):
+            setattr(plugin, "cutoff", cutoff)
+            setattr(plugin, "attack", attack)
+            setattr(plugin, "release", release)
+            transport.send_midi(bytes((0x90, note, 100)))
+            held = np.concatenate([runner.render_once() for _ in range(24)])
+            transport.send_midi(bytes((0x80, note, 0)))
+            tail = np.concatenate([runner.render_once() for _ in range(64)])
+            # Clear the tail before another voice/setting is measured.
+            setattr(plugin, "release", 1)
+            transport.send_midi(bytes((0x80, note, 0)))
+            self.peak(runner, blocks=192)
+            return rms(held[:4096]), rms(held[-4096:]), rms(tail[-4096:])
+
+        # Complete a full eight-voice allocation cycle for each setting, so no
+        # control can pass merely because it reaches a subset of the voices.
+        baseline = {note: render_note(note) for note in range(60, 68)}
+        for name, value in (("attack", 3000), ("cutoff", 100), ("release", 2000)):
+            for note in range(60, 68):
+                with self.subTest(parameter=name, note=note):
+                    early, sustained, tail = render_note(note, **{name: value})
+                    fast, bright, short_tail = baseline[note]
+                    if name == "attack":
+                        self.assertLess(early, fast * 0.1)
+                    elif name == "cutoff":
+                        self.assertGreater(bright, sustained * 1.5)
+                    else:
+                        self.assertLess(short_tail, tail * 0.01)
+
+        values = {"cutoff": 950.0, "attack": 350.0, "release": 1700.0}
+        for name, value in values.items():
+            setattr(plugin, name, value)
+        # Production track RPCs order state capture through this barrier.
+        runner.barrier()
+        saved = plugin.get_state()
+        patch.unlink()
+        restored = NativePlugin(str(bundle), 44100, 512, "instrument")
+        restored.load_saved_state(saved)
+        restored_snapshot = capture_plugin(restored, {}, {})
+        self.assertEqual([name for name, _ in restored_snapshot.knob_parameter_items()],
+                         list(values))
+        for name, value in values.items():
+            self.assertAlmostEqual(restored_snapshot.values[name], value, delta=0.01)
+
     def test_invalid_patch_is_rejected_without_replacing_live_voice(self):
         bundle = self.plugdata_bundle()
         directory = self.temporary_directory()

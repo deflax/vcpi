@@ -181,10 +181,21 @@ audio start
 note 1 60 100 3000
 ```
 
-Open `patches/poly-pad.pd` in Pure Data or plugdata to edit the sound.
-Each `pd voice-*` subpatch contains its oscillator detuning (`* 0.997` and
-`* 1.003`), filter (`lop~ 1800`), attack (`pack f 800`), release (`0 2200`),
-and output gain (`*~ 0.09`). Apply sound changes to all eight voices.
+`poly-pad` exposes three plugdata automation controls, shared by all eight voices:
+
+| MIDI Mix knob | Parameter | Default | Range |
+|---|---|---|---|
+| 1 | `cutoff` | 1800 Hz | 20–12000 Hz |
+| 2 | `attack` | 800 ms | 1–5000 ms |
+| 3 | `release` | 2200 ms | 1–10000 ms |
+
+For example, `set 1 cutoff 950` changes the pad's filter and
+`set 1 attack 350` shortens its fade-in. Attack applies to subsequent note-ons;
+release applies to subsequent note-offs. Long envelopes still need time to play.
+The MIDI Mix fader remains the track gain, not one of these patch controls.
+Automation values are preserved in native plugin session state.
+To edit oscillator detuning or output gain, open `patches/poly-pad.pd` in
+Pure Data or plugdata and keep those settings matched across the eight voices.
 The pad's output is 6 dB louder than the original example while retaining
 headroom for chords. Reload it with `track 1 pd poly-pad` after updating
 the file; a running instance or saved session can still contain the older patch.
@@ -1028,3 +1039,9 @@ Server logs now include:
   interval, even across queue drains. Gain changes themselves remain immediate;
   only logging is delayed. Track replacement discards the old track's pending
   summary, and shutdown flushes pending final values without waiting.
+- Final applied MIDI Mix knob parameters at `INFO`, using the same 300 ms quiet
+  interval independently for each track/parameter. Summaries use the value
+  acknowledged by the track worker, not the requested MIDI value. Failed,
+  unbound, and retired-track requests do not produce successful applied logs.
+  Parameter changes are immediate; only the summary is delayed. Shutdown flushes
+  pending final knob values.

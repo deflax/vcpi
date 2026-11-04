@@ -686,24 +686,21 @@ void Plugin::applyState(const std::string& data) {
         throw;
     }
     instance->prepareToPlay(sampleRate, frames);
-    // Instruments may apply an enqueued patch only on their next audio block.
-    // Preroll the new state without MIDI, then deliver deferred VST3 restart
-    // notifications before capturing parameter metadata.
-    auto preroll = [&] {
-        juce::MidiBuffer midi;
-        for (int block = 0; block < 2; ++block) {
-            audio.clear();
-            midi.clear();
-            instance->processBlock(audio, midi);
-        }
+    // Alternate DSP and message dispatch so patch creation and its deferred
+    // parameter-info notifications finish before publishing metadata.
+    juce::MidiBuffer midi;
+    for (int block = 0; block < 2; ++block) {
+        audio.clear();
+        midi.clear();
+        instance->processBlock(audio, midi);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
-    };
-    preroll();
-    // JUCE resets its host parameter cache before a deferred processor load
-    // has landed. Its public state API must synchronize the controller again
-    // after preroll; otherwise getters keep the pre-load values.
-    instance->setStateInformation(data.data(), static_cast<int>(data.size()));
-    preroll();
+    }
+    // JUCE's state getter flushes queued controller updates from preroll.
+    // Drain them before accepting new edits, or a later capture can overwrite
+    // those edits with startup defaults. Never reload the component to do this:
+    // closing a restored patch can enqueue destruction of its parameters.
+    juce::MemoryBlock settledState;
+    instance->getStateInformation(settledState);
     parametersPending = false;
     discoverParameters();
 }
