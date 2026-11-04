@@ -113,7 +113,7 @@ sudo PLUGDATA_URL=https://mirror.example/plugdata-Debian-aarch64.tar.xz \
   importer supports the 0.9.3 state layout reported by v0.9.3-2.
 - The native C++ extension is built, then WAV/MIDI/mixer and installed-plugdata
   smoke checks run as `pi` without a display or audio device. The plugdata check
-  imports `patches/plugdata-midi-sine.pd`, verifies a MIDI-selected tone, and
+  imports `patches/sine.pd`, verifies a MIDI-selected tone, and
   checks silence after note-off. Native build dependencies are retained for
   offline incremental builds.
 - Temporary build-host DNS, service-start suppression and the copied QEMU
@@ -150,7 +150,7 @@ audio start
 Or use the included plugdata patch; no plugin-path environment setting is needed:
 
 ```text
-track 1 pd plugdata-midi-sine
+track 1 pd sine
 midi link 1 1
 audio start
 note 1 60 100 500
