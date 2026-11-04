@@ -842,18 +842,15 @@ class HostCLI(cmd.Cmd):
     # -- routing / MIDI ------------------------------------------------------
 
     def do_show(self, arg):
-        """Inspect routing and plugin metadata: show [all|midi|controls|audio|1-8|master|explore]
+        """Inspect routing and plugin metadata: show [all|midi|controls|audio|1-8|master]
 
         show <track> includes instrument metadata and the track's routing/mixer state.
         show <track> fx <index> or show master fx <index> inspects one effect.
-        With no argument, show the compact overview; all prints every table.
-        explore opens the interactive read-only explorer. All views use cached state.
+        With no argument, open the interactive client's read-only tabbed explorer.
+        Plain output uses the compact overview; all prints every cached table.
         """
         try:
             view = show_view(arg.strip().split())
-            if view == "explore":
-                self._print("show explore requires the interactive client; use show all for plain output.")
-                return
             snapshot = build_flow_snapshot(self.host)
             self._print(render_flow_snapshot(snapshot, None if view == "all" else view))
         except ValueError as error:

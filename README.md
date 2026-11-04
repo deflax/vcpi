@@ -181,9 +181,10 @@ supports them. Free-form numeric values are left for you to enter.
 
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
-`show` display tables. `show` combines routing, mapped controls, audio output,
-and cached plugin metadata; `show explore` opens a read-only full-screen explorer
-with track/master/effect views, scrolling, and manual refresh. `get` includes
+focused `show` commands display tables. Plain `show` opens a read-only full-screen
+explorer for routing, mapped controls, audio output, and cached plugin metadata,
+with a highlighted tab bar, track/master/effect views, scrolling, and manual
+refresh. `get` includes
 parameter values, units, ranges, and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
 table; use `help <command>` for detailed syntax.
@@ -450,8 +451,7 @@ vcpi> audio start
 vcpi> ableton link 120
 vcpi> status
 
-vcpi> show              # signal flow: all tracks, FX chains, master bus
-vcpi> show explore      # navigate MIDI, controls, audio, tracks, master, and effects
+vcpi> show              # tabbed explorer: MIDI, controls, audio, tracks, master, effects
 vcpi> show controls     # exact MIDI Mix bindings and cached parameter targets
 vcpi> show 1            # track state and full cached instrument metadata
 vcpi> show 1 fx 1       # full metadata for track 1's first effect

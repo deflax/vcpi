@@ -266,8 +266,8 @@ wrap to the terminal width; detailed `help <command>` output is unchanged.
 
 The interactive client uses `prompt_toolkit` for the `vcpi>` command line
 and Rich for terminal presentation. `help`, `get`, `status`, and
-`show` use tables. `show explore` temporarily opens a full-screen routing
-explorer, then returns to the prompt. Piped output remains plain text.
+`show <view>` use tables. Plain `show` opens a full-screen routing explorer
+with a visible tab bar, then returns to the prompt. Piped output remains plain text.
 Other responses, including `help <command>`, retain their text.
 
 - Up/Down recall commands from the current client session.
@@ -424,7 +424,7 @@ volume remains accessible through `get`/`set` but does not consume a knob.
 | `gain master [value]` | Get or set master gain |
 | `mute <track>` | Toggle track mute |
 | `solo <track>` | Toggle track solo |
-| `show [all\|midi\|controls\|audio\|1-8\|master\|explore]` | Inspect routing, mapped controls, output, and plugin metadata; see visualization commands |
+| `show [all\|midi\|controls\|audio\|1-8\|master]` | Open the tabbed explorer, or print a focused routing/plugin view; see visualization commands |
 
 ### Audio Commands
 
@@ -816,14 +816,15 @@ display values and unit-qualified names (kHz displays use Hz values).
 Text choices and boolean switches are inferred at load even when a plugin
 omits VST3 step counts. `raw_value` remains normalized.
 
-**`show`** shows a routing overview: connected MIDI inputs, MIDI Mix connections,
-sequencer clock, all eight instrument/FX chains, track eligibility, master bus,
-and audio output. Focused views expose the details without one oversized table:
+**`show`** opens a read-only tabbed explorer in the interactive client, starting
+with a routing overview: connected MIDI inputs, MIDI Mix connections, sequencer
+clock, all eight instrument/FX chains, track eligibility, master bus, and audio
+output. Focused commands print individual tables:
 The command is named `show` (formerly `flow`); the old command name is not an alias.
 
 | Command | View |
 |---|---|
-| `show` | Compact whole-system overview |
+| `show` | Full-screen tabbed explorer; compact whole-system overview in plain output |
 | `show midi` | Open generic inputs, all 16 channel routes, sequencer bank destinations and patterns |
 | `show controls` | MIDI Mix CC/note bindings, knob targets, cached values/ranges, and LED feedback connection |
 | `show audio` | Ordered audio chains, output device/backend, stream format, and output health |
@@ -832,7 +833,6 @@ The command is named `show` (formerly `flow`); the old command name is not an al
 | `show master` | Master effects, gain/control, and output |
 | `show master fx <index>` | Full cached metadata for the selected master effect |
 | `show all` | Every view, including empty tracks, unlinked routes, and loaded track/master effect metadata sections |
-| `show explore` | Read-only full-screen explorer in the interactive client |
 
 Effect metadata views require an explicit 1-based index. `show master` remains
 the master routing/mixer/output view; it does not select an effect implicitly.
@@ -841,8 +841,10 @@ Plugin metadata separates reported parameter totals from sound controls, plugin
 settings, MIDI parameters, and unused slots. Automatable, boolean, and discrete
 counts describe all reported parameters, not just the sound-control group.
 
-Inside `show explore`:
+Inside `show`:
 
+- The tab bar at the top lists available views and highlights the active tab.
+  Tabs wrap to fit the terminal width.
 - Left/Right or Tab/Shift-Tab cycle through views.
 - `o`, `m`, `c`, `a` jump to overview, MIDI, controls, or audio.
 - `1`–`8` jump to a track; `9` opens the master bus.
@@ -852,8 +854,7 @@ Inside `show explore`:
 - `q`, Escape, Ctrl-C, or Ctrl-D return to the command prompt.
 
 Tables wrap to the terminal width. Redirected input/output uses plain-text
-tables; `show explore` explains the interactive-client requirement instead of
-blocking the daemon.
+tables; plain `show` prints the overview without opening a full-screen interface.
 
 In colour-capable terminals, state words use **green** for on/true, active,
 connected, running, or ready; **red** for off/false, stopped, muted, disabled,

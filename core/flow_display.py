@@ -202,6 +202,37 @@ def explore_flow(
         height=Dimension(min=1), right_margins=[ScrollbarMargin()],
     )
 
+    jump_keys = {
+        "o": "overview", "m": "midi", "c": "controls", "a": "audio",
+        **{str(number): f"track{number}" for number in range(1, 9)},
+        "9": "master",
+    }
+    shortcuts = {section_id: key for key, section_id in jump_keys.items()}
+
+    def tabs():
+        labels = {"overview": "Overview", "midi": "MIDI", "controls": "Controls",
+                  "audio": "Audio", "master": "Master"}
+        fragments = []
+        for section in sections():
+            section_id = section["id"]
+            label = labels.get(section_id, section["title"])
+            shortcut = shortcuts.get(section_id)
+            if shortcut is not None:
+                label = f"{shortcut}: {label}"
+            selected = section_id == selected_id
+            style = (
+                "bg:ansicyan fg:ansiblack bold"
+                if selected else "fg:ansicyan bold"
+            )
+            fragments.append((style, f"[ {label} ]" if selected else f"  {label}  "))
+            fragments.append(("", " "))
+        return fragments
+
+    tabs_window = Window(
+        content=FormattedTextControl(tabs), wrap_lines=True,
+        dont_extend_height=True,
+    )
+
     def footer():
         available = sections()
         index = next(
@@ -254,11 +285,6 @@ def explore_flow(
     def next_section(event) -> None:
         cycle(1)
 
-    jump_keys = {
-        "o": "overview", "m": "midi", "c": "controls", "a": "audio",
-        **{str(number): f"track{number}" for number in range(1, 9)},
-        "9": "master",
-    }
     for key, section_id in jump_keys.items():
         @bindings.add(key)
         def jump(event, target=section_id) -> None:
@@ -304,7 +330,10 @@ def explore_flow(
         event.app.exit()
 
     app = Application(
-        layout=Layout(HSplit([content_window, footer_window]), focused_element=control),
+        layout=Layout(
+            HSplit([tabs_window, content_window, footer_window]),
+            focused_element=control,
+        ),
         key_bindings=bindings, full_screen=True, erase_when_done=True,
         input=input, output=output,
     )

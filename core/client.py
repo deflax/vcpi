@@ -90,7 +90,7 @@ def connect(sock_path: str | Path | None = None):
                 try:
                     view = show_view(tokens[1:])
                     fetch = lambda: _fetch_flow_snapshot(rfile, wfile)
-                    if view == "explore":
+                    if len(tokens) == 1:
                         explore_flow(fetch)
                     else:
                         display_flow(console, fetch(), view)

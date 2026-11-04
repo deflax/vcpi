@@ -123,7 +123,7 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(set(self.matches(before)), banks)
         self.assertEqual(set(self.matches("seq ")), banks | {"link", "cut", "clear"})
         for before, expected in (
-                ("show ", tracks | {"all", "midi", "controls", "audio", "master", "explore"}),
+                ("show ", tracks | {"all", "midi", "controls", "audio", "master"}),
                 ("audio ", {"start", "stop", "devices", "diagnose"}),
                 ("midi ", {"ports", "input", "link", "cut"}),
                 ("midi ports ", {"input", "output"}),

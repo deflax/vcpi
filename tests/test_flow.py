@@ -171,7 +171,7 @@ class FlowTests(unittest.TestCase):
 
     def test_show_view_resolves_named_tracks_and_explicit_effect_indexes(self):
         self.assertEqual(show_view([]), "overview")
-        for view in ("all", "midi", "controls", "audio", "master", "explore"):
+        for view in ("all", "midi", "controls", "audio", "master"):
             self.assertEqual(show_view([view]), view)
         for index in range(1, 9):
             self.assertEqual(show_view([str(index)]), f"track{index}")
@@ -188,7 +188,7 @@ class FlowTests(unittest.TestCase):
                 with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                     show_view(arguments)
         for arguments in (["0"], ["9"], ["track1"], ["midi", "fx", "1"],
-                          ["0", "fx", "1"], ["9", "fx", "1"]):
+                          ["explore"], ["0", "fx", "1"], ["9", "fx", "1"]):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 show_view(arguments)
 

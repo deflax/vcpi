@@ -48,7 +48,7 @@ def show_view(arguments: list[str]) -> str:
     if len(arguments) == 1:
         if target in tracks:
             return f"track{target}"
-        if target in {"all", "midi", "controls", "audio", "master", "explore"}:
+        if target in {"all", "midi", "controls", "audio", "master"}:
             return target
     elif len(arguments) == 3 and target in tracks | {"master"} and arguments[1] == "fx":
         try:
@@ -59,7 +59,7 @@ def show_view(arguments: list[str]) -> str:
             raise ValueError("fx_index must be a positive integer")
         return f"{'master' if target == 'master' else 'track' + target}fx{effect_index}"
     raise ValueError(
-        "Usage: show [all|midi|controls|audio|1-8|master|explore] | "
+        "Usage: show [all|midi|controls|audio|1-8|master] | "
         "show <1-8|master> fx <fx_index>"
     )
 

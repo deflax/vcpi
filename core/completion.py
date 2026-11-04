@@ -163,7 +163,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         return choices(("link", "cut")) if not args else empty
     if command == "show":
         if not args:
-            return choices(("all", "midi", "controls", "audio", *_TRACKS, "master", "explore"))
+            return choices(("all", "midi", "controls", "audio", *_TRACKS, "master"))
         target = args[0]
         if target not in (*_TRACKS, "master"):
             return empty
