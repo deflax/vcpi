@@ -201,6 +201,24 @@ audio start
 note 1 60 127 100
 ```
 
+`classic-subtractive-synth` exposes these plugdata automation controls through
+the patch-native [`param` object](https://github.com/plugdata-team/plugdata/blob/v0.9.3/Resources/Patches/param-help.pd):
+
+| MIDI Mix knob | Parameter | Default | Range |
+|---|---|---|---|
+| 1 | `cutoff` | 300 Hz | 20–12000 Hz |
+| 2 | `resonance` | 2.5 | 0–4 |
+| 3 | `envelope_amount` | 2000 Hz | 0–8000 Hz |
+
+The envelope amount is added to the base cutoff according to the existing
+filter envelope. Defaults preserve the original patch sound. For example,
+`set 1 cutoff 1800` changes the base cutoff while the MIDI Mix fader still
+controls the track's gain. plugdata's separate `volume` remains available to
+`get`/`set`, but is excluded from automatic knob mapping.
+
+Reload with `track 1 pd classic-subtractive-synth` to use the updated file.
+Restoring an older session can bring back its embedded, pre-automation patch.
+
 Both monophonic patches accept note-on/note-off on all MIDI channels and replace
 the current note when a newer note arrives. Releasing a stolen older note does
 not stop the newer one. Use `midi link <ch> <track>` for external MIDI routing,

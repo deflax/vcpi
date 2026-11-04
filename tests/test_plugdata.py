@@ -10,6 +10,7 @@ import unittest
 import numpy as np
 
 from core.audio_deps import require_native
+from core.audio_state import capture_plugin
 from core.plugin_host import NativePlugin
 
 
@@ -75,6 +76,8 @@ class PlugdataPatchTests(unittest.TestCase):
         transport = backend.Transport(str(directory / f"{name}.mmap"), 512, True)
         runner = backend.TrackRunner(transport, plugin.native, 44100, 512)
         self.addCleanup(runner.shutdown)
+        # Match worker startup: finish patch activation before accepting controls.
+        runner.barrier()
         return transport, runner
 
     def peak(self, runner, blocks=32):
@@ -130,6 +133,105 @@ class PlugdataPatchTests(unittest.TestCase):
         self.assertEqual(getattr(restored, volume), expected_volume)
         restored_transport, restored_runner = self.runner(restored, directory, "restored")
         self.assert_note_and_release(restored_transport, restored_runner)
+
+    def test_classic_patch_parameters_change_audio_and_restore_without_source(self):
+        bundle = self.plugdata_bundle()
+        directory = self.temporary_directory()
+        patch = directory / "classic-subtractive-synth.pd"
+        source = Path(__file__).resolve().parents[1] / "patches" / patch.name
+        patch.write_bytes(source.read_bytes())
+        plugin = NativePlugin(str(bundle), 44100, 512, "instrument")
+        volume = next(name for name, descriptor in plugin.parameters.items()
+                      if descriptor.label.lower() == "volume")
+        setattr(plugin, volume, 0.37)
+        expected_volume = getattr(plugin, volume)
+        plugin.load_preset(str(patch))
+        ranges = {
+            "cutoff": (20.0, 12000.0),
+            "resonance": (0.0, 4.0),
+            "envelope_amount": (0.0, 8000.0),
+        }
+
+        def assert_controls(processor, expected):
+            snapshot = capture_plugin(processor, {}, {})
+            controls = [name for name, descriptor in snapshot.parameter_items()
+                        if name != volume]
+            self.assertEqual(controls, list(ranges))
+            for name, bounds in ranges.items():
+                descriptor = snapshot.parameters[name]
+                self.assertEqual(descriptor.label, name)
+                self.assertEqual(descriptor.range, bounds)
+                self.assertTrue(descriptor.is_automatable)
+                self.assertAlmostEqual(snapshot.values[name], expected[name], delta=0.01)
+            self.assertEqual(snapshot.values[volume], expected_volume)
+
+        assert_controls(plugin, {
+            "cutoff": 300.0, "resonance": 2.5, "envelope_amount": 2000.0,
+        })
+        transport, runner = self.runner(plugin, directory, "classic")
+
+        def note_spectrum(note_transport, note_runner):
+            # The oscillator's second phasor is detuned by 0.5 Hz. Integrate a
+            # complete two-second beat cycle: a short FFT changes with beat
+            # phase even when every control and MIDI note is unchanged.
+            note_transport.send_midi(bytes((0x80, 60, 0)))
+            self.peak(note_runner, blocks=48)
+            note_transport.send_midi(bytes((0x90, 60, 100)))
+            self.peak(note_runner, blocks=24)
+            blocks = []
+            sample_count = 88200
+            for _ in range((sample_count + 511) // 512):
+                audio = note_runner.render_once()
+                self.assertEqual(audio.shape, (512, 2))
+                self.assertTrue(np.isfinite(audio).all())
+                blocks.append(audio[:, 0].copy())
+            note_transport.send_midi(bytes((0x80, 60, 0)))
+            self.peak(note_runner, blocks=32)
+            audio = np.concatenate(blocks)[:sample_count]
+            self.assertGreater(float(np.abs(audio).max()), 1e-5)
+            power = np.abs(np.fft.rfft(audio)) ** 2 / sample_count ** 2
+            frequencies = np.fft.rfftfreq(sample_count, 1 / 44100)
+            # Coarse band RMS retains filter/resonance differences without
+            # requiring individual FFT bins or oscillator phases to match.
+            band_power, _ = np.histogram(
+                frequencies, bins=(0, 200, 400, 800, 1600, 3200, 6400, 22051),
+                weights=power)
+            return np.sqrt(band_power)
+
+        for name, baseline, changed in (
+            ("cutoff", {"cutoff": 100.0, "resonance": 0.0,
+                        "envelope_amount": 0.0}, 4000.0),
+            ("resonance", {"cutoff": 700.0, "resonance": 0.0,
+                           "envelope_amount": 0.0}, 3.5),
+            ("envelope_amount", {"cutoff": 100.0, "resonance": 0.0,
+                                 "envelope_amount": 0.0}, 6000.0),
+        ):
+            with self.subTest(parameter=name):
+                for control, value in baseline.items():
+                    setattr(plugin, control, value)
+                before = note_spectrum(transport, runner)
+                repeated = note_spectrum(transport, runner)
+                scale = np.linalg.norm(before)
+                self.assertLess(np.linalg.norm(repeated - before) / scale, 0.05)
+                setattr(plugin, name, changed)
+                after = note_spectrum(transport, runner)
+                self.assertGreater(np.linalg.norm(after - before) / scale, 0.15)
+
+        values = {"cutoff": 1800.0, "resonance": 1.25, "envelope_amount": 4200.0}
+        for name, value in values.items():
+            setattr(plugin, name, value)
+        expected_spectrum = note_spectrum(transport, runner)
+        assert_controls(plugin, values)
+        saved = plugin.get_state()
+        patch.unlink()
+        restored = NativePlugin(str(bundle), 44100, 512, "instrument")
+        restored.load_saved_state(saved)
+        assert_controls(restored, values)
+        restored_transport, restored_runner = self.runner(restored, directory, "classic-restored")
+        actual_spectrum = note_spectrum(restored_transport, restored_runner)
+        self.assertLess(
+            np.linalg.norm(actual_spectrum - expected_spectrum)
+            / np.linalg.norm(expected_spectrum), 0.05)
 
     def test_invalid_patch_is_rejected_without_replacing_live_voice(self):
         bundle = self.plugdata_bundle()
