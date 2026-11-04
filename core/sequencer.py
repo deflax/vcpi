@@ -1,8 +1,8 @@
-"""Internal step sequencer -- tempo-synced note patterns attached to slots.
+"""Internal step sequencer -- tempo-synced note patterns attached to tracks.
 
 Each *sequence bank* (1-based, up to NUM_SEQ_BANKS) holds a list of note
-names that loop over one bar.  When a bank is linked to a slot the
-sequencer thread sends note-on / note-off messages into that slot's MIDI
+names that loop over one bar.  When a bank is linked to a track the
+sequencer thread sends note-on / note-off messages into that track's MIDI
 queue at the correct tempo-derived intervals.
 
 Timing model
@@ -105,7 +105,7 @@ class SequenceBank:
     """One named sequence pattern."""
     notes: list[int] = field(default_factory=list)  # MIDI note numbers
     velocity: int = 100
-    linked_slot: Optional[int] = None  # 0-based slot index, or None
+    linked_track: Optional[int] = None  # 0-based track index, or None
 
 
 # ---------------------------------------------------------------------------
@@ -155,32 +155,32 @@ class Sequencer:
         return bank
 
     def clear_bank(self, bank_index: int):
-        """Remove a sequence bank and detach it from any slot."""
+        """Remove a sequence bank and detach it from any track."""
         if not 0 <= bank_index < NUM_SEQ_BANKS:
             raise ValueError(f"bank must be 1-{NUM_SEQ_BANKS}")
         self.banks[bank_index] = None
         self._cursors[bank_index] = 0
 
-    def link(self, bank_index: int, slot_index: int):
-        """Attach sequence bank to a slot."""
+    def link(self, bank_index: int, track_index: int):
+        """Attach sequence bank to a track."""
         if not 0 <= bank_index < NUM_SEQ_BANKS:
             raise ValueError(f"bank must be 1-{NUM_SEQ_BANKS}")
         bank = self.banks[bank_index]
         if bank is None:
             raise ValueError(f"sequence bank {bank_index + 1} is empty")
-        bank.linked_slot = slot_index
+        bank.linked_track = track_index
         self._cursors[bank_index] = 0
-        logger.info("[SEQ] bank %d -> slot %d", bank_index + 1, slot_index + 1)
+        logger.info("[SEQ] bank %d -> track %d", bank_index + 1, track_index + 1)
         # Auto-start the playback thread when a link is made.
         self.start()
 
-    def detach_slot(self, slot_index: int):
-        """Remove any sequence link(s) from the given slot."""
+    def detach_track(self, track_index: int):
+        """Remove any sequence link(s) from the given track."""
         for bank in self.banks:
-            if bank is not None and bank.linked_slot == slot_index:
-                bank.linked_slot = None
+            if bank is not None and bank.linked_track == track_index:
+                bank.linked_track = None
         # If no banks are linked any more, stop the thread.
-        if not any(b is not None and b.linked_slot is not None
+        if not any(b is not None and b.linked_track is not None
                    for b in self.banks):
             self.stop()
 
@@ -190,8 +190,8 @@ class Sequencer:
             raise ValueError(f"bank must be 1-{NUM_SEQ_BANKS}")
         bank = self.banks[bank_index]
         if bank is not None:
-            bank.linked_slot = None
-        if not any(b is not None and b.linked_slot is not None
+            bank.linked_track = None
+        if not any(b is not None and b.linked_track is not None
                    for b in self.banks):
             self.stop()
 
@@ -258,7 +258,7 @@ class Sequencer:
         from math import gcd
         nums: list[int] = []
         for bank in self.banks:
-            if bank is not None and bank.linked_slot is not None and bank.notes:
+            if bank is not None and bank.linked_track is not None and bank.notes:
                 nums.append(len(bank.notes))
         if not nums:
             return 1.0  # quarter note fallback
@@ -276,7 +276,7 @@ class Sequencer:
         4.0).  Each bank's cursor is derived directly from this position
         so that every bank always starts from the beginning of the bar.
 
-        Returns (slot_idx, midi_note, duration_seconds, instrument_generation)
+        Returns (track_idx, midi_note, duration_seconds, instrument_generation)
         entries so delayed note-offs cannot silence a replacement instrument.
         """
         bpm = self._bpm
@@ -284,7 +284,7 @@ class Sequencer:
         fired: list[tuple[int, int, float, int]] = []
 
         for bi, bank in enumerate(self.banks):
-            if bank is None or bank.linked_slot is None or not bank.notes:
+            if bank is None or bank.linked_track is None or not bank.notes:
                 continue
 
             n_steps = len(bank.notes)
@@ -300,16 +300,16 @@ class Sequencer:
                 continue
 
             midi_note = bank.notes[step_idx]
-            slot_idx = bank.linked_slot
+            track_idx = bank.linked_track
             vel = bank.velocity
 
-            slot = self._host.engine.slots[slot_idx]
-            generation = slot.generation if slot is not None else 0
+            track = self._host.engine.tracks[track_idx]
+            generation = track.generation if track is not None else 0
             on = mido.Message("note_on", note=midi_note, velocity=vel)
-            self._host.engine.enqueue_midi(slot_idx, on, generation=generation)
+            self._host.engine.enqueue_midi(track_idx, on, generation=generation)
 
             step_dur_secs = bank_quantum * beat_dur
-            fired.append((slot_idx, midi_note, step_dur_secs, generation))
+            fired.append((track_idx, midi_note, step_dur_secs, generation))
 
             self._cursors[bi] = (step_idx + 1) % n_steps
 
@@ -321,12 +321,12 @@ class Sequencer:
         self._note_off_timers = [
             timer for timer in self._note_off_timers if timer.is_alive()
         ]
-        for slot_idx, midi_note, step_dur, generation in fired:
+        for track_idx, midi_note, step_dur, generation in fired:
             off_delay = step_dur * self.NOTE_OFF_RATIO
 
             sent = threading.Event()
 
-            def _send_off(si=slot_idx, mn=midi_note, gen=generation, _mido=mido, _sent=sent):
+            def _send_off(si=track_idx, mn=midi_note, gen=generation, _mido=mido, _sent=sent):
                 if not _sent.is_set():
                     _sent.set()
                     off = _mido.Message("note_off", note=mn)
@@ -378,7 +378,7 @@ class Sequencer:
 
             # No active banks -- idle briefly.
             if quantum >= 4.0 and not any(
-                b is not None and b.linked_slot is not None and b.notes
+                b is not None and b.linked_track is not None and b.notes
                 for b in self.banks
             ):
                 self._stop_event.wait(timeout=0.05)
@@ -440,7 +440,7 @@ class Sequencer:
                 elapsed = now - bar_start
 
             if not any(
-                bank is not None and bank.linked_slot is not None and bank.notes
+                bank is not None and bank.linked_track is not None and bank.notes
                 for bank in self.banks
             ):
                 self._stop_event.wait(timeout=0.05)
@@ -479,8 +479,8 @@ class Sequencer:
             result.append({
                 "notes": [midi_to_note_name(n) for n in bank.notes],
                 "velocity": bank.velocity,
-                "linked_slot": (bank.linked_slot + 1)
-                               if bank.linked_slot is not None else None,
+                "linked_track": (bank.linked_track + 1)
+                               if bank.linked_track is not None else None,
             })
         return result
 
@@ -497,12 +497,12 @@ class Sequencer:
                 note_names = entry.get("notes", [])
                 midi_notes = [note_name_to_midi(n) for n in note_names]
                 vel = entry.get("velocity", 100)
-                linked = entry.get("linked_slot")
-                slot_idx = (int(linked) - 1) if linked is not None else None
+                linked = entry.get("linked_track")
+                track_idx = (int(linked) - 1) if linked is not None else None
                 self.banks[bi] = SequenceBank(
-                    notes=midi_notes, velocity=vel, linked_slot=slot_idx)
+                    notes=midi_notes, velocity=vel, linked_track=track_idx)
                 self._cursors[bi] = 0
-                if slot_idx is not None:
+                if track_idx is not None:
                     had_link = True
             except Exception as exc:
                 logger.warning("[SEQ] restore bank %d failed: %s", bi + 1, exc)

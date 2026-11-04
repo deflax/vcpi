@@ -73,10 +73,10 @@ def _scenario_live():
 def _scenario_fragments():
     from core.native_output import native_output, set_debug_output
 
-    with native_output("slot 3"):
+    with native_output("track 3"):
         set_debug_output(True)
         os.write(1, b"one\npart")
-    with native_output("slot 3"):
+    with native_output("track 3"):
         os.write(2, b"two\n")
         _write_all(1, b"x" * (128 * 1024))
         os.write(1, b"\ntail")
@@ -91,7 +91,7 @@ def _spawn_output(destination, source, nested):
         _c_output(b"", f"{source}-stderr\n".encode())
         if nested:
             child = mp.get_context("spawn").Process(
-                target=_spawn_output, args=(output_destination(), "slot 2", False))
+                target=_spawn_output, args=(output_destination(), "track 2", False))
             child.start()
             child.join(10)
             if child.is_alive():
@@ -317,8 +317,8 @@ class NativeOutputTests(unittest.TestCase):
         stdout, stderr = self._run("fragments")
         self.assertEqual(stderr, "")
         lines = stdout.splitlines()
-        self.assertTrue(all(line.startswith("[slot 3] ") for line in lines))
-        fragments = [line.removeprefix("[slot 3] ") for line in lines]
+        self.assertTrue(all(line.startswith("[track 3] ") for line in lines))
+        fragments = [line.removeprefix("[track 3] ") for line in lines]
         self.assertEqual(fragments[:3], ["one", "part", "two"])
         self.assertEqual(fragments[-1], "tail")
         self.assertTrue(all(len(fragment) <= 4096 for fragment in fragments))
@@ -329,7 +329,7 @@ class NativeOutputTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertCountEqual(stdout.splitlines(), [
             "[daemon] daemon-stdout", "[audio] audio-stdout", "[audio] audio-stderr",
-            "[slot 2] slot 2-stdout", "[slot 2] slot 2-stderr",
+            "[track 2] track 2-stdout", "[track 2] track 2-stderr",
         ])
 
     def test_spawned_debug_output_bypasses_disabled_parent_devnull(self):
@@ -337,7 +337,7 @@ class NativeOutputTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertCountEqual(stdout.splitlines(), [
             "[audio] audio-stdout", "[audio] audio-stderr",
-            "[slot 2] slot 2-stdout", "[slot 2] slot 2-stderr",
+            "[track 2] track 2-stdout", "[track 2] track 2-stderr",
         ])
 
     def test_structured_warnings_survive_capture_and_exception_cleanup(self):

@@ -7,7 +7,7 @@ from threading import RLock
 from typing import Optional
 
 from core.midi import MidiInPort, MidiOutPort
-from core.models import NUM_SLOTS
+from core.models import NUM_TRACKS
 
 
 logger = logging.getLogger(__name__)
@@ -35,13 +35,13 @@ MASTER_FADER_CC = 62
 
 
 def build_cc_lookups() -> tuple[dict[int, int], dict[int, tuple[int, int]]]:
-    """Return (cc_to_fader_slot, cc_to_knob_slot_and_index) lookup dicts."""
+    """Return (cc_to_fader_track, cc_to_knob_track_and_index) lookup dicts."""
     cc_to_fader: dict[int, int] = {}
     cc_to_knob: dict[int, tuple[int, int]] = {}
-    for slot_idx in range(NUM_SLOTS):
-        cc_to_fader[FADER_CCS[slot_idx]] = slot_idx
-        for knob_idx, cc in enumerate(KNOB_CCS[slot_idx]):
-            cc_to_knob[cc] = (slot_idx, knob_idx)
+    for track_idx in range(NUM_TRACKS):
+        cc_to_fader[FADER_CCS[track_idx]] = track_idx
+        for knob_idx, cc in enumerate(KNOB_CCS[track_idx]):
+            cc_to_knob[cc] = (track_idx, knob_idx)
     return cc_to_fader, cc_to_knob
 
 
@@ -53,30 +53,30 @@ class MidiMixController:
         self._in_port = MidiInPort()
         self._out_port = MidiOutPort()
         self._cc_to_fader, self._cc_to_knob = build_cc_lookups()
-        # slot_index -> [(param_name, (min, max)), ...]
+        # track_index -> [(param_name, (min, max)), ...]
         self._param_cache: dict[int, list[tuple[str, tuple[float, float]]]] = {}
         self._param_generations: dict[int, int] = {}
         self._led_lock = RLock()
         # Optimism is controller-local; engine snapshots only contain applied state.
         self._optimistic_state: dict[int, tuple[int, dict[str, bool]]] = {}
 
-    def invalidate_param_cache(self, slot_index: Optional[int] = None):
+    def invalidate_param_cache(self, track_index: Optional[int] = None):
         """Clear cached parameter names/ranges. Call when instruments are loaded/removed."""
-        if slot_index is not None:
-            self._param_cache.pop(slot_index, None)
-            self._param_generations.pop(slot_index, None)
+        if track_index is not None:
+            self._param_cache.pop(track_index, None)
+            self._param_generations.pop(track_index, None)
         else:
             self._param_cache.clear()
             self._param_generations.clear()
 
-    def _build_param_cache(self, slot_index: int, slot=None) -> list[tuple[str, tuple[float, float]]]:
+    def _build_param_cache(self, track_index: int, track=None) -> list[tuple[str, tuple[float, float]]]:
         """Cache ranges from one captured instrument generation."""
-        if slot is None:
-            slot = self._engine.slots[slot_index]
-        if slot is None or slot.plugin is None:
+        if track is None:
+            track = self._engine.tracks[track_index]
+        if track is None or track.plugin is None:
             return []
         entries: list[tuple[str, tuple[float, float]]] = []
-        for name, parameter in slot.plugin.parameters.items():
+        for name, parameter in track.plugin.parameters.items():
             if parameter.kind == "bool":
                 bounds = (0.0, 1.0)
             elif parameter.kind == "enum":
@@ -84,8 +84,8 @@ class MidiMixController:
             else:
                 bounds = (float(parameter.range[0]), float(parameter.range[1]))
             entries.append((name, bounds))
-        self._param_cache[slot_index] = entries
-        self._param_generations[slot_index] = slot.generation
+        self._param_cache[track_index] = entries
+        self._param_generations[track_index] = track.generation
         return entries
 
     @property
@@ -132,31 +132,31 @@ class MidiMixController:
         except Exception as exc:
             logger.warning("failed to send LED note=%d state=%s: %s", note, enabled, exc)
 
-    def _set_slot_leds(self, slot_index: int):
+    def _set_track_leds(self, track_index: int):
         with self._led_lock:
-            slot = self._engine.slots[slot_index]
-            mute_on = bool(slot and slot.muted)
-            solo_on = bool(slot and slot.solo)
-            optimistic = self._optimistic_state.get(slot_index)
-            if slot is not None and optimistic is not None:
+            track = self._engine.tracks[track_index]
+            mute_on = bool(track and track.muted)
+            solo_on = bool(track and track.solo)
+            optimistic = self._optimistic_state.get(track_index)
+            if track is not None and optimistic is not None:
                 generation, fields = optimistic
-                if generation == slot.generation:
+                if generation == track.generation:
                     mute_on = fields.get("muted", mute_on)
                     solo_on = fields.get("solo", solo_on)
-            self._send_led_note(MUTE_NOTES[slot_index], mute_on)
-            self._send_led_note(SOLO_NOTES[slot_index], solo_on)
+            self._send_led_note(MUTE_NOTES[track_index], mute_on)
+            self._send_led_note(SOLO_NOTES[track_index], solo_on)
 
-    def refresh_leds(self, slot_indices: Optional[list[int]] = None):
-        """Reconcile immediate LED feedback with actual applied slot state."""
-        if slot_indices is None:
-            indices = range(NUM_SLOTS)
+    def refresh_leds(self, track_indices: Optional[list[int]] = None):
+        """Reconcile immediate LED feedback with actual applied track state."""
+        if track_indices is None:
+            indices = range(NUM_TRACKS)
         else:
-            indices = slot_indices
+            indices = track_indices
         for idx in indices:
-            if 0 <= idx < NUM_SLOTS:
+            if 0 <= idx < NUM_TRACKS:
                 with self._led_lock:
                     self._optimistic_state.pop(idx, None)
-                    self._set_slot_leds(idx)
+                    self._set_track_leds(idx)
 
     def on_midi(self, event, data=None):
         """rtmidi callback for incoming MIDI Mix events."""
@@ -185,15 +185,15 @@ class MidiMixController:
             logger.debug("master gain -> %.2f", gain)
             return
 
-        slot_idx = self._cc_to_fader.get(cc)
-        if slot_idx is not None:
-            slot = self._engine.slots[slot_idx]
-            if slot:
+        track_idx = self._cc_to_fader.get(cc)
+        if track_idx is not None:
+            track = self._engine.tracks[track_idx]
+            if track:
                 gain = value / 127.0
-                self._engine.enqueue_slot_change(slot_idx, generation=slot.generation, gain=gain)
-                logger.debug("slot %d gain -> %.2f", slot_idx + 1, gain)
+                self._engine.enqueue_track_change(track_idx, generation=track.generation, gain=gain)
+                logger.debug("track %d gain -> %.2f", track_idx + 1, gain)
             else:
-                logger.debug("slot %d gain ignored (empty slot)", slot_idx + 1)
+                logger.debug("track %d gain ignored (empty track)", track_idx + 1)
             return
 
         knob = self._cc_to_knob.get(cc)
@@ -201,29 +201,29 @@ class MidiMixController:
             logger.debug("unmapped CC %d ignored", cc)
             return
 
-        slot_idx, knob_idx = knob
-        slot = self._engine.slots[slot_idx]
-        if slot is None:
-            logger.debug("knob on slot %d ignored (empty slot)", slot_idx + 1)
+        track_idx, knob_idx = knob
+        track = self._engine.tracks[track_idx]
+        if track is None:
+            logger.debug("knob on track %d ignored (empty track)", track_idx + 1)
             return
 
         # Metadata is plain cached state, safe to read on the rtmidi thread.
-        params = self._param_cache.get(slot_idx)
-        if params is None or self._param_generations.get(slot_idx) != slot.generation:
-            params = self._build_param_cache(slot_idx, slot)
+        params = self._param_cache.get(track_idx)
+        if params is None or self._param_generations.get(track_idx) != track.generation:
+            params = self._build_param_cache(track_idx, track)
         if not params:
-            logger.debug("slot %d knob ignored (no mapped params)", slot_idx + 1)
+            logger.debug("track %d knob ignored (no mapped params)", track_idx + 1)
             return
         if knob_idx >= len(params):
             logger.debug(
-                "slot %d knob %d ignored (no mapped param)",
-                slot_idx + 1,
+                "track %d knob %d ignored (no mapped param)",
+                track_idx + 1,
                 knob_idx + 1,
             )
             return
 
         param_name, (lo, hi) = params[knob_idx]
-        parameter = slot.plugin.parameters[param_name]
+        parameter = track.plugin.parameters[param_name]
         if parameter.kind == "bool":
             mapped = value >= 64
         elif parameter.kind == "enum":
@@ -233,8 +233,8 @@ class MidiMixController:
         else:
             mapped = lo + (value / 127.0) * (hi - lo)
         self._engine.enqueue_param_change(
-            slot_idx, param_name, mapped, generation=slot.generation)
-        logger.debug("slot %d %s -> %s", slot_idx + 1, param_name, mapped)
+            track_idx, param_name, mapped, generation=track.generation)
+        logger.debug("track %d %s -> %s", track_idx + 1, param_name, mapped)
 
     def _handle_note(self, note: int):
         if note in MUTE_NOTES:
@@ -250,25 +250,25 @@ class MidiMixController:
             return
 
         with self._led_lock:
-            slot = self._engine.slots[idx]
-            if slot is None:
-                logger.debug("%s toggle ignored (slot %d empty)", field, idx + 1)
+            track = self._engine.tracks[idx]
+            if track is None:
+                logger.debug("%s toggle ignored (track %d empty)", field, idx + 1)
                 self._optimistic_state.pop(idx, None)
-                self._set_slot_leds(idx)
+                self._set_track_leds(idx)
                 return
             optimistic = self._optimistic_state.get(idx)
             fields = (
                 dict(optimistic[1])
-                if optimistic is not None and optimistic[0] == slot.generation
+                if optimistic is not None and optimistic[0] == track.generation
                 else {}
             )
-            applied = slot.muted if field == "muted" else slot.solo
+            applied = track.muted if field == "muted" else track.solo
             enabled = not fields.get(field, applied)
-            self._engine.enqueue_slot_change(idx, generation=slot.generation, **{field: enabled})
+            self._engine.enqueue_track_change(idx, generation=track.generation, **{field: enabled})
             fields[field] = enabled
-            self._optimistic_state[idx] = (slot.generation, fields)
-            self._set_slot_leds(idx)
+            self._optimistic_state[idx] = (track.generation, fields)
+            self._set_track_leds(idx)
             logger.info(
-                "[slot %d] %s: %s",
-                idx + 1, slot.name, enabled_label if enabled else disabled_label,
+                "[track %d] %s: %s",
+                idx + 1, track.name, enabled_label if enabled else disabled_label,
             )

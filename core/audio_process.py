@@ -1,6 +1,6 @@
 """Spawned audio owner with bounded control/input channels and cached diagnostics.
 
-The output child owns PortAudio and master effects; persistent slot children own
+The output child owns PortAudio and master effects; persistent track children own
 instruments and inserts. The callback only exchanges fixed shared-memory blocks.
 """
 
@@ -18,8 +18,8 @@ from collections import deque
 from itertools import islice
 from multiprocessing.connection import wait as wait_connections
 
-from core.audio_state import capture_state, hydrate_slots
-from core.models import NUM_SLOTS
+from core.audio_state import capture_state, hydrate_tracks
+from core.models import NUM_TRACKS
 from core.logging_setup import configure_logging, set_log_level
 from core.native_output import native_output, output_destination
 from core.state_transport import (
@@ -91,14 +91,14 @@ class _OwnerRuntime:
         self.updates = updates
         self.epoch = 0
         self.cancelled = cancelled
-        self.generations = [0] * NUM_SLOTS
-        self.previous_slots = [None] * NUM_SLOTS
+        self.generations = [0] * NUM_TRACKS
+        self.previous_tracks = [None] * NUM_TRACKS
         self.received_input = 0
         self.update_serial = 0
         self.devices = _discover_devices()
         self.pending_parameters = deque()
         self.master_snapshots = []
-        self._last_slot_health = 0.0
+        self._last_track_health = 0.0
         self._last_output_realtime = None
         try:
             import mido
@@ -117,8 +117,8 @@ class _OwnerRuntime:
             raise RuntimeError("audio input sequence is discontinuous")
         self.received_input = sequence
         if index is not None:
-            if not 0 <= index < NUM_SLOTS:
-                raise ValueError("invalid audio input slot")
+            if not 0 <= index < NUM_TRACKS:
+                raise ValueError("invalid audio input track")
             if generation != self.generations[index]:
                 return  # Retired instrument: never deliver its events to a replacement.
         if kind == "midi":
@@ -131,8 +131,8 @@ class _OwnerRuntime:
                 self.engine.enqueue_param_change(index, payload[0], payload[1])
             else:
                 self.pending_parameters.append((index, generation, payload[0], payload[1]))
-        elif kind == "slot":
-            self.engine.enqueue_slot_change(index, **payload)
+        elif kind == "track":
+            self.engine.enqueue_track_change(index, **payload)
         elif kind == "master_gain":
             self.engine.enqueue_master_gain(payload)
         else:
@@ -145,7 +145,7 @@ class _OwnerRuntime:
             self.engine.apply_pending_controls()
             self.engine.refresh_health()
             self.send_updates()
-            self.apply_slot_parameters()
+            self.apply_track_parameters()
             if self.pending() >= INPUT_CAPACITY:
                 if not self.engine.running:
                     raise BufferError("audio input backlog is full while audio is stopped")
@@ -198,16 +198,16 @@ class _OwnerRuntime:
                     descriptor.raw_value = raw
                 descriptor.string_value = str(actual) if display is None else display
 
-    def _slot_worker(self, index):
-        if not isinstance(index, int) or not 0 <= index < NUM_SLOTS:
-            raise ValueError("invalid slot index")
-        slot = self.engine.slots[index]
-        if slot is None:
-            raise ValueError(f"slot {index + 1} is empty")
-        return slot.render_owner
+    def _track_worker(self, index):
+        if not isinstance(index, int) or not 0 <= index < NUM_TRACKS:
+            raise ValueError("invalid track index")
+        track = self.engine.tracks[index]
+        if track is None:
+            raise ValueError(f"track {index + 1} is empty")
+        return track.render_owner
 
     def service_wait(self):
-        """Keep MIDI and mixer controls moving while another slot initializes."""
+        """Keep MIDI and mixer controls moving while another track initializes."""
         self.check_cancelled()
         self.engine.apply_pending_controls()
         self.engine.refresh_health()
@@ -216,23 +216,23 @@ class _OwnerRuntime:
             if self.pending() >= INPUT_CAPACITY or not self.inputs.poll():
                 break
             self.receive_input()
-        self.publish_slot_health()
+        self.publish_track_health()
 
     def check_cancelled(self):
         if self.cancelled.value:
             raise _OwnerCancelled
 
 
-    def slot_request(self, index, operation, **arguments):
-        worker = self._slot_worker(index)
+    def track_request(self, index, operation, **arguments):
+        worker = self._track_worker(index)
         reply = worker.request(operation, wait_hook=self.service_wait, **arguments)
-        slot = self.engine.slots[index]
-        slot.plugin = worker.slot.plugin
-        slot.effects = worker.slot.effects
+        track = self.engine.tracks[index]
+        track.plugin = worker.track.plugin
+        track.effects = worker.track.effects
         self.engine._applied_updates.extend(reply.get("updates", ()))
         return reply.get("result")
 
-    def apply_slot_parameters(self):
+    def apply_track_parameters(self):
         # Bound command work per dispatcher pass; never process these on the
         # mixer callback or inspect a processing plugin from the output owner.
         count = min(64, len(self.pending_parameters))
@@ -241,37 +241,37 @@ class _OwnerRuntime:
             if generation != self.generations[index]:
                 continue
             try:
-                self.slot_request(index, "set_parameter", name=name, value=value)
+                self.track_request(index, "set_parameter", name=name, value=value)
             except Exception as error:
-                worker = self._slot_worker(index)
+                worker = self._track_worker(index)
                 worker.failure = f"parameter update failed: {error}"
         self.send_updates()
 
-    def publish_slot_health(self):
+    def publish_track_health(self):
         now = time.monotonic()
         self.engine.refresh_health()
-        if now - self._last_slot_health < 0.1:
+        if now - self._last_track_health < 0.1:
             return
-        self._last_slot_health = now
+        self._last_track_health = now
         realtime = self.engine.output_realtime
         if realtime != self._last_output_realtime:
             self._last_output_realtime = realtime
             self.engine._applied_updates.append(("output_realtime", realtime))
-        for index, slot in enumerate(self.engine.slots):
-            if slot is None:
+        for index, track in enumerate(self.engine.tracks):
+            if track is None:
                 continue
-            worker = slot.render_owner
+            worker = track.render_owner
             worker.poll_failure()
             fields = {"worker_pid": worker.pid, "worker_failure": worker.failure,
                       "worker_misses": worker.misses,
                       "worker_realtime": worker.realtime,
                       "buffering_samples": self.engine.buffer_size}
             changed = {key: value for key, value in fields.items()
-                       if getattr(slot, key) != value}
+                       if getattr(track, key) != value}
             if changed:
                 for key, value in changed.items():
-                    setattr(slot, key, value)
-                self.engine._applied_updates.append(("slot", index, changed))
+                    setattr(track, key, value)
+                self.engine._applied_updates.append(("track", index, changed))
 
     def snapshot(self, inspect_master=False, *, capture_native_state=False):
         self.engine.refresh_health()
@@ -292,23 +292,23 @@ class _OwnerRuntime:
         return (encode_native_message(reply, STATE_LIMIT) if capture_native_state
                 else _encode(reply, STATE_LIMIT))
 
-    def shutdown_slots(self):
-        for index, slot in enumerate(self.engine.slots):
-            if slot is not None and slot.render_owner is not None:
+    def shutdown_tracks(self):
+        for index, track in enumerate(self.engine.tracks):
+            if track is not None and track.render_owner is not None:
                 try:
-                    self.engine.clear_slot(index)
-                    slot.render_owner.shutdown()
+                    self.engine.clear_track(index)
+                    track.render_owner.shutdown()
                 except Exception:
-                    logger.exception("slot worker shutdown failed")
+                    logger.exception("track worker shutdown failed")
 
     def refresh_generations(self):
         changed = set()
-        for index, slot in enumerate(self.engine.slots):
-            if slot is not self.previous_slots[index]:
+        for index, track in enumerate(self.engine.tracks):
+            if track is not self.previous_tracks[index]:
                 self.generations[index] += 1
-                if slot is not None:
-                    slot.generation = self.generations[index]
-                self.previous_slots[index] = slot
+                if track is not None:
+                    track.generation = self.generations[index]
+                self.previous_tracks[index] = track
                 changed.add(index)
         if changed:
             # Inputs already queued for a retired instance must not play the
@@ -329,46 +329,46 @@ class _OwnerRuntime:
         """Read native signal counters and cached mixer metadata without plugin IPC."""
         output = dict(self.engine.stats())
         output["master_gain"] = float(self.engine.master_gain)
-        slots = []
-        for index, slot in enumerate(self.engine.slots):
-            if slot is None:
+        tracks = []
+        for index, track in enumerate(self.engine.tracks):
+            if track is None:
                 continue
-            worker = slot.render_owner
+            worker = track.render_owner
             stats = dict(worker.transport.stats())
             stats.update({
                 "index": index + 1,
-                "name": slot.name,
-                "gain": float(slot.gain),
-                "muted": bool(slot.muted),
-                "solo": bool(slot.solo),
+                "name": track.name,
+                "gain": float(track.gain),
+                "muted": bool(track.muted),
+                "solo": bool(track.solo),
                 "worker_failure": worker.failure,
             })
-            slots.append(stats)
-        return {"output": output, "slots": slots}
+            tracks.append(stats)
+        return {"output": output, "tracks": tracks}
 
     def execute(self, operation, arguments):
         if operation in {
             "load_instrument", "load_wav", "load_vcv", "load_vcv_patch",
             "load_pd", "load_pd_patch",
         }:
-            from core.slot_process import SlotWorker
+            from core.track_process import TrackWorker
 
-            index = arguments["slot_index"]
-            if not isinstance(index, int) or not 0 <= index < NUM_SLOTS:
-                raise ValueError("invalid slot index")
-            staged = SlotWorker(
+            index = arguments["track_index"]
+            if not isinstance(index, int) or not 0 <= index < NUM_TRACKS:
+                raise ValueError("invalid track index")
+            staged = TrackWorker(
                 self.engine.sample_rate, self.engine.buffer_size, index,
                 operation, arguments, wait_hook=self.service_wait)
             published = False
             try:
-                staged.slot.render_owner = staged
-                staged.slot.worker_pid = staged.pid
-                staged.slot.buffering_samples = self.engine.buffer_size
-                staged.slot.worker_realtime = staged.transport.stats()["realtime"]
-                staged.slot.midi_channels = {
+                staged.track.render_owner = staged
+                staged.track.worker_pid = staged.pid
+                staged.track.buffering_samples = self.engine.buffer_size
+                staged.track.worker_realtime = staged.transport.stats()["realtime"]
+                staged.track.midi_channels = {
                     channel for channel, target in self.engine.channel_map.items()
                     if target == index}
-                retired = self.engine.publish_slot(index, staged.slot)
+                retired = self.engine.publish_track(index, staged.track)
                 published = True
                 self.refresh_generations()
                 if retired is not None:
@@ -378,23 +378,23 @@ class _OwnerRuntime:
                 if not published:
                     staged.shutdown()
         if operation == "remove_instrument":
-            index = arguments["slot_index"]
-            self._slot_worker(index)
-            retired = self.engine.clear_slot(index)
+            index = arguments["track_index"]
+            self._track_worker(index)
+            retired = self.engine.clear_track(index)
             self.refresh_generations()
             retired.render_owner.shutdown()
             return self.state_reply()
-        if operation in {"load_effect", "remove_effect"} and arguments.get("slot_index") is not None:
-            index = arguments["slot_index"]
-            forwarded = {key: value for key, value in arguments.items() if key != "slot_index"}
-            self.slot_request(index, operation, **forwarded)
+        if operation in {"load_effect", "remove_effect"} and arguments.get("track_index") is not None:
+            index = arguments["track_index"]
+            forwarded = {key: value for key, value in arguments.items() if key != "track_index"}
+            self.track_request(index, operation, **forwarded)
             return self.state_reply()
         if operation == "load_plugin_state":
-            index = arguments.get("slot_index")
+            index = arguments.get("track_index")
             if index is not None:
                 forwarded = {key: value for key, value in arguments.items()
-                             if key != "slot_index"}
-                result = self.slot_request(index, operation, **forwarded)
+                             if key != "track_index"}
+                result = self.track_request(index, operation, **forwarded)
                 return self.state_reply(result)
             with self.engine.edit_effects():
                 self.engine.apply_pending_controls()
@@ -413,14 +413,14 @@ class _OwnerRuntime:
                         raise TimeoutError("MIDI state capture barrier timed out")
                     self.send_updates()
                     time.sleep(0.001)
-            for index, slot in enumerate(self.engine.slots):
-                if slot is not None:
-                    self.slot_request(index, "sync_state")
+            for index, track in enumerate(self.engine.tracks):
+                if track is not None:
+                    self.track_request(index, "sync_state")
             if not self.engine.master_effects:
                 return self.state_reply(capture_native_state=True)
         if operation in LIFECYCLE_OPERATIONS or operation == "sync_state":
             # Only native master-bus inspection/chain edits still need the
-            # entire device stopped. Slot native work lives in its own child.
+            # entire device stopped. Track native work lives in its own child.
             with self.engine.edit_effects():
                 self.engine.apply_pending_controls()
                 self.send_updates()
@@ -441,17 +441,17 @@ class _OwnerRuntime:
             self.devices = _discover_devices()
             result = None
         elif operation == "set_parameter":
-            index = arguments.get("slot_index")
+            index = arguments.get("track_index")
             if index is None:
                 result = self.engine.set_parameter(**arguments)
             else:
-                forwarded = {key: value for key, value in arguments.items() if key != "slot_index"}
-                result = self.slot_request(index, operation, **forwarded)
+                forwarded = {key: value for key, value in arguments.items() if key != "track_index"}
+                result = self.track_request(index, operation, **forwarded)
         elif operation == "set_parameters":
-            index = arguments.get("slot_index")
+            index = arguments.get("track_index")
             if index is not None:
-                forwarded = {key: value for key, value in arguments.items() if key != "slot_index"}
-                result = self.slot_request(index, operation, **forwarded)
+                forwarded = {key: value for key, value in arguments.items() if key != "track_index"}
+                result = self.track_request(index, operation, **forwarded)
             else:
                 if len(arguments["params"]) > 64:
                     raise ValueError("parameter batch exceeds 64 entries")
@@ -466,8 +466,8 @@ class _OwnerRuntime:
                     except Exception as error:
                         errors[name] = str(error)
                 result = {"values": values, "errors": errors}
-        elif operation == "set_slot_state":
-            self.engine.set_slot_state(**arguments)
+        elif operation == "set_track_state":
+            self.engine.set_track_state(**arguments)
             result = None
         elif operation == "set_master_gain":
             self.engine.set_master_gain(**arguments)
@@ -482,8 +482,8 @@ class _OwnerRuntime:
             result = self.diagnose()
         elif operation == "set_log_level":
             result = set_log_level(**arguments)
-            for slot in self.engine.slots:
-                worker = slot.render_owner if slot is not None else None
+            for track in self.engine.tracks:
+                worker = track.render_owner if track is not None else None
                 if worker is not None and worker.failure is None:
                     worker.request("set_log_level", wait_hook=self.service_wait, **arguments)
         elif operation == "shutdown":
@@ -492,8 +492,8 @@ class _OwnerRuntime:
             else:
                 self.engine.apply_pending_controls()
             self.send_updates()
-            self.shutdown_slots()
-            self.previous_slots = [None] * NUM_SLOTS
+            self.shutdown_tracks()
+            self.previous_tracks = [None] * NUM_TRACKS
             self.owner.shutdown()
             result = None
         else:
@@ -512,8 +512,8 @@ class _OwnerRuntime:
             self.engine.apply_pending_controls()
             self.engine.refresh_health()
             self.send_updates()
-            self.apply_slot_parameters()
-            self.publish_slot_health()
+            self.apply_track_parameters()
+            self.publish_track_health()
             if self.control.poll():
                 request = receive_frame(self.control, CONTROL_LIMIT, native_state=True)
                 operation = request["operation"]
@@ -524,7 +524,7 @@ class _OwnerRuntime:
                 try:
                     self.await_inputs(request["after"])
                     while self.pending_parameters:
-                        self.apply_slot_parameters()
+                        self.apply_track_parameters()
                     if not self.engine.running:
                         self.engine.apply_pending_controls()
                     reply = self.execute(operation, request["arguments"])
@@ -568,7 +568,7 @@ def _run_audio_owner(sample_rate, buffer_size, health, control, inputs, updates,
 
         owner = PluginHost(sample_rate=sample_rate, buffer_size=buffer_size)
         owner.engine.health_buffer = health
-        owner.engine.isolated_slots = True
+        owner.engine.isolated_tracks = True
         owner.engine.refresh_health()
         runtime = _OwnerRuntime(owner, control, inputs, updates, cancelled)
         runtime.run()
@@ -590,7 +590,7 @@ def _run_audio_owner(sample_rate, buffer_size, health, control, inputs, updates,
                 owner.engine.stop()
             finally:
                 if "runtime" in locals():
-                    runtime.shutdown_slots()
+                    runtime.shutdown_tracks()
                 owner.shutdown()
         control.close()
         inputs.close()
@@ -604,7 +604,7 @@ class RemoteAudioEngine:
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
         self.output_channels = 2
-        self.slots = [None] * NUM_SLOTS
+        self.tracks = [None] * NUM_TRACKS
         self.master_effects = []
         self.master_gain = 1.0
         self.channel_map = {}
@@ -614,7 +614,7 @@ class RemoteAudioEngine:
         self.audio_output_index = None
         self.audio_devices = []
         self.native_dependencies = {}
-        self.render_workers = min(os.cpu_count() or 2, NUM_SLOTS)
+        self.render_workers = min(os.cpu_count() or 2, NUM_TRACKS)
         self._epoch = -1
         self._failure = None
         self._ready = False
@@ -682,7 +682,7 @@ class RemoteAudioEngine:
         return not self._closed and self.failure is None and bool(self._health[0])
 
     @property
-    def render_slots(self):
+    def render_tracks(self):
         return int(self._health[1]) if self.running else 0
 
     @property
@@ -730,7 +730,7 @@ class RemoteAudioEngine:
             self._process.terminate()
 
     def _cancel_operation(self, operation):
-        # Do not kill the semaphore-owning process before it can retire slots.
+        # Do not kill the semaphore-owning process before it can retire tracks.
         # The terminal flag still forbids consuming a late reply as another RPC.
         self._cancelled.value = 1
         with self._state_condition:
@@ -761,7 +761,7 @@ class RemoteAudioEngine:
     def _apply_state(self, state):
         with self._state_condition:
             self._epoch = state["epoch"]
-            self.slots = hydrate_slots(state["slots"])
+            self.tracks = hydrate_tracks(state["tracks"])
             self.master_effects = state["master_effects"]
             for name in ("master_gain", "channel_map", "backend_label", "audio_output_name",
                          "audio_output_index", "output_realtime", "output_channels", "render_workers",
@@ -772,15 +772,15 @@ class RemoteAudioEngine:
     def _plugin(self, index, fx_index):
         if index is None:
             return self.master_effects[fx_index] if 0 <= fx_index < len(self.master_effects) else None
-        slot = self.slots[index]
-        if slot is None:
+        track = self.tracks[index]
+        if track is None:
             return None
         if fx_index is None:
-            return slot.plugin
-        return slot.effects[fx_index] if 0 <= fx_index < len(slot.effects) else None
+            return track.plugin
+        return track.effects[fx_index] if 0 <= fx_index < len(track.effects) else None
 
     def _apply_updates(self, epoch, serial, updates):
-        changed_slots = set()
+        changed_tracks = set()
         with self._state_condition:
             if epoch == self._epoch:
                 for update in updates:
@@ -795,21 +795,21 @@ class RemoteAudioEngine:
                                 if raw is not None:
                                     descriptor.raw_value = raw
                                 descriptor.string_value = str(value) if display is None else display
-                    elif kind == "slot":
+                    elif kind == "track":
                         _, index, fields = update
-                        slot = self.slots[index]
-                        if slot is not None:
+                        track = self.tracks[index]
+                        if track is not None:
                             for name, value in fields.items():
-                                setattr(slot, name, value)
-                            changed_slots.add(index)
+                                setattr(track, name, value)
+                            changed_tracks.add(index)
                     elif kind == "master_gain":
                         self.master_gain = update[1]
                     elif kind == "output_realtime":
                         self.output_realtime = update[1]
             self._received_update = serial
             self._state_condition.notify_all()
-        if changed_slots:
-            self._notify(sorted(changed_slots))
+        if changed_tracks:
+            self._notify(sorted(changed_tracks))
 
     def _read_updates(self):
         try:
@@ -861,8 +861,8 @@ class RemoteAudioEngine:
         self._check_owner()
         with self._input_lock:
             if index is not None and generation is None:
-                slot = self.slots[index]
-                generation = slot.generation if slot is not None else 0
+                track = self.tracks[index]
+                generation = track.generation if track is not None else 0
             sequence = self._last_input + 1
             message = _encode((sequence, kind, index, generation, payload), INPUT_LIMIT)
             try:
@@ -872,14 +872,14 @@ class RemoteAudioEngine:
                 raise AudioProcessError(self._failure)
             self._last_input = sequence
 
-    def enqueue_midi(self, slot_index, message, generation=None):
-        self._enqueue("midi", slot_index, message.dict(), generation)
+    def enqueue_midi(self, track_index, message, generation=None):
+        self._enqueue("midi", track_index, message.dict(), generation)
 
-    def enqueue_param_change(self, slot_index, name, value, generation=None):
-        self._enqueue("parameter", slot_index, (name, value), generation)
+    def enqueue_param_change(self, track_index, name, value, generation=None):
+        self._enqueue("parameter", track_index, (name, value), generation)
 
-    def enqueue_slot_change(self, slot_index, generation=None, **fields):
-        self._enqueue("slot", slot_index, fields, generation)
+    def enqueue_track_change(self, track_index, generation=None, **fields):
+        self._enqueue("track", track_index, fields, generation)
 
     def enqueue_master_gain(self, value):
         self._enqueue("master_gain", None, value)
@@ -980,21 +980,21 @@ class RemoteAudioEngine:
         if operation in {"route", "unroute"}:
             with self._state_condition:
                 self.channel_map = result
-                for index, slot in enumerate(self.slots):
-                    if slot is not None:
-                        slot.midi_channels = {channel for channel, target in result.items() if target == index}
+                for index, track in enumerate(self.tracks):
+                    if track is not None:
+                        track.midi_channels = {channel for channel, target in result.items() if target == index}
         return result
 
-    def set_parameter(self, slot_index, name, value, fx_index=None):
-        return self.request("set_parameter", slot_index=slot_index, name=name, value=value, fx_index=fx_index)
+    def set_parameter(self, track_index, name, value, fx_index=None):
+        return self.request("set_parameter", track_index=track_index, name=name, value=value, fx_index=fx_index)
 
-    def load_plugin_state(self, slot_index, state, fx_index=None):
+    def load_plugin_state(self, track_index, state, fx_index=None):
         """Load one saved native chunk and return refreshed lightweight metadata."""
         validate_native_state(state)
-        return self.request("load_plugin_state", slot_index=slot_index,
+        return self.request("load_plugin_state", track_index=track_index,
                             state=state, fx_index=fx_index)
 
-    def set_parameters(self, slot_index, params, fx_index=None):
+    def set_parameters(self, track_index, params, fx_index=None):
         """Restore bounded ordered batches, returning applied values and errors."""
         values, errors = {}, {}
         entries = iter(params.items())
@@ -1004,7 +1004,7 @@ class RemoteAudioEngine:
                 current = pending.popleft()
                 try:
                     result = self.request(
-                        "set_parameters", slot_index=slot_index,
+                        "set_parameters", track_index=track_index,
                         params=current, fx_index=fx_index)
                 except BufferError as error:
                     # Oversized packets fail before transmission. Split without
@@ -1021,21 +1021,21 @@ class RemoteAudioEngine:
                 errors.update(result["errors"])
         return {"values": values, "errors": errors}
 
-    def set_slot_state(self, slot_index, **fields):
-        self.request("set_slot_state", slot_index=slot_index, **fields)
-        return self.slots[slot_index]
+    def set_track_state(self, track_index, **fields):
+        self.request("set_track_state", track_index=track_index, **fields)
+        return self.tracks[track_index]
 
     def set_master_gain(self, value):
         return self.request("set_master_gain", value=value)
 
-    def route(self, midi_channel, slot_index):
-        self.request("route", midi_channel=midi_channel, slot_index=slot_index)
+    def route(self, midi_channel, track_index):
+        self.request("route", midi_channel=midi_channel, track_index=track_index)
 
     def unroute(self, midi_channel):
         self.request("unroute", midi_channel=midi_channel)
 
     def any_solo(self):
-        return any(slot.solo for slot in self.slots if slot is not None)
+        return any(track.solo for track in self.tracks if track is not None)
 
     def start(self, output_device=None):
         self.request("start_audio", output_device=output_device)

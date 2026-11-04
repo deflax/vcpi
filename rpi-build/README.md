@@ -120,8 +120,10 @@ sudo PLUGDATA_URL=https://mirror.example/plugdata-Debian-aarch64.tar.xz \
   interpreter are removed/restored before the output image is published.
 
 The image contains your Wi-Fi credentials, password hash, application patches,
-samples and sessions. Treat it as private. Any additional plugins already present
-in the local `vst3/` tree must be compatible with Linux ARM64.
+samples and sessions. Treat it as private. Install additional Linux ARM64 plugins
+on the Pi in `~/.vst3` or `/usr/local/lib/vst3`, or configure `VST3_PATH` /
+`VST_PATH` before starting the daemon. Plugins in the application checkout are
+not discovered automatically; explicit plugin paths also work.
 
 ## On First Boot
 
@@ -140,7 +142,7 @@ are enabled for local access. The builder does not configure a firewall.
 Connect with `/home/pi/vcpi/vcpi`. Audio is still started explicitly from the CLI:
 
 ```text
-slot 1 vcv default
+track 1 vcv default
 midi link 1 1
 audio start
 ```
@@ -148,7 +150,7 @@ audio start
 Or use the included plugdata patch; no plugin-path environment setting is needed:
 
 ```text
-slot 1 pd plugdata-midi-sine
+track 1 pd plugdata-midi-sine
 midi link 1 1
 audio start
 note 1 60 100 500
@@ -172,14 +174,14 @@ from the historical realtime checks below.
 ## Selective Realtime Scheduling
 
 On Linux, vcpi attempts `SCHED_FIFO` priority **20** on the native output
-callback thread and priority **10** on each native slot DSP thread. Python and
+callback thread and priority **10** on each native track DSP thread. Python and
 process-control threads keep normal `SCHED_OTHER` scheduling. The Pi unit runs
 as `pi` and sets only `LimitRTPRIO=20`: this finite permission allowance is
 inherited by its child processes; it does not promote the whole daemon or its
 children. It does not set `CPUSchedulingPolicy`, run vcpi as root, or add
 `CAP_SYS_NICE`.
 
-Use `status` or `audio diagnose` to inspect output and slot realtime state,
+Use `status` or `audio diagnose` to inspect output and track realtime state,
 actual policy/priority, requested priority, native thread ID, and any errno.
 `active` means the live thread actually has the requested FIFO priority.
 `denied`, for example `SCHED_OTHER priority 0`, `errno=1 (Operation not permitted)`,
@@ -194,15 +196,15 @@ Python/control threads. Do not use whole-process `chrt` as a substitute.
 This Linux-only feature reports `unsupported` on macOS and makes no macOS
 scheduling-policy changes.
 
-Scheduling does not change the buffer size or the existing one-block slot
+Scheduling does not change the buffer size or the existing one-block track
 handoff latency, and does not guarantee dropout-free audio under overload.
-Measure callback deadlines, underruns, and missing slot blocks before further
+Measure callback deadlines, underruns, and missing track blocks before further
 tuning; global realtime promotion, wakeup changes, memory locking, affinity,
 governor changes, and kernel tuning are not part of this setup.
 
 Verification scope: the native extension and a daemon/CLI smoke run were
 exercised on Linux aarch64 with CPython 3.13, an ALSA null sink, and a spawned WAV
-slot at 44100 Hz / 512 samples. With `RTPRIO=(0,0)`, output/slot diagnostics
+track at 44100 Hz / 512 samples. With `RTPRIO=(0,0)`, output/track diagnostics
 matched actual kernel `SCHED_OTHER`/priority 0 and reported permission denial
 without stopping the owner. Python/control threads remained `SCHED_OTHER`;
 output stop/restart reported inactive state and a new callback thread ID.

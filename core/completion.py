@@ -12,14 +12,14 @@ import shlex
 from typing import TYPE_CHECKING
 
 from core import midi
-from core.models import NUM_SLOTS
+from core.models import NUM_TRACKS
 from core.sequencer import NUM_SEQ_BANKS
 
 if TYPE_CHECKING:
     from core.cli import HostCLI
 
 
-_SLOTS = tuple(str(i) for i in range(1, NUM_SLOTS + 1))
+_TRACKS = tuple(str(i) for i in range(1, NUM_TRACKS + 1))
 _CHANNELS = tuple(str(i) for i in range(1, 17))
 _BANKS = tuple(str(i) for i in range(1, NUM_SEQ_BANKS + 1))
 
@@ -77,12 +77,12 @@ def _words(text: str, *, shell: bool) -> list[_Word] | None:
 def _effects(cli: HostCLI, target: str) -> list:
     if target == "master":
         return cli.host.engine.master_effects
-    if target not in _SLOTS:
+    if target not in _TRACKS:
         return []
-    slots = cli.host.engine.slots
+    tracks = cli.host.engine.tracks
     index = int(target) - 1
-    slot = slots[index] if index < len(slots) else None
-    return slot.effects if slot is not None else []
+    track = tracks[index] if index < len(tracks) else None
+    return track.effects if track is not None else []
 
 
 def _indexes(items) -> list[str]:
@@ -153,7 +153,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         return choices(commands) if not args else empty
     if command in ("mute", "solo", "note", "gain"):
         if not args:
-            return choices((*_SLOTS, "master") if command == "gain" else _SLOTS)
+            return choices((*_TRACKS, "master") if command == "gain" else _TRACKS)
         return empty
     if command == "debug":
         return choices(("on", "off")) if not args else empty
@@ -162,7 +162,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
     if command == "ableton":
         return choices(("link", "cut")) if not args else empty
     if command == "flow":
-        return choices(("all", "midi", "controls", "audio", *_SLOTS, "master", "explore")) if not args else empty
+        return choices(("all", "midi", "controls", "audio", *_TRACKS, "master", "explore")) if not args else empty
     if command == "audio":
         if not args:
             return choices(("start", "stop", "devices", "diagnose"))
@@ -182,7 +182,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         if len(args) == 1 and args[0] in ("link", "cut"):
             return choices(_CHANNELS)
         if len(args) == 2 and args[0] == "link" and args[1] in _CHANNELS:
-            return choices(_SLOTS)
+            return choices(_TRACKS)
         return empty
     if command == "midimix":
         if not args:
@@ -194,18 +194,18 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         if not args:
             return choices((*_BANKS, "link", "cut", "clear"))
         if len(args) == 1 and args[0] in ("link", "clear", "cut"):
-            return choices(_SLOTS if args[0] == "cut" else _BANKS)
+            return choices(_TRACKS if args[0] == "cut" else _BANKS)
         if len(args) == 2 and args[0] == "link" and args[1] in _BANKS:
-            return choices(_SLOTS)
+            return choices(_TRACKS)
         return empty
-    if command == "slot":
+    if command == "track":
         if not args:
-            return choices((*_SLOTS, "master"))
+            return choices((*_TRACKS, "master"))
         target = args[0]
-        if target not in (*_SLOTS, "master"):
+        if target not in (*_TRACKS, "master"):
             return empty
         if len(args) == 1:
-            return choices(("fx",) if target == "master" else cli.SLOT_TYPES)
+            return choices(("fx",) if target == "master" else cli.TRACK_TYPES)
         mode = args[1].lower()
         if mode == "fx" and len(args) == 3 and args[2].lower() == "clear":
             return choices(_indexes(_effects(cli, target)))
@@ -246,9 +246,9 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         return empty
     if command in ("info", "get", "set"):
         if not args:
-            return choices((*_SLOTS, "master"))
+            return choices((*_TRACKS, "master"))
         target = args[0]
-        if target not in (*_SLOTS, "master"):
+        if target not in (*_TRACKS, "master"):
             return empty
         effects = _effects(cli, target)
         indexes = _indexes(effects)

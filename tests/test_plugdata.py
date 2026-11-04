@@ -41,27 +41,29 @@ SILENT_PATCH = """#N canvas 0 0 450 300 12;
 
 
 class PlugdataPatchTests(unittest.TestCase):
-    def native_bundle(self, path, missing_message):
-        bundle = Path(path).expanduser()
-        if not bundle.exists():
-            self.skipTest(missing_message)
+    def native_bundle(self, name, environment_variable):
         if sys.platform == "darwin":
-            binary_directory = bundle / "Contents" / "MacOS"
+            directories = ("~/Library/Audio/Plug-Ins/VST3", "/Library/Audio/Plug-Ins/VST3")
+            binary_suffix = Path("Contents/MacOS")
         elif sys.platform.startswith("linux"):
+            directories = ("~/.vst3", "/usr/lib/vst3", "/usr/local/lib/vst3")
             architecture = {"arm64": "aarch64", "amd64": "x86_64"}.get(
                 platform.machine(), platform.machine())
-            binary_directory = bundle / "Contents" / f"{architecture}-linux"
+            binary_suffix = Path("Contents") / f"{architecture}-linux"
         else:
             self.skipTest("native audio supports Linux and macOS")
-        if not binary_directory.is_dir():
-            self.skipTest(f"fetch a native {bundle.name} bundle for this platform")
-        return bundle.resolve()
+        configured = os.environ.get(environment_variable)
+        candidates = ([Path(configured).expanduser()] if configured else
+                      [Path(directory).expanduser() / name for directory in directories])
+        for bundle in candidates:
+            if (bundle / binary_suffix).is_dir():
+                return bundle.resolve()
+        self.skipTest(
+            f"install a native {name} in a user/system VST3 directory "
+            f"or set {environment_variable}")
 
     def plugdata_bundle(self):
-        default = Path(__file__).resolve().parents[1] / "vst3" / "plugdata.vst3"
-        return self.native_bundle(
-            os.environ.get("PLUGDATA_VST3_PATH", default),
-            "install plugdata 0.9.3 or set PLUGDATA_VST3_PATH")
+        return self.native_bundle("plugdata.vst3", "PLUGDATA_VST3_PATH")
 
     def temporary_directory(self):
         directory = tempfile.TemporaryDirectory(prefix="vcpi-plugdata-test-")
@@ -71,7 +73,7 @@ class PlugdataPatchTests(unittest.TestCase):
     def runner(self, plugin, directory, name):
         backend = require_native()
         transport = backend.Transport(str(directory / f"{name}.mmap"), 512, True)
-        runner = backend.SlotRunner(transport, plugin.native, 44100, 512)
+        runner = backend.TrackRunner(transport, plugin.native, 44100, 512)
         self.addCleanup(runner.shutdown)
         return transport, runner
 
@@ -154,9 +156,7 @@ class PlugdataPatchTests(unittest.TestCase):
                 self.assert_note_and_release(transport, runner)
 
     def test_wrong_plugin_rejects_pd_import(self):
-        bundle = self.native_bundle(
-            Path(__file__).resolve().parents[1] / "vst3" / "Surge XT.vst3",
-            "fetch a native Surge XT bundle for wrong-plugin rejection coverage")
+        bundle = self.native_bundle("Surge XT.vst3", "SURGE_VST3_PATH")
         directory = self.temporary_directory()
         patch = directory / "voice.pd"
         patch.write_text(MIDI_VOICE, encoding="utf-8")

@@ -2,7 +2,7 @@
 
 from importlib import import_module
 
-__all__ = ["VcpiCore", "InstrumentSlot", "NUM_SLOTS", "Sequencer", "NUM_SEQ_BANKS"]
+__all__ = ["VcpiCore", "InstrumentTrack", "NUM_TRACKS", "Sequencer", "NUM_SEQ_BANKS"]
 
 
 def __getattr__(name: str):
@@ -10,7 +10,7 @@ def __getattr__(name: str):
     if name == "VcpiCore":
         return getattr(import_module("core.host"), name)
 
-    if name in {"InstrumentSlot", "NUM_SLOTS"}:
+    if name in {"InstrumentTrack", "NUM_TRACKS"}:
         return getattr(import_module("core.models"), name)
 
     if name in {"Sequencer", "NUM_SEQ_BANKS"}:

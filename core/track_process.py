@@ -1,6 +1,6 @@
-"""Per-slot process isolation with native mmap audio and MIDI transport.
+"""Per-track process isolation with native mmap audio and MIDI transport.
 
-Python handles deadline-bound control RPCs only. SlotRunner owns the DSP thread;
+Python handles deadline-bound control RPCs only. TrackRunner owns the DSP thread;
 native output requests and audio publications never enter this interpreter.
 """
 
@@ -18,7 +18,7 @@ from multiprocessing.connection import wait as wait_connections
 
 from core.audio_state import capture_plugin
 from core.audio_deps import require_native
-from core.models import InstrumentSlot, NUM_SLOTS
+from core.models import InstrumentTrack, NUM_TRACKS
 from core.logging_setup import configure_logging, set_log_level
 from core.native_output import native_output, output_destination
 from core.state_transport import (
@@ -46,14 +46,14 @@ _LOAD_OPERATIONS = frozenset((
 ))
 
 
-class SlotProcessError(RuntimeError):
-    """A terminal failure confined to a slot, not the output device owner."""
+class TrackProcessError(RuntimeError):
+    """A terminal failure confined to a track, not the output device owner."""
 
 
 def _encode(value, limit):
     data = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
     if len(data) > limit:
-        raise SlotProcessError(f"slot protocol message exceeds {limit} bytes")
+        raise TrackProcessError(f"track protocol message exceeds {limit} bytes")
     return data
 
 
@@ -62,31 +62,31 @@ def _capture_native_plugin(plugin, values, readers, *, capture_native_state=Fals
     snapshot = capture_plugin(plugin, values, readers,
                               capture_native_state=capture_native_state)
     # Native object addresses are unique only within a process. Snapshot
-    # identities must not collide with another slot or the owner's master FX.
+    # identities must not collide with another track or the owner's master FX.
     snapshot.token = (os.getpid() << 64) | snapshot.token
     return snapshot
 
 
-def _slot_state(owner, index, *, capture_native_state=False):
-    slot = owner.engine.slots[index]
+def _track_state(owner, index, *, capture_native_state=False):
+    track = owner.engine.tracks[index]
     values, readers = {}, {}
     state = {
-        "name": slot.name,
-        "path": slot.path,
-        "plugin": _capture_native_plugin(slot.plugin, values, readers,
+        "name": track.name,
+        "path": track.path,
+        "plugin": _capture_native_plugin(track.plugin, values, readers,
                                          capture_native_state=capture_native_state),
         "effects": [_capture_native_plugin(effect, values, readers,
                                            capture_native_state=capture_native_state)
-                    for effect in slot.effects],
-        "midi_channels": set(slot.midi_channels),
-        "gain": float(slot.gain),
-        "muted": bool(slot.muted),
-        "solo": bool(slot.solo),
-        "enabled": bool(slot.enabled),
-        "source_type": slot.source_type,
-        "vcv_patch_path": slot.vcv_patch_path,
-        "pd_patch_path": slot.pd_patch_path,
-        "generation": slot.generation,
+                    for effect in track.effects],
+        "midi_channels": set(track.midi_channels),
+        "gain": float(track.gain),
+        "muted": bool(track.muted),
+        "solo": bool(track.solo),
+        "enabled": bool(track.enabled),
+        "source_type": track.source_type,
+        "vcv_patch_path": track.vcv_patch_path,
+        "pd_patch_path": track.pd_patch_path,
+        "generation": track.generation,
     }
     owner.engine.parameter_values = values
     owner.engine.parameter_readers = readers
@@ -141,13 +141,13 @@ def _watch_parent(lifeline, transport_path, stopping):
 
 def _execute(owner, index, operation, arguments):
     arguments = dict(arguments)
-    requested_index = arguments.pop("slot_index", index)
+    requested_index = arguments.pop("track_index", index)
     if requested_index != index:
-        raise ValueError("control targets a different slot")
+        raise ValueError("control targets a different track")
     if operation == "set_log_level":
         return {"ok": True, "result": set_log_level(**arguments), "updates": []}
     if operation == "set_parameter":
-        result = owner.engine.set_parameter(slot_index=index, **arguments)
+        result = owner.engine.set_parameter(track_index=index, **arguments)
     elif operation == "set_parameters":
         params = arguments.pop("params")
         fx_index = arguments.pop("fx_index", None)
@@ -162,8 +162,8 @@ def _execute(owner, index, operation, arguments):
         for name, value in params.items():
             try:
                 values[name] = owner.engine.set_parameter(
-                    slot_index=index, name=name, value=value, fx_index=fx_index)
-            except (TimeoutError, BufferError, SlotProcessError):
+                    track_index=index, name=name, value=value, fx_index=fx_index)
+            except (TimeoutError, BufferError, TrackProcessError):
                 raise
             except Exception as error:
                 errors[name] = str(error)
@@ -173,10 +173,10 @@ def _execute(owner, index, operation, arguments):
             raise TypeError("sync_state takes no arguments")
         result = None
     elif operation == "load_plugin_state":
-        owner.engine.load_plugin_state(slot_index=index, **arguments)
+        owner.engine.load_plugin_state(track_index=index, **arguments)
         result = None
     elif operation in ("load_effect", "remove_effect"):
-        getattr(owner, operation)(slot_index=index, **arguments)
+        getattr(owner, operation)(track_index=index, **arguments)
         result = None
     elif operation == "shutdown":
         if arguments:
@@ -184,12 +184,12 @@ def _execute(owner, index, operation, arguments):
         owner.shutdown()
         return {"ok": True, "result": None, "updates": []}
     else:
-        raise ValueError(f"unknown slot operation: {operation}")
+        raise ValueError(f"unknown track operation: {operation}")
     updates = list(owner.engine._applied_updates)
     owner.engine._applied_updates.clear()
     reply = {"ok": True, "result": result, "updates": updates}
     if operation not in {"set_parameter", "set_parameters"}:
-        reply["state"] = _slot_state(
+        reply["state"] = _track_state(
             owner, index, capture_native_state=operation == "sync_state")
         if operation == "load_plugin_state":
             fx_index = arguments.get("fx_index")
@@ -198,14 +198,14 @@ def _execute(owner, index, operation, arguments):
     return reply
 
 
-def _slot_owner(sample_rate, frames, index, operation, arguments,
+def _track_owner(sample_rate, frames, index, operation, arguments,
                 transport_path, control, lifeline, output):
-    with native_output(f"slot {index + 1}", output):
-        _run_slot_owner(sample_rate, frames, index, operation, arguments,
+    with native_output(f"track {index + 1}", output):
+        _run_track_owner(sample_rate, frames, index, operation, arguments,
                         transport_path, control, lifeline)
 
 
-def _run_slot_owner(sample_rate, frames, index, operation, arguments,
+def _run_track_owner(sample_rate, frames, index, operation, arguments,
                     transport_path, control, lifeline):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     configure_logging()
@@ -215,21 +215,21 @@ def _run_slot_owner(sample_rate, frames, index, operation, arguments,
     stopping = threading.Event()
     parent_watch = threading.Thread(
         target=_watch_parent, args=(lifeline, transport_path, stopping),
-        name="vcpi-slot-parent", daemon=True)
+        name="vcpi-track-parent", daemon=True)
     parent_watch.start()
     try:
         from core.plugin_host import PluginHost
 
         backend = require_native()
         transport = backend.Transport(transport_path, frames, False)
-        owner = PluginHost(sample_rate=sample_rate, buffer_size=frames, slot_mode=True)
-        loaded = getattr(owner, operation)(slot_index=index, **arguments)
-        owner.engine.runner = backend.SlotRunner(
-            transport, owner.engine.slots[index].plugin.native, sample_rate, frames)
+        owner = PluginHost(sample_rate=sample_rate, buffer_size=frames, track_mode=True)
+        loaded = getattr(owner, operation)(track_index=index, **arguments)
+        owner.engine.runner = backend.TrackRunner(
+            transport, owner.engine.tracks[index].plugin.native, sample_rate, frames)
         owner.engine.runner.barrier()
         control.send_bytes(_encode({
             "ok": True, "result": _normalized_result(operation, loaded),
-            "state": _slot_state(owner, index), "updates": [],
+            "state": _track_state(owner, index), "updates": [],
         }, STATE_LIMIT))
         ready = True
         while True:
@@ -251,7 +251,7 @@ def _run_slot_owner(sample_rate, frames, index, operation, arguments,
                 data = (encode_native_message(reply, STATE_LIMIT)
                         if operation == "sync_state" else _encode(reply, STATE_LIMIT))
             except Exception as error:
-                fatal = isinstance(error, (TimeoutError, BufferError, SlotProcessError))
+                fatal = isinstance(error, (TimeoutError, BufferError, TrackProcessError))
                 data = _encode({"ok": False, "error": str(error),
                                 "error_type": type(error).__name__,
                                 "fatal": fatal}, STATE_LIMIT)
@@ -269,9 +269,9 @@ def _run_slot_owner(sample_rate, frames, index, operation, arguments,
             control.send_bytes(_encode({"ok": False, "error": str(error),
                                        "error_type": type(error).__name__,
                                        "fatal": ready or isinstance(
-                                           error, (TimeoutError, BufferError, SlotProcessError))
+                                           error, (TimeoutError, BufferError, TrackProcessError))
                                        }, STATE_LIMIT))
-        except (OSError, SlotProcessError):
+        except (OSError, TrackProcessError):
             pass
     finally:
         # Normal teardown must run native cleanup and Python finalizers; a
@@ -287,26 +287,26 @@ def _run_slot_owner(sample_rate, frames, index, operation, arguments,
             lifeline.close()
 
 
-class SlotWorker:
-    """Cached slot facade; RPC/cleanup are owner-main-thread operations only."""
+class TrackWorker:
+    """Cached track facade; RPC/cleanup are owner-main-thread operations only."""
 
-    def __init__(self, sample_rate, buffer_size, slot_index, operation, arguments,
+    def __init__(self, sample_rate, buffer_size, track_index, operation, arguments,
                  *, wait_hook=None):
         if sample_rate <= 0 or buffer_size <= 0:
             raise ValueError("sample rate and buffer size must be positive")
-        if not isinstance(slot_index, int) or not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError("slot index out of range")
+        if not isinstance(track_index, int) or not 0 <= track_index < NUM_TRACKS:
+            raise ValueError("track index out of range")
         if operation not in _LOAD_OPERATIONS:
-            raise ValueError(f"unknown slot load operation: {operation}")
+            raise ValueError(f"unknown track load operation: {operation}")
         arguments = dict(arguments)
-        if arguments.pop("slot_index", slot_index) != slot_index:
-            raise ValueError("load targets a different slot")
+        if arguments.pop("track_index", track_index) != track_index:
+            raise ValueError("load targets a different track")
         # Check message size before spawning or allocating process resources.
         _encode({"operation": operation, "arguments": arguments}, CONTROL_LIMIT)
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
-        self.slot_index = slot_index
-        self.slot = None
+        self.track_index = track_index
+        self.track = None
         self.result = None
         self.misses = 0
         self.failure = None
@@ -320,7 +320,7 @@ class SlotWorker:
         self._jobs = queue.Queue(maxsize=1)
         self._io_stop = threading.Event()
         context = mp.get_context("spawn")
-        descriptor, self.transport_path = tempfile.mkstemp(prefix="vcpi-slot-", suffix=".mmap")
+        descriptor, self.transport_path = tempfile.mkstemp(prefix="vcpi-track-", suffix=".mmap")
         os.close(descriptor)
         try:
             self.transport = require_native().Transport(self.transport_path, buffer_size, True)
@@ -330,13 +330,13 @@ class SlotWorker:
         self._control, child_control = context.Pipe(duplex=True)
         child_lifeline, self._lifeline = context.Pipe(duplex=False)
         self._process = context.Process(
-            target=_slot_owner,
-            args=(sample_rate, buffer_size, slot_index, operation, arguments,
+            target=_track_owner,
+            args=(sample_rate, buffer_size, track_index, operation, arguments,
                   self.transport_path, child_control, child_lifeline, output_destination()),
-            name=f"vcpi-slot-{slot_index + 1}", daemon=False,
+            name=f"vcpi-track-{track_index + 1}", daemon=False,
         )
         self._io_thread = threading.Thread(target=self._io_loop,
-                                           name=f"vcpi-slot-io-{slot_index + 1}",
+                                           name=f"vcpi-track-io-{track_index + 1}",
                                            daemon=True)
         try:
             self._process.start()
@@ -358,7 +358,7 @@ class SlotWorker:
 
     def _assert_main(self):
         if threading.get_ident() != self._main_thread:
-            raise RuntimeError("slot RPC/cleanup must run on the owner main thread")
+            raise RuntimeError("track RPC/cleanup must run on the owner main thread")
 
     def _io_loop(self):
         # Pipes may block on a partial frame even after poll reports readable.
@@ -388,45 +388,45 @@ class SlotWorker:
                 try:
                     wait_hook()
                 except BaseException:
-                    self.failure = self.failure or "slot control wait hook failed"
+                    self.failure = self.failure or "track control wait hook failed"
                     self._stop_process()
                     raise
             if time.monotonic() >= deadline:
-                self.failure = self.failure or "slot control acknowledgement timed out"
+                self.failure = self.failure or "track control acknowledgement timed out"
                 self._stop_process()
-                raise SlotProcessError(self.failure)
+                raise TrackProcessError(self.failure)
         result = outcome[0]
         if isinstance(result, Exception):
-            self.failure = self.failure or f"slot control channel failed: {result}"
+            self.failure = self.failure or f"track control channel failed: {result}"
             self._stop_process()
-            raise SlotProcessError(self.failure) from result
+            raise TrackProcessError(self.failure) from result
         return result
 
     def _accept(self, reply):
         if not reply.get("ok"):
-            message = reply.get("error", "slot operation failed")
+            message = reply.get("error", "track operation failed")
             if reply.get("fatal"):
                 self.failure = self.failure or message
                 self._stop_process()
-                raise SlotProcessError(message)
+                raise TrackProcessError(message)
             raise _REMOTE_ERRORS.get(reply.get("error_type"), RuntimeError)(message)
         state = reply.get("state")
         if state is not None:
-            if self.slot is None:
-                self.slot = InstrumentSlot(**state)
-                self.slot.render_owner = self
+            if self.track is None:
+                self.track = InstrumentTrack(**state)
+                self.track.render_owner = self
             else:
                 # Gain, routing, generation and mute/solo are mixer-owned.
-                self.slot.plugin = state["plugin"]
-                self.slot.effects = state["effects"]
+                self.track.plugin = state["plugin"]
+                self.track.effects = state["effects"]
         for update in reply.get("updates", ()):
             if update[0] != "parameter":
                 continue
             _, index, fx_index, name, value, raw, display = update
-            if index != self.slot_index or self.slot is None:
+            if index != self.track_index or self.track is None:
                 continue
-            plugin = (self.slot.plugin if fx_index is None
-                      else self.slot.effects[fx_index])
+            plugin = (self.track.plugin if fx_index is None
+                      else self.track.effects[fx_index])
             if plugin is not None:
                 plugin.values[name] = value
                 descriptor = plugin.parameters.get(name)
@@ -438,9 +438,9 @@ class SlotWorker:
     def request(self, operation, *, wait_hook=None, **arguments):
         self._assert_main()
         if self._closed or self.failure is not None:
-            raise SlotProcessError(self.failure or "slot process is shut down")
+            raise TrackProcessError(self.failure or "track process is shut down")
         if self._rpc_active:
-            raise RuntimeError("slot requests cannot be nested")
+            raise RuntimeError("track requests cannot be nested")
         message = {"operation": operation, "arguments": arguments}
         data = (encode_native_message(message, CONTROL_LIMIT)
                 if operation == "load_plugin_state" else _encode(message, CONTROL_LIMIT))
@@ -463,7 +463,7 @@ class SlotWorker:
         if self._closed:
             return self.failure
         if self.failure is None and self._process.exitcode is not None:
-            self.failure = f"slot process exited (code {self._process.exitcode})"
+            self.failure = f"track process exited (code {self._process.exitcode})"
         now = time.monotonic()
         stats = self.transport.stats()
         progress = int(stats["progress"])
@@ -477,7 +477,7 @@ class SlotWorker:
         if (self.failure is None and not self._rpc_active
                 and int(stats["sequence"]) > int(stats["submitted"])
                 and now - self._progress_time > RENDER_TIMEOUT):
-            self.failure = "slot rendering stalled"
+            self.failure = "track rendering stalled"
         if self.failure is not None:
             self._stop_process()
         return self.failure
@@ -504,7 +504,7 @@ class SlotWorker:
             try:
                 data = _encode({"operation": "shutdown", "arguments": {}}, CONTROL_LIMIT)
                 self._exchange(data, SHUTDOWN_TIMEOUT, None)
-            except (SlotProcessError, OSError, queue.Full):
+            except (TrackProcessError, OSError, queue.Full):
                 pass
             self._process.join(SHUTDOWN_TIMEOUT)
         self._stop_process()
@@ -520,6 +520,6 @@ class SlotWorker:
             os.unlink(self.transport_path)
         except FileNotFoundError:
             pass
-        if self.slot is not None and self.slot.render_owner is self:
-            # Retired slots must not retain a worker/slot reference cycle.
-            self.slot.render_owner = None
+        if self.track is not None and self.track.render_owner is self:
+            # Retired tracks must not retain a worker/track reference cycle.
+            self.track.render_owner = None

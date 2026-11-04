@@ -1,11 +1,11 @@
 """Session persistence -- save and restore host state to a JSON file.
 
 Saved state includes:
-  - Per-slot: source kind (plugin/wav/vcv/pd), instrument path, name, gain,
+  - Per-track: source kind (plugin/wav/vcv/pd), instrument path, name, gain,
     enabled, muted, solo, insert effect paths/names, and opaque native VST3 state
   - Master effects: paths, names, and opaque native VST3 state
   - Master gain
-  - MIDI channel -> slot routing
+  - MIDI channel -> track routing
   - Link BPM and enabled state
   - Audio/MIDI device connection targets
 
@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
-from core.models import NUM_SLOTS
+from core.models import NUM_TRACKS
 from core.state_transport import NATIVE_STATE_LIMIT, validate_native_state
 
 if TYPE_CHECKING:
@@ -52,16 +52,16 @@ def _saved_plugin_state(plugin) -> str:
 
 def _apply_plugin_params(
     host: VcpiCore,
-    slot_index: int | None,
+    track_index: int | None,
     params: dict[str, bool | str | int | float],
     fx_index: int | None = None,
 ):
     """Conservatively migrate v1 values using freshly loaded live descriptors."""
-    if slot_index is None:
+    if track_index is None:
         plugin = host.engine.master_effects[fx_index]
     else:
-        slot = host.engine.slots[slot_index]
-        plugin = slot.plugin if fx_index is None else slot.effects[fx_index]
+        track = host.engine.tracks[track_index]
+        plugin = track.plugin if fx_index is None else track.effects[fx_index]
     descriptors = plugin.parameters if plugin is not None else {}
     safe_params = {}
     for name, value in params.items():
@@ -75,7 +75,7 @@ def _apply_plugin_params(
             safe_params[name] = value
     if not safe_params:
         return
-    result = host.engine.set_parameters(slot_index, safe_params, fx_index=fx_index)
+    result = host.engine.set_parameters(track_index, safe_params, fx_index=fx_index)
     for name, error in result["errors"].items():
         logger.warning(
             "[session] could not restore param '%s' = %s: %s",
@@ -83,7 +83,7 @@ def _apply_plugin_params(
         )
 
 
-def _restore_plugin_state(host, slot_index, entry, version, fx_index=None, *, wav=False):
+def _restore_plugin_state(host, track_index, entry, version, fx_index=None, *, wav=False):
     """Native chunks take precedence; parameter replay is legacy-v1-only."""
     if wav:
         return
@@ -98,11 +98,11 @@ def _restore_plugin_state(host, slot_index, entry, version, fx_index=None, *, wa
         except (ValueError, binascii.Error) as error:
             raise ValueError("native_state is not valid base64") from error
         host.engine.load_plugin_state(
-            slot_index, validate_native_state(state), fx_index=fx_index)
+            track_index, validate_native_state(state), fx_index=fx_index)
     elif version == 1:
-        _apply_plugin_params(host, slot_index, entry.get("params", {}), fx_index)
+        _apply_plugin_params(host, track_index, entry.get("params", {}), fx_index)
     else:
-        raise ValueError("version 2 VST3 entry is missing native_state")
+        raise ValueError(f"version {version} VST3 entry is missing native_state")
 
 
 def snapshot(host: VcpiCore) -> dict:
@@ -113,36 +113,36 @@ def snapshot(host: VcpiCore) -> dict:
 
 def _snapshot_cached(host: VcpiCore) -> dict:
     """Capture the full restorable state of the host as a plain dict."""
-    slots_data = []
-    for slot in host.engine.slots:
-        if slot is None:
-            slots_data.append(None)
+    tracks_data = []
+    for track in host.engine.tracks:
+        if track is None:
+            tracks_data.append(None)
             continue
         effects_data = []
-        for fx in slot.effects:
+        for fx in track.effects:
             fxp = _fx_path(fx)
             effects_data.append({
                 "path": fxp,
                 "name": Path(fxp).stem if fxp else "unknown",
                 "native_state": _saved_plugin_state(fx),
             })
-        slot_entry = {
-            "kind": slot.source_type,
-            "path": slot.path,
-            "name": slot.name,
-            "gain": slot.gain,
-            "enabled": slot.enabled,
-            "muted": slot.muted,
-            "solo": slot.solo,
+        track_entry = {
+            "kind": track.source_type,
+            "path": track.path,
+            "name": track.name,
+            "gain": track.gain,
+            "enabled": track.enabled,
+            "muted": track.muted,
+            "solo": track.solo,
             "effects": effects_data,
         }
-        if slot.source_type != "wav":
-            slot_entry["native_state"] = _saved_plugin_state(slot.plugin)
-        if slot.source_type == "vcv" and slot.vcv_patch_path:
-            slot_entry["vcv_patch_path"] = slot.vcv_patch_path
-        if slot.source_type == "pd" and slot.pd_patch_path:
-            slot_entry["pd_patch_path"] = slot.pd_patch_path
-        slots_data.append(slot_entry)
+        if track.source_type != "wav":
+            track_entry["native_state"] = _saved_plugin_state(track.plugin)
+        if track.source_type == "vcv" and track.vcv_patch_path:
+            track_entry["vcv_patch_path"] = track.vcv_patch_path
+        if track.source_type == "pd" and track.pd_patch_path:
+            track_entry["pd_patch_path"] = track.pd_patch_path
+        tracks_data.append(track_entry)
 
     master_fx_data = []
     for fx in host.engine.master_effects:
@@ -164,14 +164,14 @@ def _snapshot_cached(host: VcpiCore) -> dict:
     }
 
     return {
-        "version": 2,
+        "version": 3,
         "sample_rate": host.sample_rate,
         "buffer_size": host.buffer_size,
         "bpm": host.link.bpm,
         "link_enabled": host.link.enabled,
         "master_gain": host.engine.master_gain,
         "routing": routing,
-        "slots": slots_data,
+        "tracks": tracks_data,
         "master_effects": master_fx_data,
         "connections": connections,
         "sequences": host.sequencer.snapshot(),
@@ -201,7 +201,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
 
     data = json.loads(path.read_text())
     version = data.get("version", 0)
-    if version not in (1, 2):
+    if version not in (1, 2, 3):
         logger.warning("[Session] Unknown session version %s, skipping", version)
         return
 
@@ -230,57 +230,57 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
     if mg is not None:
         host.engine.set_master_gain(mg)
 
-    # -- Slots ---------------------------------------------------------------
-    for idx, slot_data in enumerate(data.get("slots", [])):
-        if idx >= NUM_SLOTS:
+    # -- Tracks ---------------------------------------------------------------
+    for idx, track_data in enumerate(data.get("tracks" if version == 3 else "slots", [])):
+        if idx >= NUM_TRACKS:
             break
-        if slot_data is None:
+        if track_data is None:
             continue
-        plugin_path = slot_data.get("path")
+        plugin_path = track_data.get("path")
         if not plugin_path:
             continue
-        slot_kind = slot_data.get("kind", "plugin")
+        track_kind = track_data.get("kind", "plugin")
         try:
-            match slot_kind:
+            match track_kind:
                 case "wav":
-                    slot = host.load_wav(idx, plugin_path, slot_data.get("name"))
+                    track = host.load_wav(idx, plugin_path, track_data.get("name"))
                 case "vcv":
-                    vcv_patch = slot_data.get("vcv_patch_path", "")
+                    vcv_patch = track_data.get("vcv_patch_path", "")
                     if version == 1 and vcv_patch:
-                        slot, _, _ = host.load_vcv(
+                        track, _, _ = host.load_vcv(
                             idx, vcv_patch,
                             cardinal_path=plugin_path,
-                            name=slot_data.get("name"),
+                            name=track_data.get("name"),
                         )
                     else:
-                        slot = host.load_instrument(idx, plugin_path, slot_data.get("name"))
+                        track = host.load_instrument(idx, plugin_path, track_data.get("name"))
                 case _:
-                    slot = host.load_instrument(idx, plugin_path, slot_data.get("name"))
-            slot = host.engine.set_slot_state(
+                    track = host.load_instrument(idx, plugin_path, track_data.get("name"))
+            track = host.engine.set_track_state(
                 idx,
-                gain=slot_data.get("gain", 0.8),
-                enabled=slot_data.get("enabled", True),
-                muted=slot_data.get("muted", False),
-                solo=slot_data.get("solo", False),
-                source_type=slot_kind,
-                vcv_patch_path=slot_data.get("vcv_patch_path", ""),
-                pd_patch_path=slot_data.get("pd_patch_path", ""),
+                gain=track_data.get("gain", 0.8),
+                enabled=track_data.get("enabled", True),
+                muted=track_data.get("muted", False),
+                solo=track_data.get("solo", False),
+                source_type=track_kind,
+                vcv_patch_path=track_data.get("vcv_patch_path", ""),
+                pd_patch_path=track_data.get("pd_patch_path", ""),
             )
             _restore_plugin_state(
-                host, idx, slot_data, version, wav=slot_kind == "wav")
-            logger.info("[session] slot %d: %s", idx + 1, slot.name)
+                host, idx, track_data, version, wav=track_kind == "wav")
+            logger.info("[session] track %d: %s", idx + 1, track.name)
 
-            for fx_data in slot_data.get("effects", []):
+            for fx_data in track_data.get("effects", []):
                 try:
                     host.load_effect(fx_data["path"], idx, fx_data.get("name"))
-                    slot = host.engine.slots[idx]
+                    track = host.engine.tracks[idx]
                     _restore_plugin_state(
-                        host, idx, fx_data, version, len(slot.effects) - 1)
+                        host, idx, fx_data, version, len(track.effects) - 1)
                 except Exception as e:
-                    errors.append(f"slot {idx + 1} fx '{fx_data.get('path')}': {e}")
+                    errors.append(f"track {idx + 1} fx '{fx_data.get('path')}': {e}")
 
         except Exception as e:
-            errors.append(f"slot {idx + 1} ({slot_kind}) '{plugin_path}': {e}")
+            errors.append(f"track {idx + 1} ({track_kind}) '{plugin_path}': {e}")
 
     # -- Master effects ------------------------------------------------------
     # A loaded session replaces the bus; retaining it doubles effects on reload.
@@ -295,17 +295,23 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
             errors.append(f"master fx '{fx_data.get('path')}': {e}")
 
     # -- Routing (stored as 1-based strings in JSON) -------------------------
-    for ch_str, slot_num in data.get("routing", {}).items():
+    for ch_str, track_num in data.get("routing", {}).items():
         try:
             ch_internal = int(ch_str) - 1
-            slot_internal = int(slot_num) - 1
-            host.route(ch_internal, slot_internal)
+            track_internal = int(track_num) - 1
+            host.route(ch_internal, track_internal)
         except Exception as e:
-            errors.append(f"route ch {ch_str} -> slot {slot_num}: {e}")
+            errors.append(f"route ch {ch_str} -> track {track_num}: {e}")
 
     # -- Sequences -----------------------------------------------------------
     seq_data = data.get("sequences")
     if isinstance(seq_data, list):
+        if version < 3:
+            seq_data = [
+                {**entry, "linked_track": entry.get("linked_slot")}
+                if isinstance(entry, dict) else entry
+                for entry in seq_data
+            ]
         host.sequencer.restore(seq_data)
 
     # -- Device connections --------------------------------------------------

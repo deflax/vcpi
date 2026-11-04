@@ -5,16 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-NUM_SLOTS = 8  # matches the 8 channel strips on the Akai MIDI Mix
+NUM_TRACKS = 8  # matches the 8 channel strips on the Akai MIDI Mix
 
 
 @dataclass
-class InstrumentSlot:
-    """A playable slot source with optional insert-effects chain."""
+class InstrumentTrack:
+    """A playable track source with optional insert-effects chain."""
 
     name: str
     path: str
-    plugin: object  # native plugin in slot owner, PluginSnapshot elsewhere
+    plugin: object  # native plugin in track owner, PluginSnapshot elsewhere
     effects: list = field(default_factory=list)
     midi_channels: set = field(default_factory=set)  # routed MIDI channels (0-15)
     gain: float = 0.8
@@ -34,7 +34,7 @@ class InstrumentSlot:
 
     @property
     def display_label(self) -> str:
-        """Qualified label shown in status/slots output.
+        """Qualified label shown in status/tracks output.
 
         Format:
           sample::<pack>:<stem>   for WAV samples

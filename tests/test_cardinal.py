@@ -39,7 +39,7 @@ class CardinalPatchTests(unittest.TestCase):
             saved = plugin.get_state()
             assert isinstance(saved, bytes)
             transport = backend.Transport(str(Path(directory) / "audio.mmap"), 512, True)
-            runner = backend.SlotRunner(transport, plugin.native, 44100, 512)
+            runner = backend.TrackRunner(transport, plugin.native, 44100, 512)
             try:
                 def peak():
                     value = 0.0

@@ -10,7 +10,7 @@ Source of truth:
 
 ## Conventions
 
-- Slots are **1-8**.
+- Tracks are **1-8**.
 - MIDI channels are **1-16**.
 - `fx_index` values are **1-based** in CLI commands.
 - `master` means the global master effects bus.
@@ -71,14 +71,14 @@ explicitly sets `LOG_LEVEL=INFO`. An explicit `LOG_LEVEL=WARNING` hides INFO.
 
 From a connected client, use `debug` to inspect the current daemon logging level,
 `debug on` to enable DEBUG, and `debug off` to return to INFO without restarting.
-The change applies to the daemon, live audio/slot workers, and subsequently
+The change applies to the daemon, live audio/track workers, and subsequently
 created workers. It lasts until the daemon exits and does not edit service or
 shell configuration. Logs remain in the daemon terminal or service journal,
 not in the client response. Use `help debug` for command help.
 
 Raw native/plugin stdout and stderr (including ALSA/JACK probing and plugin
 print statements) are discarded unless DEBUG is enabled. With `debug on`, they
-stream to the daemon terminal with `[daemon]`, `[audio]`, or `[slot N]` prefixes.
+stream to the daemon terminal with `[daemon]`, `[audio]`, or `[track N]` prefixes.
 There are no vcpi per-process log files or replay buffers. `debug off` stops
 streaming and discards subsequent raw output; structured vcpi activity messages,
 warnings, and errors continue to appear. Long or unterminated lines may be split into bounded
@@ -93,22 +93,24 @@ in memory and printed, with a notice if earlier output was discarded.
 
 VST3 plugin search and name resolution:
 
-- `slot <n> vst` and `slot <n> fx` accept a plugin **name** (e.g. `Dexed`) or a
+- `track <n> vst` and `track <n> fx` accept a plugin **name** (e.g. `Dexed`) or a
   full path (e.g. `/usr/lib/vst3/Dexed.vst3`). Names are resolved by scanning
   known search directories.
-- Search order: `vst3/` in the repo root, `~/.vst3`,
-  `/usr/lib/vst3`, `/usr/local/lib/vst3`, and macOS standard paths.
+- Search order: directories from `VST3_PATH`, then `VST_PATH`, followed by
+  the working directory, the repository root, `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`,
+  `~/Library/Audio/Plug-Ins/VST3`, and `/Library/Audio/Plug-Ins/VST3`.
+  The former repository/working-directory `vst3/` subdirectories are not searched automatically.
 - Name matching: exact stem match first, then case-insensitive, then unique
   prefix match. Ambiguous names produce an error listing the candidates.
-- Tab completion for `slot <n> vst` and `slot <n> fx` lists all detected plugin names.
-- Run `./vst3/fetch-vsts-amd64` on x86_64/amd64 systems.
-- Run `./vst3/fetch-vsts-aarch64` on Raspberry Pi / Linux aarch64 systems.
-- Override with `VST3_PATH` or `VST_PATH` environment variables.
+- Tab completion for `track <n> vst` and `track <n> fx` lists all detected plugin names.
+- Install plugins compatible with your OS and CPU architecture in a standard
+  user/system directory above, or set `VST3_PATH` or `VST_PATH` to a
+  colon-separated list of additional plugin directories before starting the daemon.
 
 Cardinal/VCV helpers:
 
-- `slot <n> vcv` looks for patch files in `patches/` by default.
-- `slot <n> vcv` does not auto-route channels; use `midi link <ch> <slot>` explicitly.
+- `track <n> vcv` looks for patch files in `patches/` by default.
+- `track <n> vcv` does not auto-route channels; use `midi link <ch> <track>` explicitly.
 - Override patch directory with `VCPI_PATCHES_DIR`.
 - Override Cardinal plugin path with `CARDINAL_VST3_PATH`.
 - Author patches in Cardinal with Host MIDI and Host Audio modules wired to the
@@ -118,7 +120,7 @@ Cardinal/VCV helpers:
   to an empty instance.
 - Session saves capture the loaded plugin state, so restoring a current-format
   session does not require re-importing the original `.vcv` file.
-- If `audio diagnose` shows MIDI consumed but a slot peak of zero, inspect the
+- If `audio diagnose` shows MIDI consumed but a track peak of zero, inspect the
   patch import and internal MIDI/audio wiring before changing output devices.
 
 plugdata/Pure Data helpers:
@@ -126,24 +128,25 @@ plugdata/Pure Data helpers:
 - Install the **instrument** `plugdata.vst3` bundle from
   [plugdata v0.9.3-2](https://github.com/plugdata-team/plugdata/releases/tag/v0.9.3-2)
   for your OS and CPU architecture. The standalone app and `plugdata-fx.vst3`
-  are not substitutes for this slot source. The bundled fetch scripts do not
-  install plugdata.
+  are not substitutes for this track source.
 - Pi images built with `rpi-build/prepare-image.sh` install this pinned ARM64
   instrument bundle automatically at `/usr/local/lib/vst3/plugdata.vst3`.
   No manual plugin install, path override, or first-boot download is needed.
-- Place the bundle at `vst3/plugdata.vst3` in the repository, or set
-  `PLUGDATA_VST3_PATH` to its full path before starting the daemon. Discovery also
-  checks the working directory's `vst3/`, `~/.vst3`, `/usr/lib/vst3`,
-  `/usr/local/lib/vst3`, and standard user/system macOS VST3 directories.
-- `slot <n> pd <patch_name[.pd]> [--name <label>]` loads from `patches/`,
+- Install the bundle in `~/.vst3`, `/usr/lib/vst3`, or `/usr/local/lib/vst3`
+  on Linux, or `~/Library/Audio/Plug-Ins/VST3` or
+  `/Library/Audio/Plug-Ins/VST3` on macOS. For another location, set
+  `PLUGDATA_VST3_PATH` to the bundle's full path before starting the daemon.
+  Repository-local and working-directory plugin folders are not searched
+  automatically.
+- `track <n> pd <patch_name[.pd]> [--name <label>]` loads from `patches/`,
   sharing `VCPI_PATCHES_DIR` with Cardinal. Absolute paths and nested patch names
   are accepted. Quote names containing spaces, or use the same multiword-name
-  syntax as `slot <n> vst`; labels require `--name`.
-- Import runs headlessly in a staged slot process. Failure leaves the previous
-  slot intact. MIDI routing remains explicit: `midi link <ch> <slot>`.
+  syntax as `track <n> vst`; labels require `--name`.
+- Import runs headlessly in a staged track process. Failure leaves the previous
+  track intact. MIDI routing remains explicit: `midi link <ch> <track>`.
 - Patches must be UTF-8 Pure Data files, at most 16 MiB. Use MIDI objects such as
   `notein` and audio output such as `dac~`; there is no external audio-input path
-  into an instrument slot. The included `sine` patch is a velocity-sensitive
+  into an instrument track. The included `sine` patch is a velocity-sensitive
   monophonic sine instrument with 5 ms fades and a full-velocity peak of 0.6.
   `classic-subtractive-synth` keeps the tutorial's oversampled oscillator and
   `bob~` filter, with MIDI input and a self-contained amplitude/filter envelope
@@ -163,7 +166,7 @@ plugdata/Pure Data helpers:
   Custom externals must be supported by the installed plugdata build.
 
 ```text
-slot 1 pd sine
+track 1 pd sine
 midi link 1 1
 audio start
 note 1 60 100 500
@@ -172,7 +175,7 @@ note 1 60 100 500
 Load the polyphonic pad and play it from MIDI channel 1:
 
 ```text
-slot 1 pd poly-pad
+track 1 pd poly-pad
 midi link 1 1
 audio start
 note 1 60 100 3000
@@ -183,25 +186,25 @@ Each `pd voice-*` subpatch contains its oscillator detuning (`* 0.997` and
 `* 1.003`), filter (`lop~ 1800`), attack (`pack f 800`), release (`0 2200`),
 and output gain (`*~ 0.09`). Apply sound changes to all eight voices.
 The pad's output is 6 dB louder than the original example while retaining
-headroom for chords. Reload it with `slot 1 pd poly-pad` after updating
+headroom for chords. Reload it with `track 1 pd poly-pad` after updating
 the file; a running instance or saved session can still contain the older patch.
 In standalone Pure Data, enable DSP and configure a MIDI input; vcpi handles
 audio processing when hosted in plugdata. The patch itself accepts all MIDI
-channels, so use vcpi's routing to select which channel reaches the slot.
+channels, so use vcpi's routing to select which channel reaches the track.
 
 For short sequencer notes, use `sine` or `classic-subtractive-synth` rather
 than the pad's slow swell. For example:
 
 ```text
-slot 1 pd classic-subtractive-synth
+track 1 pd classic-subtractive-synth
 audio start
 note 1 60 127 100
 ```
 
 Both monophonic patches accept note-on/note-off on all MIDI channels and replace
 the current note when a newer note arrives. Releasing a stolen older note does
-not stop the newer one. Use `midi link <ch> <slot>` for external MIDI routing,
-or `seq link <bank> <slot>` for vcpi's internal sequencer. Reload a patch after
+not stop the newer one. Use `midi link <ch> <track>` for external MIDI routing,
+or `seq link <bank> <track>` for vcpi's internal sequencer. Reload a patch after
 updating its file; previously saved sessions retain their embedded old version.
 
 Examples:
@@ -253,11 +256,11 @@ parameters.
 | Command name / `help` | Available commands and help topics |
 | `audio` / `audio start` | Subcommands and cached output-device indexes |
 | `midi` / `midimix` | Subcommands, port directions, current hardware indexes, and opened-input close indexes |
-| `midi link` / `midi cut` | MIDI channels and routing slots |
-| `seq` | Actions, sequence banks, and target slots |
+| `midi link` / `midi cut` | MIDI channels and routing tracks |
+| `seq` | Actions, sequence banks, and target tracks |
 | `ableton` / `debug` | Link actions and debug on/off |
-| `gain` / `mute` / `solo` / `note` | Valid slot targets; `gain` also offers `master` |
-| `slot` | Slot types, installed plugins, patch names, sample packs/samples, and loaded effect indexes for `fx clear` |
+| `gain` / `mute` / `solo` / `note` | Valid track targets; `gain` also offers `master` |
+| `track` | Track types, installed plugins, patch names, sample packs/samples, and loaded effect indexes for `fx clear` |
 | `info` / `get` / `set` | Plugin targets and actual loaded effect indexes |
 | `get` / `set` parameter names | Cached visible parameters, excluding MIDI CC helpers |
 | `set` value | Boolean literals and enum choices, quoted when necessary |
@@ -273,33 +276,33 @@ hardware or empty plugin/effect lists may also yield no choices.
 
 | Command | Description |
 |---|---|
-| `slot <slot> vst <path\|vst_name> [--name <label>]` | Load VST instrument into slot |
-| `slot <slot> wav <pack> <sample> [name]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into slot |
-| `slot <slot> vcv <patch_name> [name]` | Load Cardinal into slot from `patches/<patch_name>.vcv` |
-| `slot <slot> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `patches/` or an absolute path |
-| `slot <slot\|master> fx <path\|vst_name> [--name <label>]` | Load effect into slot insert chain or master bus |
-| `slot <slot> clear` | Clear instrument from slot |
-| `slot <slot\|master> fx clear <fx_index>` | Remove effect by index |
-| `get <slot> [name]` | Read all visible instrument parameters, or one named parameter |
-| `get <slot> fx <fx_index> [name]` | Read all visible slot-effect parameters, or one named parameter |
+| `track <track> vst <path\|vst_name> [--name <label>]` | Load VST instrument into track |
+| `track <track> wav <pack> <sample> [name]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into track |
+| `track <track> vcv <patch_name> [name]` | Load Cardinal into track from `patches/<patch_name>.vcv` |
+| `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `patches/` or an absolute path |
+| `track <track\|master> fx <path\|vst_name> [--name <label>]` | Load effect into track insert chain or master bus |
+| `track <track> clear` | Clear instrument from track |
+| `track <track\|master> fx clear <fx_index>` | Remove effect by index |
+| `get <track> [name]` | Read all visible instrument parameters, or one named parameter |
+| `get <track> fx <fx_index> [name]` | Read all visible track-effect parameters, or one named parameter |
 | `get master [fx_index] [name]` | Read master-effect parameters; effect index defaults to 1 |
-| `set <slot> <name> <value>` | Set instrument parameter |
-| `set <slot> fx <fx_index> <name> <value>` | Set slot-effect parameter |
+| `set <track> <name> <value>` | Set instrument parameter |
+| `set <track> fx <fx_index> <name> <value>` | Set track-effect parameter |
 | `set master <fx_index> <name> <value>` | Set master-effect parameter; explicit index required |
-| `info <slot>` | Show plugin metadata (vendor, category, version, latency, param count) |
-| `info <slot> fx <fx_index>` | Show metadata for a slot effect |
+| `info <track>` | Show plugin metadata (vendor, category, version, latency, param count) |
+| `info <track> fx <fx_index>` | Show metadata for a track effect |
 | `info master [fx_index]` | Show metadata for a master bus effect |
 
-VST names and paths may contain spaces: `slot 1 vst Acid V` loads the plugin
-named `Acid V` and uses that name as the slot label. Quotes are also supported.
-To override the display label, use `slot 1 vst Acid V --name Bass`.
-The same syntax applies to `slot <slot|master> fx`; trailing words without
+VST names and paths may contain spaces: `track 1 vst Acid V` loads the plugin
+named `Acid V` and uses that name as the track label. Quotes are also supported.
+To override the display label, use `track 1 vst Acid V --name Bass`.
+The same syntax applies to `track <track|master> fx`; trailing words without
 `--name` are part of the plugin name, not a custom label.
 
 For `get`, omit `name` to list all visible parameters or supply a single name
 to read only that parameter. Use parameter names from the listing; quote names
-or values containing spaces. An unknown name produces an error. Slot-effect
-targets require `fx <fx_index>`; an index alone is not a slot-effect target.
+or values containing spaces. An unknown name produces an error. Track-effect
+targets require `fx <fx_index>`; an index alone is not a track-effect target.
 In `get master`, a numeric token immediately after `master` is always an
 effect index, not a parameter name. With no index, `get master` and
 `get master <name>` read the first master effect. All `set` forms require
@@ -333,9 +336,9 @@ slider bars. An empty parameter list prints `  No parameters`.
 and prints the actual applied value, including plugin clamping. Boolean values
 may use `true`/`false`; quote enum values containing spaces, for example
 `set 1 transpose_semitones "24 semitones"`. `get` and `info`
-read cached snapshots and never call live plugin getters. Slot metadata is
+read cached snapshots and never call live plugin getters. Track metadata is
 captured at loading, chain edits, and explicit session-state capture, sequentially
-with native rendering in that slot's process. Master metadata capture requires
+with native rendering in that track's process. Master metadata capture requires
 the output stream stopped. A parameter setter returns only its actual value,
 raw/display delta, and acknowledgment—not a fresh catalog of all parameters.
 Plugin-side changes between full captures can make diagnostics temporarily stale.
@@ -349,10 +352,10 @@ display filter; MIDI CC input and underlying parameter access are unchanged.
 
 | Command | Description |
 |---|---|
-| `gain <slot> <value>` | Set slot gain (0.0-1.0) |
+| `gain <track> <value>` | Set track gain (0.0-1.0) |
 | `gain master [value]` | Get or set master gain |
-| `mute <slot>` | Toggle slot mute |
-| `solo <slot>` | Toggle slot solo |
+| `mute <track>` | Toggle track mute |
+| `solo <track>` | Toggle track solo |
 | `flow [all\|midi\|controls\|audio\|1-8\|master\|explore]` | Inspect routing, mapped controls, and output; see visualization commands |
 
 ### Audio Commands
@@ -367,11 +370,11 @@ All audio operations are subcommands of `audio`:
 | `audio diagnose` | Show opened output, mixer controls, realtime scheduling, MIDI delivery counters, and lifetime signal peaks |
 
 The daemon spawns an audio-output process and a persistent native process per
-loaded slot. Command parsing/display work, MIDI ports, Link, sequencing, and
-session-file I/O remain in Python. Each slot's C++ render thread owns its
+loaded track. Command parsing/display work, MIDI ports, Link, sequencing, and
+session-file I/O remain in Python. Each track's C++ render thread owns its
 instrument and insert effects; the C++ PortAudio callback owns mixing and
 master FX. Neither rendering path calls Python or acquires the GIL. The callback
-never waits for slot rendering, command responses, display work, or filesystem
+never waits for track rendering, command responses, display work, or filesystem
 operations. Python API entry points constructing `VcpiCore` must use the usual
 `if __name__ == "__main__":` spawn guard.
 
@@ -402,33 +405,33 @@ the replacement fails, audio remains stopped.
 
 #### Diagnosing a running but silent engine
 
-`audio diagnose` reads native engine/slot transport counters and cached slot
+`audio diagnose` reads native engine/track transport counters and cached track
 metadata through the audio owner's control channel. It does not inspect plugins,
 refresh the device catalog, or stop rendering. The output includes the selected
 output index/name/backend, running state, master gain, callback errors/underruns,
-output and slot realtime scheduling, and each loaded slot's gain, mute/solo
+output and track realtime scheduling, and each loaded track's gain, mute/solo
 state, worker failure, missing blocks, and:
 
-- **MIDI sent / consumed / pending:** messages published to that slot's native
+- **MIDI sent / consumed / pending:** messages published to that track's native
   MIDI FIFO, messages dequeued by its renderer, and messages still queued.
   Consumption establishes delivery to the renderer, not that the instrument
   accepted the note or produced sound.
-- **Slot audio peak:** highest absolute rendered sample after slot inserts,
+- **Track audio peak:** highest absolute rendered sample after track inserts,
   before mixer gain/mute/solo.
 - **Output peak:** highest absolute final sample submitted to the output
   callback's device buffer, after mixing, master FX/gain, clipping, and failure
   silencing. This does not measure what the physical speakers play.
 
 Peaks are **cumulative high-water marks**, not current meters: the output peak
-is retained since audio-owner creation, and each slot peak since that slot's
+is retained since audio-owner creation, and each track peak since that track's
 transport was created. A short test note remains visible after its note-off.
-Stopping/restarting audio or changing gain does not reset them. Replacing a slot
-starts that slot's peak anew; restarting the daemon creates a new output owner.
+Stopping/restarting audio or changing gain does not reset them. Replacing a track
+starts that track's peak anew; restarting the daemon creates a new output owner.
 An already nonzero peak cannot prove that a later note produced sound, and an
 unchanged peak may simply mean that the later signal was quieter.
 
-For a concrete test, use an already loaded instrument slot and take before/after
-snapshots (replace `1` with its slot number):
+For a concrete test, use an already loaded instrument track and take before/after
+snapshots (replace `1` with its track number):
 
 ```text
 vcpi> audio diagnose
@@ -441,15 +444,15 @@ Compare the MIDI counters and inspect the signal chain in order:
 
 1. If output is not running or a worker failure is reported, address that
    failure first. Zero render errors alone do not establish an audible signal.
-2. If that slot's sent count does not advance, the test did not reach its native
+2. If that track's sent count does not advance, the test did not reach its native
    MIDI FIFO. If sent advances but consumed does not catch up and pending
-   remains nonzero, delivery is stalled before the slot renderer.
-3. If consumed advances but the slot peak is still zero, the rendered slot has
+   remains nonzero, delivery is stalled before the track renderer.
+3. If consumed advances but the track peak is still zero, the rendered track has
    not produced a nonzero sample during its lifetime. Inspect the instrument's
-   preset/note range and slot insert chain; correct MIDI delivery is not enough.
-4. If the slot peak is nonzero but output peak is still zero, inspect slot gain,
-   mute, other slots' solo flags, master gain, and master FX. A solo on another
-   slot can exclude this slot even when its own `solo` flag is false.
+   preset/note range and track insert chain; correct MIDI delivery is not enough.
+4. If the track peak is nonzero but output peak is still zero, inspect track gain,
+   mute, other tracks' solo flags, master gain, and master FX. A solo on another
+   track can exclude this track even when its own `solo` flag is false.
 5. If output peak is nonzero but playback remains inaudible, native output has
    produced signal at some point. Check the displayed selected device against
    the intended speakers/headphones, then macOS/device volume, output routing,
@@ -457,36 +460,36 @@ Compare the MIDI counters and inspect the signal chain in order:
    hardware playback.
 
 When reporting silence, include both `audio diagnose` snapshots and the exact
-test-note command. If old peaks obscure a fresh test, use a newly loaded slot
+test-note command. If old peaks obscure a fresh test, use a newly loaded track
 for its peak, or restart the daemon to reset the output owner's peak.
 
 
-All slot audio uses preallocated shared-memory stereo buffers with sequence
+All track audio uses preallocated shared-memory stereo buffers with sequence
 tags and nonblocking ownership checks. Each callback consumes the previous
-slot block and requests the next; this adds **one block** to note-to-sound
+track block and requests the next; this adds **one block** to note-to-sound
 latency: **512 samples / 11.610 ms** at the defaults, in addition to backend and
 plugin latency. The three handoff cells do not add three blocks of latency.
-An unavailable/late block silences only that slot for that block and increments
+An unavailable/late block silences only that track for that block and increments
 its missing-block counter; old blocks are never replayed. Muted and solo-excluded
-slots still render so MIDI note-offs and plugin tails advance. Gain/mix, sampler,
+tracks still render so MIDI note-offs and plugin tails advance. Gain/mix, sampler,
 and event storage are preallocated. Processes increase memory/scheduling cost;
 native rendering removes interpreter contention but does not guarantee hard
 real-time behavior from the OS, device backend, or third-party plugins.
 
-Native output controls use a bounded 128-entry FIFO. Each slot has a fixed
+Native output controls use a bounded 128-entry FIFO. Each track has a fixed
 4096-message MIDI FIFO with a maximum encoded message size of 1024 bytes.
 MIDI order and note-offs are preserved even when late audio jobs are skipped.
 Heavy traffic can increase rendering/control latency. Global ingress saturation
-explicitly stops the output owner; slot MIDI overflow or oversized messages
-explicitly fail only that slot. Events for a retired generation cannot affect
+explicitly stops the output owner; track MIDI overflow or oversized messages
+explicitly fail only that track. Events for a retired generation cannot affect
 its replacement.
 
-Instrument/WAV/Cardinal/plugdata loads initialize and warm a new slot process while
-existing slots continue playing. A ready replacement switches at a callback
+Instrument/WAV/Cardinal/plugdata loads initialize and warm a new track process while
+existing tracks continue playing. A ready replacement switches at a callback
 boundary; only then is the old process retired. Failed loading leaves the old
-source playing. Removal stops only that slot. Insert edits and parameter
+source playing. Removal stops only that track. Insert edits and parameter
 inspection/setters use native plugin ownership and may briefly interrupt that
-slot, not the output stream or other slots. Failed chain construction/warmup
+track, not the output stream or other tracks. Failed chain construction/warmup
 retains the previous chain. Master-chain edits and native master metadata capture
 still pause the output stream. Restoration deliberately stays paused until
 complete. If reopening fails, audio remains stopped; failed native teardown is
@@ -499,15 +502,15 @@ scheduling headroom at the cost of note-to-sound latency.
 #### Selective realtime scheduling
 
 On Linux, native rendering attempts `SCHED_FIFO` priority **20** for the output
-callback thread and **10** for each slot DSP thread by default. Promotion is
+callback thread and **10** for each track DSP thread by default. Promotion is
 attempted once per render-thread lifetime: at the output's first actual callback
-after stream startup, and at slot-runner startup. Python and process-control
+after stream startup, and at track-runner startup. Python and process-control
 threads retain normal `SCHED_OTHER` scheduling; process isolation is unchanged.
 There is no whole-daemon realtime-priority flag. On macOS and other non-Linux
 platforms, this feature reports `unsupported` and changes no scheduling policy.
 Build the extension on each platform as described in `README.md`.
 
-`status` displays cached output/slot scheduling health, without RPC to native
+`status` displays cached output/track scheduling health, without RPC to native
 owners. `audio diagnose` requests fresh native stats through the control
 channel. Live OS policy/priority queries happen on the control side, not in the
 render callback. Both show the scheduling state, observed policy/priority,
@@ -525,8 +528,8 @@ threads:
 | `unsupported` | This selective scheduling feature is Linux-only. |
 
 An output stop resets scheduling health to `inactive`; restarting attempts
-promotion again on the new callback thread. Slot promotion health remains
-associated with that slot's runner lifetime even while output is stopped.
+promotion again on the new callback thread. Track promotion health remains
+associated with that track's runner lifetime even while output is stopped.
 `denied` is nonterminal: rendering continues at the actual policy, commonly
 `SCHED_OTHER priority 0`, with e.g. `errno=1 (Operation not permitted)`.
 Check the reported result rather than assuming requested priority means success.
@@ -535,7 +538,7 @@ Native `Engine.stats()` and `Transport.stats()` expose a `realtime` dictionary
 with `state`, `policy`, `priority` (actual), `requested_priority`, `error` (integer
 errno, 0 on success), and `thread_id` (native Linux TID, 0 before startup).
 The control facade carries output health as `RemoteAudioEngine.output_realtime`
-and slot health as `InstrumentSlot.worker_realtime` in initial state and through
+and track health as `InstrumentTrack.worker_realtime` in initial state and through
 its existing periodic update channel.
 
 Linux permission must be configured separately from promotion. The supplied
@@ -548,7 +551,7 @@ inspect the shell's limit with `ulimit -r`. Do not run the whole daemon under
 
 This scheduling change does **not** change buffers or one-block handoff latency,
 or guarantee that overloaded plugins, device backends, or the OS meet deadlines.
-Measure callback timing, underruns, and missing slot blocks before tuning;
+Measure callback timing, underruns, and missing track blocks before tuning;
 global realtime promotion, wakeup replacement, memory locking, affinity,
 governor changes, and kernel tuning are outside this feature.
 
@@ -562,11 +565,11 @@ All MIDI operations are subcommands of `midi`:
 | `midi ports output` | List MIDI output ports |
 | `midi input <port>` | Open any MIDI input port |
 | `midi input close <index>` | Close a MIDI input by its position in the open list |
-| `midi link <ch> <slot>` | Route MIDI channel to slot |
+| `midi link <ch> <track>` | Route MIDI channel to track |
 | `midi cut <ch>` | Remove MIDI channel route |
 | `midimix input <port>` | Open Akai MIDI Mix input |
 | `midimix output <port>` | Open Akai MIDI Mix output (LED feedback) |
-| `note <slot> <note> [vel] [dur_ms]` | Send test note to slot |
+| `note <track> <note> [vel] [dur_ms]` | Send test note to track |
 
 Index discovery:
 
@@ -585,15 +588,15 @@ and `midimix input`. Use indexes from `midi ports output` with `midimix output`.
 Indexes may change after reboot or replug.
 
 You can open multiple MIDI inputs simultaneously. All MIDI inputs share the
-same channel routing table (`midi link <ch> <slot>`).
+same channel routing table (`midi link <ch> <track>`).
 
-Important: `midi link <ch> <slot>` only maps MIDI channels internally. It does
+Important: `midi link <ch> <track>` only maps MIDI channels internally. It does
 not open hardware ports; `midi input` and `midimix input` do.
 
 WAV sampler behavior:
 
-- `slot <n> wav` plays the file when MIDI `note_on` events reach that slot.
-- `slot 2 wav 909 bassdrum` resolves to `sampler/samples/909/bassdrum.wav`.
+- `track <n> wav` plays the file when MIDI `note_on` events reach that track.
+- `track 2 wav 909 bassdrum` resolves to `sampler/samples/909/bassdrum.wav`.
 - Built-in packs: `808`, `909`, `piano`, `organ`, `strings`, `synth-pads`, `synth-leads`.
 - The `.wav` extension is optional in `<sample>`.
 - Notes are pitch-shifted around middle C (MIDI note 60).
@@ -602,11 +605,11 @@ WAV sampler behavior:
 Melodic examples:
 
 ```text
-vcpi> slot 1 wav piano c4-soft
-vcpi> slot 2 wav organ c4-drawbar
-vcpi> slot 3 wav strings c4-ensemble
-vcpi> slot 4 wav synth-pads c4-warm
-vcpi> slot 5 wav synth-leads c4-mono-saw
+vcpi> track 1 wav piano c4-soft
+vcpi> track 2 wav organ c4-drawbar
+vcpi> track 3 wav strings c4-ensemble
+vcpi> track 4 wav synth-pads c4-warm
+vcpi> track 5 wav synth-leads c4-mono-saw
 ```
 
 ### Sequencer Commands
@@ -624,8 +627,8 @@ positions rather than retriggering notes or emitting a catch-up burst.
 | `seq <bank>` | Show a single bank |
 | `seq <bank> <note> [note ...]` | Set notes in a bank (e.g. `seq 1 d c b a`) |
 | `seq clear <bank>` | Clear a bank |
-| `seq link <bank> <slot>` | Attach sequence bank to a slot (starts playback) |
-| `seq cut <slot>` | Remove all sequence links from a slot |
+| `seq link <bank> <track>` | Attach sequence bank to a track (starts playback) |
+| `seq cut <track>` | Remove all sequence links from a track |
 
 Note names are case-insensitive. Sharps (`C#`), flats (`Bb`), and octave
 suffixes (`C5`, `F#3`) are supported. Default octave is 4 (middle C).
@@ -636,9 +639,9 @@ Examples:
 vcpi> seq 1 d c b a        # bank 1: D4 C4 B4 A4, plays as 4 quarter notes
 vcpi> seq 2 c              # bank 2: just C4, plays once per bar
 vcpi> seq 3 C#5 Bb4 G4     # bank 3: 3 notes per bar
-vcpi> seq link 1 5          # play bank 1 through slot 5
-vcpi> seq link 2 3          # play bank 2 through slot 3
-vcpi> seq cut 5             # stop sequence on slot 5
+vcpi> seq link 1 5          # play bank 1 through track 5
+vcpi> seq link 2 3          # play bank 2 through track 3
+vcpi> seq cut 5             # stop sequence on track 5
 vcpi> seq clear 1           # remove bank 1
 ```
 
@@ -677,25 +680,31 @@ auto-save session so that shutdown preserves the loaded state.
 
 Saved/restored session state includes:
 
-- Per-slot instruments, native VST3 state, effects, gain, mute/solo
+- Per-track instruments, native VST3 state, effects, gain, mute/solo
 - Native master-effect state and master gain
 - MIDI channel routing
 - BPM and Ableton Link state
 - Sequencer banks and links
 - Audio output device and MIDI connections
 
-New saves use session format **2**: each VST3 instrument, slot insert, and master
+New saves use session format **3**: each VST3 instrument, track insert, and master
 effect stores a base64-encoded native state chunk. This preserves plugin-owned
 settings, including settings not exposed as parameters, without replaying MIDI
-helpers or action controls. WAV slots remain path-based.
-Pure Data/plugdata slots also use native chunks, embedding the main patch while
+helpers or action controls. WAV tracks remain path-based.
+Pure Data/plugdata tracks also use native chunks, embedding the main patch while
 retaining its original location for resolving external files. Abstractions and
 sample files must remain installed separately.
 
-Saving waits for prior controls/MIDI and captures each slot between render jobs.
+Format 3 stores mixer instruments under `tracks` and sequencer destinations
+under `sequences[].linked_track`. New saves write only these names. Formats 1
+and 2 remain readable: their legacy `slots` and `linked_slot` keys are migrated
+when loading, and the next save writes format 3. These file-format migrations
+do not provide legacy CLI command aliases.
+
+Saving waits for prior controls/MIDI and captures each track between render jobs.
 Pending VST3 parameter edits require one MIDI-free processing block before
 serialization; ordinary captures without pending edits do not advance DSP, and
-WAV capture never renders an extra block. Capture can delay the inspected slot.
+WAV capture never renders an extra block. Capture can delay the inspected track.
 Without master effects, saving leaves the output stream running. With master
 effects, it also pauses the output stream for native master-state capture.
 Read-only diagnostics never capture chunks; ordinary updates do not carry them.
@@ -703,17 +712,17 @@ Read-only diagnostics never capture chunks; ordinary updates do not carry them.
 Restoration stays paused until plugin/control changes are complete. Native state
 is validated before loading; deferred plugin loads are prerolled without MIDI
 before metadata refresh and subsequent notes. A state chunk takes precedence
-over any parameter dictionary. Invalid/missing format-2 chunks are reported,
+over any parameter dictionary. Invalid/missing format-2/3 chunks are reported,
 not silently replaced by parameter replay. State transfers retain the ordinary
 metadata limits and allow at most 128 MiB per chunk and 512 MiB per transfer,
 with finite control-operation deadlines.
 
-Existing format-1 sessions remain readable. Only parameters present in the
-newly loaded plugin and marked automatable are restored, in batches of at most
+For format-1 sessions, only parameters present in the newly loaded plugin and
+marked automatable are restored, in batches of at most
 64; skipped unknown/nonautomatable controls produce warnings. This conservative
 migration may lose nonautomatable settings, and automation flags cannot identify
 every vendor-specific action. Back up old sessions before migration; reselect a
-preset if its original non-parameter state was never saved. Reloaded slots
+preset if its original non-parameter state was never saved. Reloaded tracks
 replace already-corrupted live instances; saving a silent instance alone does
 not repair its state.
 
@@ -727,7 +736,7 @@ An interrupted startup retires native owners without saving partially restored
 state; the original session file remains unchanged. Native owners ignore
 foreground Ctrl-C, leaving the control process to cancel pending work and
 perform teardown. Canceled control channels cannot accept a late reply as a
-subsequent operation. Slot-parent supervision waits for confirmed parent death
+subsequent operation. Track-parent supervision waits for confirmed parent death
 before unlinking orphaned shared semaphore resources.
 
 ### Visualization Commands
@@ -740,7 +749,7 @@ Text choices and boolean switches are inferred at load even when a plugin
 omits VST3 step counts. `raw_value` remains normalized.
 
 **`flow`** shows a routing overview: connected MIDI inputs, MIDI Mix connections,
-sequencer clock, all eight instrument/FX chains, slot eligibility, master bus,
+sequencer clock, all eight instrument/FX chains, track eligibility, master bus,
 and audio output. Focused views expose the details without one oversized table:
 
 | Command | View |
@@ -749,16 +758,16 @@ and audio output. Focused views expose the details without one oversized table:
 | `flow midi` | Open generic inputs, all 16 channel routes, sequencer bank destinations and patterns |
 | `flow controls` | MIDI Mix CC/note bindings, knob targets, cached values/ranges, and LED feedback connection |
 | `flow audio` | Ordered audio chains, output device/backend, stream format, and output health |
-| `flow 1` … `flow 8` | Slot source/path, MIDI and sequencer inputs, inserts, mixer/worker state, and controls |
+| `flow 1` … `flow 8` | Track source/path, MIDI and sequencer inputs, inserts, mixer/worker state, and controls |
 | `flow master` | Master effects, gain/control, and output |
-| `flow all` | Every view, including empty slots and unlinked routes |
+| `flow all` | Every view, including empty tracks and unlinked routes |
 | `flow explore` | Read-only full-screen explorer in the interactive client |
 
 Inside `flow explore`:
 
 - Left/Right or Tab/Shift-Tab cycle through views.
 - `o`, `m`, `c`, `a` jump to overview, MIDI, controls, or audio.
-- `1`–`8` jump to a slot; `9` opens the master bus.
+- `1`–`8` jump to a track; `9` opens the master bus.
 - Up/Down, PageUp/PageDown, Home/End scroll the selected view.
 - `r` refreshes the snapshot. Refresh is manual; navigation sends no requests.
   A failed refresh leaves the previous snapshot visible with an error.
@@ -775,17 +784,17 @@ unknown, or pending states. Boolean control values and LED on/off indicators
 use the same colours. Labels remain visible without colour; a reported
 `failure: none` is not marked as a failure.
 
-Generic MIDI inputs share the channel map; sequencer banks target slots directly.
+Generic MIDI inputs share the channel map; sequencer banks target tracks directly.
 MIDI Mix knobs map to the first three **instrument** parameters in insertion
 order, not insert or master-effect parameters. Disconnected ports and unbound
-controls are explicit. Mute/solo, disabled slots, zero gains, stopped audio, and
+controls are explicit. Mute/solo, disabled tracks, zero gains, stopped audio, and
 worker/owner failures are shown as output blockers.
 
-MIDI Mix faders adjust slot gains and the master gain. Adjacent queued mixer
+MIDI Mix faders adjust track gains and the master gain. Adjacent queued mixer
 edits are combined into one snapshot at an audio callback boundary, keeping
 the latest value for each field without waiting one audio block per CC event.
 Applied-state views and LED reconciliation update after that boundary.
-Slot replacements and explicit control barriers retain FIFO ordering;
+Track replacements and explicit control barriers retain FIFO ordering;
 mixer batches do not cross them.
 
 These views perform no hardware discovery, native-owner requests, or routing
@@ -798,7 +807,7 @@ not a fresh peer-tempo reading. There is no external audio-input path.
 ```text
 vcpi> info 1
 +-----------------------------------------------+
-|                 Slot 1: Dexed                 |
+|                Track 1: Dexed                 |
 |                                               |
 | Name          : Dexed                         |
 | Vendor        : Digital Suburban              |
@@ -815,19 +824,19 @@ vcpi> info 1
 +-----------------------------------------------+
 ```
 
-`info` supports slot instruments, per-slot effects, and master bus effects:
+`info` supports track instruments, per-track effects, and master bus effects:
 
 ```text
-info 1            # slot 1 instrument
-info 1 fx 1       # slot 1, first effect
+info 1            # track 1 instrument
+info 1 fx 1       # track 1, first effect
 info master 1     # first master bus effect
 ```
 
 To inspect the corresponding parameters, use `get`:
 
 ```text
-get 1             # slot 1 instrument
-get 1 fx 2        # slot 1, second effect
+get 1             # track 1 instrument
+get 1 fx 2        # track 1, second effect
 get master        # first master bus effect (index defaults to 1)
 ```
 
@@ -863,7 +872,7 @@ and purple regions and a narrow green centre. Truecolour terminals display the
 exact colours; other colour terminals approximate them. Non-interactive output
 remains plain text.
 
-`ps` samples the daemon and its descendants (audio owner, loaded slot workers,
+`ps` samples the daemon and its descendants (audio owner, loaded track workers,
 and helper processes) over approximately **200 ms**. It excludes the separate
 CLI client and unrelated system processes. PID/TID and process roles identify
 each row; process rows show state, total CPU, RSS in MiB, and thread count.
@@ -883,7 +892,7 @@ thread names.
 
 By default, `ps` hides idle threads with generic names such as `python` when
 their sampled CPU rounds to 0.0%. Process main threads, named threads, and
-known output/slot render threads remain visible. `ps all` shows every thread.
+known output/track render threads remain visible. `ps all` shows every thread.
 The footer reports how many rows were hidden; process CPU, RSS, and thread
 counts always include hidden threads. This is only a display filter: NumPy,
 BLAS, plugin pools, and audio/control thread behavior are unchanged. Generic
@@ -893,23 +902,23 @@ are filtered too.
 `status` reads shared output-callback health and cached metadata; it does not
 contact native owners or query PortAudio while rendering. `Audio owner`
 identifies the output/mixer PID; `Audio failure` takes precedence over stale
-running flags. `Render` distinguishes maximum slot-process capacity from the
-eligible slot count in the last callback. `Slot buffering` states added latency.
-Each `Slot N worker` row shows its PID, failure, and cumulative missing blocks;
+running flags. `Render` distinguishes maximum track-process capacity from the
+eligible track count in the last callback. `Track buffering` states added latency.
+Each `Track N worker` row shows its PID, failure, and cumulative missing blocks;
 these cached worker-health fields refresh approximately every 100 ms.
 
-`Output realtime` and each `Slot N realtime` row report the selective scheduling
+`Output realtime` and each `Track N realtime` row report the selective scheduling
 state and, for live threads, actual versus requested priority, policy, TID, and
 any errno. These are cached control-side observations, not a status-time RPC.
 An `active` scheduling row is not a guarantee of meeting the audio deadline.
 
 `Callback time` shows mixer/master callback last/peak execution time and the
 block deadline, **not native instrument/insert rendering time**. A fast mixer
-with missing slot blocks is still audible trouble. `Deadline misses` counts
+with missing track blocks is still audible trouble. `Deadline misses` counts
 output callbacks exceeding that deadline, not every OS scheduling delay.
 `Underruns` counts backend-reported output underflows; zero does not imply zero
-slot dropouts. `Render errors` counts output processing errors. Output counters
-are cumulative across stream restarts; a replacement slot starts new worker
+track dropouts. `Render errors` counts output processing errors. Output counters
+are cumulative across stream restarts; a replacement track starts new worker
 counters. The control tick copies native callback counters into shared health
 fields; the audio callback does not log or call Python.
 
@@ -918,11 +927,11 @@ periods, whichever is longer), supervision stops the output owner. Native output
 control acknowledgments have a five-second deadline. A timeout permanently
 fails/silences the owner; queued work cannot later produce an audible success.
 
-A slot render stalled for two seconds is terminated locally. Slot initialization
+A track render stalled for two seconds is terminated locally. Track initialization
 and insert lifecycle waits are bounded at 90 seconds; setters/native snapshot
 requests at five seconds. Lifecycle work is exempt from the render-stall timer.
-The output callback never waits for those deadlines. Slot failure leaves other
-slots playing; reload that slot to recover. No automatic restart hides lost
+The output callback never waits for those deadlines. Track failure leaves other
+tracks playing; reload that track to recover. No automatic restart hides lost
 plugin state. Children exit when their owning output process dies.
 
 Output-owner death/channel failure produces explicit stopped/error state while
@@ -930,7 +939,7 @@ cached diagnostics and client disconnect remain usable. Restart the daemon
 after a terminal output-owner failure.
 
 `shutdown` saves before teardown, stops MIDI/sequencing and joins pending
-note-off timers, disables Link, then shuts down the output owner and slot children.
+note-off timers, disables Link, then shuts down the output owner and track children.
 If the output owner has terminally failed, shutdown warns that it cannot capture
 native state and preserves the existing session file instead of overwriting it
 with cached state. Changes since the last successful save are not persisted.
@@ -961,8 +970,8 @@ Server logs now include:
 - CLI command execution (`[CLI] ...`)
 - MIDI input events at `DEBUG`
 - MIDI Mix fader/knob events at `DEBUG`; mute/solo actions remain at `INFO`
-- Final applied slot/master gains at `INFO`, after that gain has been quiet for
+- Final applied track/master gains at `INFO`, after that gain has been quiet for
   300 ms. Further updates replace the pending summary and restart its quiet
   interval, even across queue drains. Gain changes themselves remain immediate;
-  only logging is delayed. Slot replacement discards the old slot's pending
+  only logging is delayed. Track replacement discards the old track's pending
   summary, and shutdown flushes pending final values without waiting.

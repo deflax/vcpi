@@ -14,7 +14,7 @@ from pathlib import Path
 from controllers.akai_midimix import (
     FADER_CCS, KNOB_CCS, MASTER_FADER_CC, MUTE_NOTES, SOLO_NOTES,
 )
-from core.models import NUM_SLOTS
+from core.models import NUM_TRACKS
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
 from graph.status import format_output_device
 
@@ -38,18 +38,18 @@ def _section(section_id, title, columns, rows) -> dict:
             "rows": [[str(cell) for cell in row] for row in rows]}
 
 
-def _target(slots, index) -> str:
+def _target(tracks, index) -> str:
     if index is None:
         return "unlinked"
-    slot = slots[index]
-    return f"Slot {index + 1}: {slot.name if slot is not None else '(empty)'}"
+    track = tracks[index]
+    return f"Track {index + 1}: {track.name if track is not None else '(empty)'}"
 
 
-def _chain(slot) -> str:
-    if slot is None:
+def _chain(track) -> str:
+    if track is None:
         return "(empty)"
-    return " -> ".join([_plugin_name(slot.plugin),
-                        *[_plugin_name(effect) for effect in slot.effects]])
+    return " -> ".join([_plugin_name(track.plugin),
+                        *[_plugin_name(effect) for effect in track.effects]])
 
 
 def _parameter_detail(plugin, name, parameter) -> str:
@@ -70,31 +70,31 @@ def _parameter_detail(plugin, name, parameter) -> str:
     return f"{value}{units}; range {bounds}"
 
 
-def _control_rows(index, slot, input_name, output_name) -> list[list[str]]:
+def _control_rows(index, track, input_name, output_name) -> list[list[str]]:
     """Mirror the controller's instrument insertion-order mapping exactly."""
-    label = f"Slot {index + 1}"
+    label = f"Track {index + 1}"
     state = "active" if input_name else "inactive: MIDI Mix input disconnected"
-    if slot is None:
-        state = "inactive: empty slot"
+    if track is None:
+        state = "inactive: empty track"
     rows = [[f"{label} fader", f"CC {FADER_CCS[index]} (0-127)",
-             f"{label} gain", f"{_value(slot.gain) if slot else '-'}; range 0 .. 1", state]]
-    parameters = (list(islice(slot.plugin.parameters.items(), 3))
-                  if slot is not None and slot.plugin is not None else [])
+             f"{label} gain", f"{_value(track.gain) if track else '-'}; range 0 .. 1", state]]
+    parameters = (list(islice(track.plugin.parameters.items(), 3))
+                  if track is not None and track.plugin is not None else [])
     for knob, cc in enumerate(KNOB_CCS[index]):
         if knob < len(parameters):
             name, parameter = parameters[knob]
-            detail = _parameter_detail(slot.plugin, name, parameter)
+            detail = _parameter_detail(track.plugin, name, parameter)
             knob_state = state
             if parameter.kind == "enum" and not parameter.valid_values:
                 knob_state = "inactive: no enum values"
             target = f"{label} instrument: {name}"
         else:
             target, detail = f"{label}: (unbound)", "-"
-            knob_state = "inactive: empty slot" if slot is None else "inactive: no instrument parameter"
+            knob_state = "inactive: empty track" if track is None else "inactive: no instrument parameter"
         rows.append([f"{label} knob {knob + 1}", f"CC {cc} (0-127)",
                      target, detail, knob_state])
-    for field, notes, enabled in (("mute", MUTE_NOTES, bool(slot and slot.muted)),
-                                  ("solo", SOLO_NOTES, bool(slot and slot.solo))):
+    for field, notes, enabled in (("mute", MUTE_NOTES, bool(track and track.muted)),
+                                  ("solo", SOLO_NOTES, bool(track and track.solo))):
         led = f"LED {'on' if enabled else 'off'} (velocity {127 if enabled else 0})"
         led_state = "connected" if output_name else "disconnected"
         rows.append([f"{label} {field}", f"Note {notes[index]} (note-on velocity > 0)",
@@ -103,24 +103,24 @@ def _control_rows(index, slot, input_name, output_name) -> list[list[str]]:
     return rows
 
 
-def _slot_state(slot, any_solo, running, failure, master_gain) -> str:
-    if slot is None:
+def _track_state(track, any_solo, running, failure, master_gain) -> str:
+    if track is None:
         return "empty; no audio source"
     blocked = []
     if failure:
         blocked.append("audio owner failed")
     if not running:
         blocked.append("audio stopped")
-    if not slot.enabled:
+    if not track.enabled:
         blocked.append("disabled")
-    if slot.worker_failure:
-        blocked.append(f"worker failed: {slot.worker_failure}")
-    if slot.muted:
+    if track.worker_failure:
+        blocked.append(f"worker failed: {track.worker_failure}")
+    if track.muted:
         blocked.append("muted")
-    if any_solo and not slot.solo:
+    if any_solo and not track.solo:
         blocked.append("solo-excluded")
-    if slot.gain == 0:
-        blocked.append("slot gain zero")
+    if track.gain == 0:
+        blocked.append("track gain zero")
     if master_gain == 0:
         blocked.append("master gain zero")
     return ("blocked: " + "; ".join(blocked) if blocked else
@@ -136,7 +136,7 @@ def _pattern(bank) -> str:
 def build_flow_snapshot(host) -> dict:
     """Build the complete explorer model using only existing local state.
 
-    Hold the engine's snapshot lock while reading cached plugin/slot metadata;
+    Hold the engine's snapshot lock while reading cached plugin/track metadata;
     this neither synchronizes with an owner nor probes MIDI/audio hardware.
     """
     engine = host.engine
@@ -145,7 +145,7 @@ def build_flow_snapshot(host) -> dict:
 
 
 def _build_flow_snapshot(host, engine) -> dict:
-    slots = list(engine.slots)
+    tracks = list(engine.tracks)
     channel_map = dict(host.channel_map)
     master_effects = list(engine.master_effects)
     master_gain = engine.master_gain
@@ -153,7 +153,7 @@ def _build_flow_snapshot(host, engine) -> dict:
     # Flow only observes the supervisor's already cached health instead.
     failure = engine._failure
     running = not engine._closed and failure is None and bool(engine._health[0])
-    any_solo = any(slot.solo for slot in slots if slot is not None)
+    any_solo = any(track.solo for track in tracks if track is not None)
     midi_inputs = [(index + 1, ctrl.port_name) for index, ctrl in enumerate(host.midi_inputs)]
     open_names = [name for _, name in midi_inputs if name]
     input_name = host.midimix.input_port_name
@@ -177,13 +177,13 @@ def _build_flow_snapshot(host, engine) -> dict:
     master_chain = " -> ".join(_plugin_name(effect) for effect in master_effects) or "(no master FX)"
     routes = [", ".join(f"ch {channel + 1}" for channel in range(16)
                         if channel_map.get(channel) == index) or "(no linked channels)"
-              for index in range(NUM_SLOTS)]
+              for index in range(NUM_TRACKS)]
     linked_banks = [[number + 1 for number, bank in enumerate(banks)
-                     if bank is not None and bank.linked_slot == index]
-                    for index in range(NUM_SLOTS)]
-    states = [_slot_state(slot, any_solo, running, failure, master_gain) for slot in slots]
-    control_rows = [_control_rows(index, slot, input_name, output_name)
-                    for index, slot in enumerate(slots)]
+                     if bank is not None and bank.linked_track == index]
+                    for index in range(NUM_TRACKS)]
+    states = [_track_state(track, any_solo, running, failure, master_gain) for track in tracks]
+    control_rows = [_control_rows(index, track, input_name, output_name)
+                    for index, track in enumerate(tracks)]
     master_control = ["Master fader", f"CC {MASTER_FADER_CC} (0-127)", "Master gain",
                       f"{_value(master_gain)}; range 0 .. 1",
                       "active" if input_name else "inactive: MIDI Mix input disconnected"]
@@ -196,14 +196,14 @@ def _build_flow_snapshot(host, engine) -> dict:
         ["Sequencer / clock", clock,
          f"{'running' if sequencer_running else 'stopped'}; {timing}; bank links below"],
     ]
-    for index, slot in enumerate(slots):
+    for index, track in enumerate(tracks):
         sources = routes[index]
         if linked_banks[index]:
             sources += "; banks " + ", ".join(map(str, linked_banks[index]))
-        overview.append([f"Slot {index + 1}", f"{sources} -> {_chain(slot)} -> master sum",
-                         states[index] + (f"; gain {_value(slot.gain)}" if slot else "")])
+        overview.append([f"Track {index + 1}", f"{sources} -> {_chain(track)} -> master sum",
+                         states[index] + (f"; gain {_value(track.gain)}" if track else "")])
     overview.extend([
-        ["Master", f"slot sum -> {master_chain} -> master gain {_value(master_gain)}", "-> audio output"],
+        ["Master", f"track sum -> {master_chain} -> master gain {_value(master_gain)}", "-> audio output"],
         ["Output", f"{output_name_audio}; {backend}; {output_format}",
          f"{audio_state}; {sample_rate} Hz; {buffer_size} frames/block"],
         ["Scope", "cached routing and applied control state only", "no live meters; no external audio input path"],
@@ -221,15 +221,15 @@ def _build_flow_snapshot(host, engine) -> dict:
         target = channel_map.get(channel)
         state = ("unlinked; messages dropped" if target is None else
                  states[target] + ("; no connected generic input" if not open_names else ""))
-        midi_rows.append([f"MIDI channel {channel + 1}", _target(slots, target), state])
+        midi_rows.append([f"MIDI channel {channel + 1}", _target(tracks, target), state])
     midi_rows.extend([
-        ["Sequencer", "direct to linked slot (bypasses channel map)",
+        ["Sequencer", "direct to linked track (bypasses channel map)",
          f"{'running' if sequencer_running else 'stopped'}; one bar = 4 beats; {timing}"],
         ["Clock", clock, "peer tempo/activity not queried"],
     ])
     for index in range(NUM_SEQ_BANKS):
         bank = banks[index] if index < len(banks) else None
-        target = bank.linked_slot if bank is not None else None
+        target = bank.linked_track if bank is not None else None
         detail = _pattern(bank)
         if bank is not None:
             detail += f"; velocity {bank.velocity}"
@@ -237,7 +237,7 @@ def _build_flow_snapshot(host, engine) -> dict:
             detail += "; " + states[target]
         elif bank is not None:
             detail += "; unlinked; no playback destination"
-        midi_rows.append([f"Sequencer bank {index + 1}", _target(slots, target), detail])
+        midi_rows.append([f"Sequencer bank {index + 1}", _target(tracks, target), detail])
     sections.append(_section("midi", "MIDI routing & sequencer", ["Source / route", "Destination", "State / detail"], midi_rows))
 
     controls = [
@@ -246,7 +246,7 @@ def _build_flow_snapshot(host, engine) -> dict:
         ["MIDI Mix LED output", output_name or "(disconnected)", "mute / solo LED notes on channel 1",
          "cached applied state; on=127, off=0", "connected" if output_name else "disconnected"],
         ["Knob mapping", "CC 0-127 -> parameter range", "first three instrument parameters in insertion order",
-         "not slot FX or master FX parameters", "unbound knobs are inactive"],
+         "not track FX or master FX parameters", "unbound knobs are inactive"],
     ]
     for rows in control_rows:
         controls.extend(rows)
@@ -254,12 +254,12 @@ def _build_flow_snapshot(host, engine) -> dict:
     sections.append(_section("controls", "Akai MIDI Mix controls", ["Control", "Binding", "Target", "Cached value / range", "State"], controls))
 
     audio_rows = [
-        ["Slot audio", "instrument -> ordered slot FX -> slot gain / mute / solo -> sum", "internal sources only; no external audio input path"],
+        ["Track audio", "instrument -> ordered track FX -> track gain / mute / solo -> sum", "internal sources only; no external audio input path"],
     ]
-    for index, slot in enumerate(slots):
-        audio_rows.append([f"Slot {index + 1}", _chain(slot), states[index]])
+    for index, track in enumerate(tracks):
+        audio_rows.append([f"Track {index + 1}", _chain(track), states[index]])
     audio_rows.extend([
-        ["Master path", f"slot sum -> {master_chain} -> gain {_value(master_gain)} -> output", "master FX run in displayed order"],
+        ["Master path", f"track sum -> {master_chain} -> gain {_value(master_gain)} -> output", "master FX run in displayed order"],
         ["Output device", output_name_audio,
          "opened PortAudio entry (cached)" if running else "last opened PortAudio entry; stopped"],
         ["Backend", backend, audio_state],
@@ -268,7 +268,7 @@ def _build_flow_snapshot(host, engine) -> dict:
     ])
     sections.append(_section("audio", "Audio graph & output", ["Stage", "Path / value", "State / detail"], audio_rows))
 
-    for index, slot in enumerate(slots):
+    for index, track in enumerate(tracks):
         rows = [["State", states[index], "cached routing eligibility, not measured audibility"],
                 ["MIDI channels", routes[index], "shared by all generic MIDI inputs"],
                 ["Generic MIDI inputs", "; ".join(open_names) or "(none connected)", "channel routing above"],
@@ -277,38 +277,38 @@ def _build_flow_snapshot(host, engine) -> dict:
         for number in linked_banks[index]:
             bank = banks[number - 1]
             rows.append([f"Bank {number}", _pattern(bank), f"velocity {bank.velocity}; {clock}"])
-        if slot is None:
-            rows.append(["Source", "(empty)", "channel and bank links may still target this slot"])
+        if track is None:
+            rows.append(["Source", "(empty)", "channel and bank links may still target this track"])
         else:
             rows.extend([
-                ["Source", f"{slot.source_type}: {slot.name}", slot.path],
-                ["Instrument", _plugin_name(slot.plugin), "first in the audio chain"],
-                ["Mixer", f"gain {_value(slot.gain)}; mute {_value(slot.muted)}; solo {_value(slot.solo)}",
-                 f"enabled {_value(slot.enabled)}; any slot solo {_value(any_solo)}"],
-                ["Worker", f"PID {slot.worker_pid if slot.worker_pid is not None else '(none)'}",
-                 f"failure: {slot.worker_failure or 'none'}; missed blocks: {slot.worker_misses}"],
-                ["Worker buffering", f"{slot.buffering_samples} samples", "cached worker configuration"],
+                ["Source", f"{track.source_type}: {track.name}", track.path],
+                ["Instrument", _plugin_name(track.plugin), "first in the audio chain"],
+                ["Mixer", f"gain {_value(track.gain)}; mute {_value(track.muted)}; solo {_value(track.solo)}",
+                 f"enabled {_value(track.enabled)}; any track solo {_value(any_solo)}"],
+                ["Worker", f"PID {track.worker_pid if track.worker_pid is not None else '(none)'}",
+                 f"failure: {track.worker_failure or 'none'}; missed blocks: {track.worker_misses}"],
+                ["Worker buffering", f"{track.buffering_samples} samples", "cached worker configuration"],
             ])
-            if slot.vcv_patch_path:
-                rows.append(["VCV patch", slot.vcv_patch_path, "loaded source patch"])
-            if slot.pd_patch_path:
-                rows.append(["PD patch", slot.pd_patch_path, "loaded source patch; external assets remain on disk"])
-            for effect_index, effect in enumerate(slot.effects):
-                rows.append([f"Slot FX {effect_index + 1}", _plugin_name(effect),
+            if track.vcv_patch_path:
+                rows.append(["VCV patch", track.vcv_patch_path, "loaded source patch"])
+            if track.pd_patch_path:
+                rows.append(["PD patch", track.pd_patch_path, "loaded source patch; external assets remain on disk"])
+            for effect_index, effect in enumerate(track.effects):
+                rows.append([f"Track FX {effect_index + 1}", _plugin_name(effect),
                              effect.path_to_plugin_file or "(no cached path)"])
-            if not slot.effects:
-                rows.append(["Slot FX", "(none)", "instrument directly to slot mixer"])
+            if not track.effects:
+                rows.append(["Track FX", "(none)", "instrument directly to track mixer"])
         for control in control_rows[index]:
             label, binding, target, value, state = control
             rows.append([f"{label}: {binding}", f"{target}; {value}", state])
         rows.append(["Audio destination", "master sum -> master FX -> master gain -> output", states[index]])
-        sections.append(_section(f"slot{index + 1}", f"Slot {index + 1}", ["Stage / control", "Path / cached value", "State / detail"], rows))
+        sections.append(_section(f"track{index + 1}", f"Track {index + 1}", ["Stage / control", "Path / cached value", "State / detail"], rows))
 
-    master_rows = [["Input", "sum of eligible slot outputs", "slot gains / mute / solo applied before sum"]]
+    master_rows = [["Input", "sum of eligible track outputs", "track gains / mute / solo applied before sum"]]
     for index, effect in enumerate(master_effects):
         master_rows.append([f"Master FX {index + 1}", _plugin_name(effect), effect.path_to_plugin_file or "(no cached path)"])
     if not master_effects:
-        master_rows.append(["Master FX", "(none)", "slot sum directly to master gain"])
+        master_rows.append(["Master FX", "(none)", "track sum directly to master gain"])
     master_rows.extend([
         ["Master gain", _value(master_gain), "range 0 .. 1; " + ("zero: output silenced" if master_gain == 0 else "applied after master FX")],
         ["Master fader", f"CC {MASTER_FADER_CC} (0-127) -> gain 0 .. 1", master_control[4]],

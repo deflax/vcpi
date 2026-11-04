@@ -2,12 +2,12 @@
 
 Procedurally generated synth pad one-shots.
 
-These WAV files are intended for the `slot <n> wav` sampler command.
+These WAV files are intended for the `track <n> wav` sampler command.
 
 Example:
 
 ```text
-vcpi> slot 2 wav synth-pads c4-warm
+vcpi> track 2 wav synth-pads c4-warm
 ```
 
 This resolves to `samples/synth-pads/c4-warm.wav`.

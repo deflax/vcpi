@@ -77,7 +77,7 @@ py::dict transportDict(const TransportStats& info) {
 py::dict engineDict(const EngineStats& info) {
     py::dict result;
     result["running"] = info.running;
-    result["eligible_slots"] = info.eligibleSlots;
+    result["eligible_tracks"] = info.eligibleTracks;
     result["underruns"] = info.underruns;
     result["render_errors"] = info.renderErrors;
     result["callback_count"] = info.callbackCount;
@@ -164,13 +164,13 @@ PYBIND11_MODULE(_vcpi_native, module) {
             { py::gil_scoped_release release; result = transport.stats(); }
             return transportDict(result);
         });
-    py::class_<SlotRunner, std::shared_ptr<SlotRunner>>(module, "SlotRunner")
+    py::class_<TrackRunner, std::shared_ptr<TrackRunner>>(module, "TrackRunner")
         .def(py::init<std::shared_ptr<Transport>, std::shared_ptr<Plugin>, double, int>(),
              py::arg("transport"), py::arg("plugin"), py::arg("sample_rate"), py::arg("frames"), py::call_guard<py::gil_scoped_release>())
-        .def("set_effects", &SlotRunner::setEffects, py::arg("effects"), py::call_guard<py::gil_scoped_release>())
-        .def("barrier", &SlotRunner::barrier, py::call_guard<py::gil_scoped_release>())
-        .def("shutdown", &SlotRunner::shutdown, py::call_guard<py::gil_scoped_release>())
-        .def("render_once", [](SlotRunner& runner) {
+        .def("set_effects", &TrackRunner::setEffects, py::arg("effects"), py::call_guard<py::gil_scoped_release>())
+        .def("barrier", &TrackRunner::barrier, py::call_guard<py::gil_scoped_release>())
+        .def("shutdown", &TrackRunner::shutdown, py::call_guard<py::gil_scoped_release>())
+        .def("render_once", [](TrackRunner& runner) {
             std::vector<float> result;
             { py::gil_scoped_release release; result = runner.renderOnce(); }
             return audioArray(std::move(result));
@@ -178,9 +178,9 @@ PYBIND11_MODULE(_vcpi_native, module) {
     py::class_<Engine, std::shared_ptr<Engine>>(module, "Engine")
         .def(py::init<double, int>(), py::arg("sample_rate"), py::arg("frames"), py::call_guard<py::gil_scoped_release>())
         .def("attach", &Engine::attach, py::arg("index"), py::arg("transport"), py::arg("gain") = 1.0, py::arg("muted") = false, py::arg("solo") = false, py::call_guard<py::gil_scoped_release>())
-        .def("set_slot", &Engine::setSlot, py::arg("index"), py::arg("gain"), py::arg("muted"), py::arg("solo"), py::call_guard<py::gil_scoped_release>())
+        .def("set_track", &Engine::setTrack, py::arg("index"), py::arg("gain"), py::arg("muted"), py::arg("solo"), py::call_guard<py::gil_scoped_release>())
         .def("set_master_gain", &Engine::setMasterGain, py::arg("gain"), py::call_guard<py::gil_scoped_release>())
-        .def("set_mixer", &Engine::setMixer, py::arg("slots"), py::arg("master_gain"), py::call_guard<py::gil_scoped_release>())
+        .def("set_mixer", &Engine::setMixer, py::arg("tracks"), py::arg("master_gain"), py::call_guard<py::gil_scoped_release>())
         .def("set_master_effects", &Engine::setMasterEffects, py::arg("effects"), py::call_guard<py::gil_scoped_release>())
         .def("start", [](Engine& engine, const py::object& device) {
             int index = -1;

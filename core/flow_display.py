@@ -24,7 +24,7 @@ from rich.text import Text
 
 
 def _section_id(view: str) -> str:
-    return f"slot{view}" if view in "12345678" and len(view) == 1 else view
+    return f"track{view}" if view in "12345678" and len(view) == 1 else view
 
 
 _STATE_COLOURS = {
@@ -34,7 +34,7 @@ _STATE_COLOURS = {
     ),
     "red": (
         r"\b(?:off|false|stopped|failed|failure|muted|disabled|blocked|solo-excluded)\b"
-        r"|\b(?:slot|master) gain zero\b"
+        r"|\b(?:track|master) gain zero\b"
     ),
     "yellow": (
         r"\b(?:inactive|disconnected|unlinked|unbound|undefined|unknown|empty|"
@@ -103,7 +103,7 @@ def _section_table(section: dict, width: int) -> Table:
 
 
 def display_flow(console: Console, snapshot: dict, view: str = "overview") -> None:
-    """Render one section, a numbered slot, or all sections from a snapshot."""
+    """Render one section, a numbered track, or all sections from a snapshot."""
     section_id = _section_id(view)
     sections = [
         section for section in snapshot["sections"]
@@ -256,7 +256,7 @@ def explore_flow(
 
     jump_keys = {
         "o": "overview", "m": "midi", "c": "controls", "a": "audio",
-        **{str(number): f"slot{number}" for number in range(1, 9)},
+        **{str(number): f"track{number}" for number in range(1, 9)},
         "9": "master",
     }
     for key, section_id in jump_keys.items():

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from core import deps
 from core.audio_process import AudioProcessError
 from core.engine import AudioEngine
-from core.models import InstrumentSlot
+from core.models import InstrumentTrack
 from core.host import VcpiCore
 from core.main import _boot_host
 from core.sequencer import Sequencer
@@ -74,7 +74,7 @@ class _MidiHandle:
 class HostShutdownTests(unittest.TestCase):
     def _activate_resources(self, host):
         self.addCleanup(host.shutdown, save=False)
-        host.engine.slots[0] = InstrumentSlot(
+        host.engine.tracks[0] = InstrumentTrack(
             "incomplete", "/tmp/incomplete.wav", None, source_type="wav",
         )
         host.send_note(0, 60, duration=60.0)
@@ -122,7 +122,7 @@ class HostShutdownTests(unittest.TestCase):
         ))
         self.assertEqual(host.engine.listeners, [])
         self.assertTrue(host.engine._closed)
-        self.assertTrue(all(slot is None for slot in host.engine.slots))
+        self.assertTrue(all(track is None for track in host.engine.tracks))
         self.assertEqual(host.engine.control.fileno(), -1)
         self.assertEqual(host.engine.owner_control.fileno(), -1)
 
@@ -153,7 +153,7 @@ class HostShutdownTests(unittest.TestCase):
             host.shutdown()
             saved = json.loads(path.read_text())
             self.assertEqual(saved["master_gain"], 0.25)
-            self.assertEqual(saved["slots"][0]["name"], "incomplete")
+            self.assertEqual(saved["tracks"][0]["name"], "incomplete")
             self.assertEqual(saved["connections"]["midi_inputs"], ["test MIDI"])
             self._assert_closed(host)
             original = path.read_bytes()
@@ -272,7 +272,7 @@ class ShutdownTests(unittest.TestCase):
         effect = PluginProbe()
         master = PluginProbe()
         refs = [weakref.ref(plugin) for plugin in (instrument, effect, master)]
-        engine.slots[0] = InstrumentSlot(
+        engine.tracks[0] = InstrumentTrack(
             "probe", "/tmp/probe.vst3", instrument, effects=[effect],
         )
         engine.master_effects.append(master)
@@ -296,7 +296,7 @@ class ShutdownTests(unittest.TestCase):
             seq.stop()
             messages = list(host.engine._midi_queue)
             self.assertEqual(
-                [(slot, message.type, message.note) for slot, message in messages],
+                [(track, message.type, message.note) for track, message in messages],
                 [(0, "note_off", 60)],
             )
             self.assertTrue(all(not timer.is_alive() for timer in timers))
@@ -317,7 +317,7 @@ class ShutdownTests(unittest.TestCase):
         try:
             seq.stop()  # The playback thread has already marked itself stopped.
             self.assertEqual(
-                [(slot, message.type, message.note) for slot, message in host.engine._midi_queue],
+                [(track, message.type, message.note) for track, message in host.engine._midi_queue],
                 [(0, "note_off", 60)],
             )
             self.assertTrue(all(not timer.is_alive() for timer in timers))
@@ -339,8 +339,8 @@ class ShutdownTests(unittest.TestCase):
             self.assertTrue(all(not timer.is_alive() for timer in timers))
             seq.stop()
             self.assertEqual(
-                [(slot, message.type, message.note)
-                 for slot, message in host.engine._midi_queue],
+                [(track, message.type, message.note)
+                 for track, message in host.engine._midi_queue],
                 [(0, "note_off", 60)],
             )
         finally:

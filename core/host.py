@@ -16,7 +16,7 @@ from controllers.midi_input import MidiInputController
 from core.audio_process import AudioProcessError, RemoteAudioEngine
 from core.link import LinkSync
 from core.midi import list_midi_input_ports, list_midi_output_ports
-from core.models import InstrumentSlot, NUM_SLOTS
+from core.models import InstrumentTrack, NUM_TRACKS
 
 
 logger = logging.getLogger(__name__)
@@ -155,95 +155,95 @@ class VcpiCore:
 
     # -- plugin management ---------------------------------------------------
 
-    def _loaded_slot(self, slot_index: int) -> InstrumentSlot:
-        slot = self.engine.slots[slot_index]
-        if slot is None:
-            raise RuntimeError(f"Audio child did not publish slot {slot_index + 1}")
-        self.midimix.invalidate_param_cache(slot_index)
-        self.midimix._build_param_cache(slot_index)
-        return slot
+    def _loaded_track(self, track_index: int) -> InstrumentTrack:
+        track = self.engine.tracks[track_index]
+        if track is None:
+            raise RuntimeError(f"Audio child did not publish track {track_index + 1}")
+        self.midimix.invalidate_param_cache(track_index)
+        self.midimix._build_param_cache(track_index)
+        return track
 
-    def load_instrument(self, slot_index: int, path: str,
-                        name: Optional[str] = None) -> InstrumentSlot:
-        """Stage a native slot process and return its published cached state."""
-        self.engine.request("load_instrument", slot_index=slot_index, path=path, name=name)
-        return self._loaded_slot(slot_index)
+    def load_instrument(self, track_index: int, path: str,
+                        name: Optional[str] = None) -> InstrumentTrack:
+        """Stage a native track process and return its published cached state."""
+        self.engine.request("load_instrument", track_index=track_index, path=path, name=name)
+        return self._loaded_track(track_index)
 
-    def load_wav(self, slot_index: int, wav_path: str,
-                 name: Optional[str] = None) -> InstrumentSlot:
-        """Stage a sampler slot process and return its published cached state."""
-        self.engine.request("load_wav", slot_index=slot_index, wav_path=wav_path, name=name)
-        return self._loaded_slot(slot_index)
+    def load_wav(self, track_index: int, wav_path: str,
+                 name: Optional[str] = None) -> InstrumentTrack:
+        """Stage a sampler track process and return its published cached state."""
+        self.engine.request("load_wav", track_index=track_index, wav_path=wav_path, name=name)
+        return self._loaded_track(track_index)
 
-    def remove_instrument(self, slot_index: int) -> InstrumentSlot:
+    def remove_instrument(self, track_index: int) -> InstrumentTrack:
         """Remove an instrument, retaining the previous snapshot for callers."""
-        if not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
-        slot = self.engine.slots[slot_index]
-        if slot is None:
-            raise ValueError(f"Slot {slot_index + 1} is already empty")
-        self.engine.request("remove_instrument", slot_index=slot_index)
-        self.midimix.invalidate_param_cache(slot_index)
-        return slot
+        if not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
+        track = self.engine.tracks[track_index]
+        if track is None:
+            raise ValueError(f"Track {track_index + 1} is already empty")
+        self.engine.request("remove_instrument", track_index=track_index)
+        self.midimix.invalidate_param_cache(track_index)
+        return track
 
-    def load_effect(self, path: str, slot_index: Optional[int] = None,
+    def load_effect(self, path: str, track_index: Optional[int] = None,
                     name: Optional[str] = None):
-        self.engine.request("load_effect", path=path, slot_index=slot_index, name=name)
-        if slot_index is not None:
-            self.midimix.invalidate_param_cache(slot_index)
+        self.engine.request("load_effect", path=path, track_index=track_index, name=name)
+        if track_index is not None:
+            self.midimix.invalidate_param_cache(track_index)
 
-    def remove_effect(self, slot_index: Optional[int], effect_index: int):
-        self.engine.request("remove_effect", slot_index=slot_index, effect_index=effect_index)
-        if slot_index is not None:
-            self.midimix.invalidate_param_cache(slot_index)
+    def remove_effect(self, track_index: Optional[int], effect_index: int):
+        self.engine.request("remove_effect", track_index=track_index, effect_index=effect_index)
+        if track_index is not None:
+            self.midimix.invalidate_param_cache(track_index)
 
-    def load_vcv(self, slot_index: int, vcv_path: str,
+    def load_vcv(self, track_index: int, vcv_path: str,
                  cardinal_path: Optional[str] = None,
-                 name: Optional[str] = None) -> tuple[InstrumentSlot, str, str]:
+                 name: Optional[str] = None) -> tuple[InstrumentTrack, str, str]:
         result = self.engine.request(
-            "load_vcv", slot_index=slot_index, vcv_path=vcv_path,
+            "load_vcv", track_index=track_index, vcv_path=vcv_path,
             cardinal_path=cardinal_path, name=name,
         )
-        return self._loaded_slot(slot_index), result["patch_result"], result["cardinal_path"]
+        return self._loaded_track(track_index), result["patch_result"], result["cardinal_path"]
 
-    def load_vcv_patch(self, slot_index: int, patch_name: str,
+    def load_vcv_patch(self, track_index: int, patch_name: str,
                        cardinal_path: Optional[str] = None,
-                       name: Optional[str] = None) -> tuple[InstrumentSlot, str, str, Path]:
+                       name: Optional[str] = None) -> tuple[InstrumentTrack, str, str, Path]:
         result = self.engine.request(
-            "load_vcv_patch", slot_index=slot_index, patch_name=patch_name,
+            "load_vcv_patch", track_index=track_index, patch_name=patch_name,
             cardinal_path=cardinal_path, name=name,
         )
         return (
-            self._loaded_slot(slot_index), result["patch_result"],
+            self._loaded_track(track_index), result["patch_result"],
             result["cardinal_path"], Path(result["patch_path"]),
         )
 
-    def load_pd(self, slot_index: int, pd_path: str,
+    def load_pd(self, track_index: int, pd_path: str,
                 plugdata_path: Optional[str] = None,
-                name: Optional[str] = None) -> tuple[InstrumentSlot, str, str]:
+                name: Optional[str] = None) -> tuple[InstrumentTrack, str, str]:
         """Stage a plugdata patch and publish only after successful import."""
         result = self.engine.request(
-            "load_pd", slot_index=slot_index, pd_path=pd_path,
+            "load_pd", track_index=track_index, pd_path=pd_path,
             plugdata_path=plugdata_path, name=name,
         )
-        return self._loaded_slot(slot_index), result["patch_result"], result["plugdata_path"]
+        return self._loaded_track(track_index), result["patch_result"], result["plugdata_path"]
 
-    def load_pd_patch(self, slot_index: int, patch_name: str,
+    def load_pd_patch(self, track_index: int, patch_name: str,
                       plugdata_path: Optional[str] = None,
-                      name: Optional[str] = None) -> tuple[InstrumentSlot, str, str, Path]:
+                      name: Optional[str] = None) -> tuple[InstrumentTrack, str, str, Path]:
         result = self.engine.request(
-            "load_pd_patch", slot_index=slot_index, patch_name=patch_name,
+            "load_pd_patch", track_index=track_index, patch_name=patch_name,
             plugdata_path=plugdata_path, name=name,
         )
         return (
-            self._loaded_slot(slot_index), result["patch_result"],
+            self._loaded_track(track_index), result["patch_result"],
             result["plugdata_path"], Path(result["patch_path"]),
         )
 
     # -- routing -------------------------------------------------------------
 
-    def route(self, midi_channel: int, slot_index: int):
-        self.engine.route(midi_channel, slot_index)
+    def route(self, midi_channel: int, track_index: int):
+        self.engine.route(midi_channel, track_index)
 
     def unroute(self, midi_channel: int):
         self.engine.unroute(midi_channel)
@@ -282,12 +282,12 @@ class VcpiCore:
         port_name = self.midimix.open_virtual_output(name)
         logger.info("[MIDI Mix OUT] Opened virtual: %s", port_name)
 
-    def refresh_mixer_leds(self, slot_indices: Optional[list[int]] = None):
-        self.midimix.refresh_leds(slot_indices)
+    def refresh_mixer_leds(self, track_indices: Optional[list[int]] = None):
+        self.midimix.refresh_leds(track_indices)
 
     # -- convenience ---------------------------------------------------------
 
-    def send_note(self, slot_index: int, note: int, velocity: int = 100,
+    def send_note(self, track_index: int, note: int, velocity: int = 100,
                   duration: float = 0.3):
         if not deps.HAS_MIDO or deps.mido is None:
             return
@@ -298,11 +298,11 @@ class VcpiCore:
         with self._note_lock:
             if self._shutdown:
                 return
-            slot = self.engine.slots[slot_index]
-            if slot is None:
+            track = self.engine.tracks[track_index]
+            if track is None:
                 return
-            generation = slot.generation
-            self.engine.enqueue_midi(slot_index, on, generation=generation)
+            generation = track.generation
+            self.engine.enqueue_midi(track_index, on, generation=generation)
 
             def finish_note():
                 with self._note_lock:
@@ -311,13 +311,13 @@ class VcpiCore:
                     pending = self._note_timers.pop(timer, None)
                     if pending is None:
                         return
-                    current = self.engine.slots[slot_index]
+                    current = self.engine.tracks[track_index]
                     if current is not None and current.generation == generation:
-                        self.engine.enqueue_midi(slot_index, off, generation=generation)
+                        self.engine.enqueue_midi(track_index, off, generation=generation)
 
             timer = threading.Timer(duration, finish_note)
             timer.daemon = True
-            self._note_timers[timer] = (slot_index, off, generation)
+            self._note_timers[timer] = (track_index, off, generation)
             timer.start()
 
     # -- audio / link --------------------------------------------------------
@@ -360,12 +360,12 @@ class VcpiCore:
             self._note_timers.clear()
         for timer, _ in pending:
             timer.cancel()
-        for timer, (slot_index, off, generation) in pending:
+        for timer, (track_index, off, generation) in pending:
             timer.join()
-            slot = self.engine.slots[slot_index]
-            if slot is not None and slot.generation == generation:
+            track = self.engine.tracks[track_index]
+            if track is not None and track.generation == generation:
                 try:
-                    self.engine.enqueue_midi(slot_index, off, generation=generation)
+                    self.engine.enqueue_midi(track_index, off, generation=generation)
                 except Exception:
                     logger.exception("[Host] Failed sending final note-off")
 

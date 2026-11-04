@@ -39,18 +39,18 @@ def validate_native_message(message, ordinary_limit):
                 validate_native_state(plugin.native_state)
             return replace(plugin, native_state=None)
 
-        # Slot-owner replies contain one slot record, audio-owner replies all.
-        def slot_record(record):
+        # Track-owner replies contain one track record, audio-owner replies all.
+        def track_record(record):
             if record is None:
                 return None
             return {**record, "plugin": strip(record["plugin"]),
                     "effects": [strip(effect) for effect in record["effects"]]}
 
-        if "slots" in state:
-            state["slots"] = [slot_record(record) for record in state["slots"]]
+        if "tracks" in state:
+            state["tracks"] = [track_record(record) for record in state["tracks"]]
             state["master_effects"] = [strip(effect) for effect in state["master_effects"]]
         else:
-            state = slot_record(state)
+            state = track_record(state)
         metadata["state"] = state
     else:
         raise ValueError("native state transfer requires an explicit capture/load envelope")

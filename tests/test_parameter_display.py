@@ -33,9 +33,9 @@ class ParameterDisplayTests(unittest.TestCase):
                                      values={"mix": 0.25})
         self.master = PluginSnapshot(3, parameters={"gain": ParameterSnapshot()},
                                      values={"gain": 0.75})
-        slot = SimpleNamespace(plugin=self.instrument, name="Synth", effects=[self.effect])
+        track = SimpleNamespace(plugin=self.instrument, name="Synth", effects=[self.effect])
         host = SimpleNamespace(engine=SimpleNamespace(
-            slots=[slot, None], master_effects=[self.master, self.effect]))
+            tracks=[track, None], master_effects=[self.master, self.effect]))
         self.output = io.StringIO()
         self.cli = HostCLI(cast(VcpiCore, cast(object, host)), stdout=self.output, owns_host=False)
 
@@ -57,7 +57,7 @@ class ParameterDisplayTests(unittest.TestCase):
         self.assertIn("midi_cc_0_1", self.instrument.parameters)
         self.assertEqual(self.instrument.values["midi_cc_0_1"], 0.0)
 
-    def test_distinct_instrument_slot_effect_and_master_targets(self):
+    def test_distinct_instrument_track_effect_and_master_targets(self):
         for command, expected, absent in (
             ("get 1 cutoff", "cutoff = 1200.0 Hz", "mode ="),
             ("get 1 fx 1", "mix = 0.25", "cutoff ="),

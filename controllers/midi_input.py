@@ -2,7 +2,7 @@
 
 Any MIDI input device (keyboard, sequencer, etc.) is handled identically:
 parse incoming raw MIDI, look up engine.channel_map, and enqueue to the
-appropriate instrument slot.
+appropriate instrument track.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class MidiInputController:
-    """Forward MIDI input from any device into routed instrument slots."""
+    """Forward MIDI input from any device into routed instrument tracks."""
 
     def __init__(self, engine, label: str = "MIDI-in"):
         self._engine = engine
@@ -39,7 +39,7 @@ class MidiInputController:
         self._port.close()
 
     def on_midi(self, event, data=None):
-        """rtmidi callback forwarding MIDI into routed slots."""
+        """rtmidi callback forwarding MIDI into routed tracks."""
         del data
 
         raw, _dt = event
@@ -50,8 +50,8 @@ class MidiInputController:
         channel = status & 0x0F
         msg_type = status & 0xF0
 
-        slot_index = self._engine.channel_map.get(channel)
-        if slot_index is None:
+        track_index = self._engine.channel_map.get(channel)
+        if track_index is None:
             logger.debug("[%s] ch %d raw=%s dropped (unrouted)",
                          self.label, channel + 1, raw)
             return
@@ -78,9 +78,9 @@ class MidiInputController:
                 msg = mido.Message("aftertouch", value=raw[1], channel=channel)
 
             if msg is not None:
-                self._engine.enqueue_midi(slot_index, msg)
-                logger.debug("[%s] ch %d -> slot %d: %s",
-                             self.label, channel + 1, slot_index + 1, msg)
+                self._engine.enqueue_midi(track_index, msg)
+                logger.debug("[%s] ch %d -> track %d: %s",
+                             self.label, channel + 1, track_index + 1, msg)
             else:
                 logger.debug("[%s] ch %d raw=%s ignored",
                              self.label, channel + 1, raw)

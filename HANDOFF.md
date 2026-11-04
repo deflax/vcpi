@@ -8,13 +8,13 @@ This file is for transient session state. Durable repo facts live in `AGENTS.md`
 
 - Exploration-only session; no feature or bugfix implementation was underway.
 - The main durable artifact created from exploration is `AGENTS.md`.
-- Current repo knowledge was distilled from `README.md`, `USAGE.md`, `requirements.txt`, `vst3/README.md`, and `rpi-build/README.md`.
+- Current repo guidance lives in `README.md`, `USAGE.md`, `requirements.txt`, and `rpi-build/README.md`.
 
 ## Key findings
 
 - `vcpi` is a Python VST3 host with Ableton Link tempo sync for hardware-centric live setups.
 - Normal runtime is split daemon/client: `./vcpid` or `python main.py serve`, then `./vcpi` or `python main.py cli`.
-- Main code areas are `core/`, `controllers/`, `graph/`, `sampler/`, `vst3/`, and `rpi-build/`.
+- Main code areas are `core/`, `controllers/`, `graph/`, `sampler/`, and `rpi-build/`.
 - Most useful code entrypoints are `core/host.py`, `core/engine.py`, `core/cli.py`, `core/server.py`, `core/client.py`, `core/link.py`, and `core/session.py`.
 
 ## Tooling findings

@@ -25,7 +25,7 @@ def render_plugin_info(plugin: PluginSnapshot, label: str = "") -> str:
     plugin : PluginSnapshot
         Plain metadata published by the audio owner while stopped.
     label : str, optional
-        An optional heading (e.g. "Slot 1" or "Master FX 2").
+        An optional heading (e.g. "Track 1" or "Master FX 2").
     """
     # -- gather metadata -----------------------------------------------------
     name = _metadata_text(plugin.name, "Unknown")

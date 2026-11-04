@@ -68,7 +68,7 @@ void Transport::sendMidi(const std::string& message) {
     std::lock_guard<std::mutex> lock(midiProducer);
     const auto write = header->midiWrite.load(std::memory_order_relaxed);
     const auto read = header->midiRead.load(std::memory_order_acquire);
-    if (static_cast<std::uint32_t>(write - read) >= midiCapacity) throw MidiFull("Slot MIDI FIFO is full");
+    if (static_cast<std::uint32_t>(write - read) >= midiCapacity) throw MidiFull("Track MIDI FIFO is full");
     auto& cell = header->midi[write % midiCapacity];
     cell.size = static_cast<std::uint32_t>(message.size());
     std::memcpy(cell.bytes.data(), message.data(), message.size());
@@ -81,7 +81,7 @@ TransportStats Transport::stats() const {
     result.progress = header->progress.load(std::memory_order_acquire);
     result.misses = header->misses.load(std::memory_order_relaxed);
     result.audioPeak = detail::loadPeak(header->audioPeakBits);
-    result.realtime = header->realtime.stats(slotRealtimePriority);
+    result.realtime = header->realtime.stats(trackRealtimePriority);
     // Read consumer first, so a racing dequeue can't make pending underflow.
     const auto read = header->midiRead.load(std::memory_order_acquire);
     const auto write = header->midiWrite.load(std::memory_order_acquire);

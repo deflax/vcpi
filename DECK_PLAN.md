@@ -1,11 +1,11 @@
-# Native deck slot implementation plan
+# Native deck track implementation plan
 
 ## Goal and scope
 
-Add `deck` as a native JUCE-backed slot source for manual DJ beatmatching.
+Add `deck` as a native JUCE-backed track source for manual DJ beatmatching.
 Each deck independently loads a track from a music bank, plays stereo audio,
 and supports vinyl-style pitch, momentary nudge, pause, seek and one cue point.
-Existing slot mixing, inserts, mute/solo, MIDI routing and process isolation stay
+Existing track mixing, inserts, mute/solo, MIDI routing and process isolation stay
 in place. Playback is independent of Link and global musical transport.
 
 No automatic sync, beat detection, time stretching/key lock, crossfader,
@@ -17,16 +17,16 @@ This document is a proposed implementation contract, not implemented commands.
 - `native/plugin.hpp` and `native/plugin.cpp`: `Plugin` already wraps VST3 and a
   native WAV sampler. The sampler reads the entire file, resamples it into memory
   and plays MIDI-triggered one-shot voices. It is not a deck transport.
-- `native/runtime.cpp`: `SlotRunner` renders a native `Plugin`, then its inserts,
+- `native/runtime.cpp`: `TrackRunner` renders a native `Plugin`, then its inserts,
   into shared-memory transport. Output mixes those blocks with one block of
-  buffering. Neither slot DSP nor the output callback enters Python.
-- `core/plugin_host.py`, `core/slot_process.py`, `core/audio_process.py`: new slot
-  sources are prepared in staged workers before publication. Existing slot
+  buffering. Neither track DSP nor the output callback enters Python.
+- `core/plugin_host.py`, `core/track_process.py`, `core/audio_process.py`: new track
+  sources are prepared in staged workers before publication. Existing track
   controls operate through bounded IPC and generation-aware updates.
 - `core/audio_state.py`, `core/models.py`: daemon-side snapshots currently have
   no deck transport/status fields. Completion and read-only commands use caches.
-- `core/session.py`: session format 2 saves native VST3 chunks and path-based WAV
-  slots; versions 1 and 2 are readable.
+- `core/session.py`: session format 3 saves native VST3 chunks and path-based WAV
+  tracks; versions 1, 2 and 3 are readable.
 - `native/CMakeLists.txt`: JUCE 8.0.6 audio basics/formats/processors are available;
   audio-utils is not currently compiled. FLAC, Ogg and MP3 decoding are disabled.
   Do not assume AudioTransportSource is available without build changes.
@@ -46,7 +46,7 @@ This document is a proposed implementation contract, not implemented commands.
 | Set cue | Store current source position, without moving playback |
 | Recall cue | Move to stored cue and pause |
 | End of file | Stop at duration, no automatic wrap; Play from ended restarts at cue |
-| Slot mute | Continue advancing transport through the existing mixer behaviour |
+| Track mute | Continue advancing transport through the existing mixer behaviour |
 | Output audio stop | Freeze deck position when rendering stops; starting output must not implicitly change the deck play flag |
 | Session restore | Restore selected track, pitch and cue, positioned at cue and paused; nudge is 0 |
 
@@ -140,21 +140,21 @@ control writes should enqueue bounded native commands and return promptly.
 
 ## Control and headless interface
 
-Proposed CLI, following existing slot and parameter conventions:
+Proposed CLI, following existing track and parameter conventions:
 
 ```text
-slot 1 deck /music/live-set.json Deck-A
-slot 2 deck /music/live-set.json Deck-B
+track 1 deck /music/live-set.json Deck-A
+track 2 deck /music/live-set.json Deck-B
 get 1
 set 1 track_select 2
 set 1 pitch -1.25
 set 1 play true
 set 1 nudge 1
 set 1 nudge 0
-slot 1 deck seek 90
-slot 1 deck cue set
-slot 1 deck cue
-slot 1 deck status
+track 1 deck seek 90
+track 1 deck cue set
+track 1 deck cue
+track 1 deck status
 ```
 
 Expose `track_select`, `play`, `pitch`, and `nudge` through the existing typed
@@ -167,12 +167,12 @@ Add bounded deck status updates for active/requested track identity, request ID,
 loading/ready/buffering/ended state, play flag, position, duration, cue, pitch,
 nudge and last load error. Report requested and applied selection separately.
 Publish transitions promptly and progress at a capped rate (for example 10 Hz),
-not once per sample/block. Preserve snapshot epoch and slot-generation checks.
+not once per sample/block. Preserve snapshot epoch and track-generation checks.
 `get`, status and completion remain cache-only, including manifest track titles.
 
-Within-bank track changes do not replace the slot worker, increment the source
+Within-bank track changes do not replace the track worker, increment the source
 replacement generation, or rebuild inserts. Initial deck creation still uses
-staged slot publication so a failed load cannot destroy the previous slot.
+staged track publication so a failed load cannot destroy the previous track.
 
 Define routed MIDI transport bindings in one documented mapping table, alongside
 CLI controls: press/release nudge, play/pause, cue and continuous pitch/selection.
@@ -186,8 +186,8 @@ behavioural tests; a broader controller mapping redesign is not part of this wor
 
 ## Persistence
 
-Introduce session format 3 while retaining readers for formats 1 and 2. Existing
-sources keep their established restore behaviour. A deck slot gets an explicit
+Extend session format 3 while retaining readers for formats 1 and 2. Existing
+sources keep their established restore behaviour. A deck track gets an explicit
 `deck` payload containing bank manifest locator, bank ID, stable selected track
 ID, cue time and pitch, alongside ordinary name/mixer/routing/effect fields.
 Do not serialize a VST3 chunk for the deck itself. Its inserts still save theirs.
@@ -195,7 +195,7 @@ Do not serialize a VST3 chunk for the deck itself. Its inserts still save theirs
 Resolve the selected track by ID on restore, regardless of manifest reordering.
 Do not silently fall back to a different ordinal or a stale asset path when an
 ID is missing. Use existing session error reporting for missing banks/tracks and
-continue restoring unaffected slots. Playback always restores paused at cue,
+continue restoring unaffected tracks. Playback always restores paused at cue,
 with zero nudge, even if restoring the session restarts the output device.
 Persist only committed track selection if a load is in flight.
 
@@ -204,11 +204,11 @@ Persist only committed track selection if a load is in flight.
 1. **Deck source and native playback.** Implement bounded streaming, resampling,
    transport, fades, seek/cue, EOF and native status; integrate the source wrapper,
    pybind API and native build. Prove generated mono/stereo WAV playback at
-   different source/output rates through the real offline `SlotRunner` path.
+   different source/output rates through the real offline `TrackRunner` path.
 2. **Bank and owner integration.** Implement manifest validation, staged deck
    creation, in-worker selection, cancellation and status publication through
-   host/audio/slot owners. Prove rapid A/B/C selection commits only C, failed
-   selection preserves the old track, inserts survive changes, and another slot
+   host/audio/track owners. Prove rapid A/B/C selection commits only C, failed
+   selection preserves the old track, inserts survive changes, and another track
    keeps rendering while loading or seeking.
 3. **Headless controls.** Add CLI grammar/help, typed parameters, completion,
    status/labels and the documented MIDI bindings. Exercise commands through the
@@ -227,11 +227,11 @@ freezes position; pitch/nudge alter known tone frequency and cursor rate; releas
 returns to base speed; cue/seek land correctly; EOF does not wrap; late requests
 cannot replace newer selections; missing files preserve current playback;
 streaming shortages recover without position corruption; decks remain isolated;
-slot effects/routing survive selection; session restoration is paused and uses
+track effects/routing survive selection; session restoration is paused and uses
 stable identity; repeated create/change/destroy leaves no workers/resources.
 
 Use generated WAV fixtures and existing hardware-free patterns in
-`tests/test_audio.py`, `tests/test_slot_process.py` and
+`tests/test_audio.py`, `tests/test_track_process.py` and
 `tests/test_audio_process.py`. Streaming-worker tests must explicitly await
 readiness with deadlines rather than use arbitrary sleeps. Instrument the render
 path in a throwaway smoke harness to verify no render-thread allocation or file
@@ -249,7 +249,7 @@ for this audible and hardware-specific check.
   `native/bindings.cpp`, `native/CMakeLists.txt`; runtime only if needed for
   bounded status/control handoff, not a new mixer or output path.
 - Ownership/control: `core/plugin_host.py`, `core/host.py`, `core/engine.py`,
-  `core/audio_process.py`, `core/slot_process.py`.
+  `core/audio_process.py`, `core/track_process.py`.
 - Snapshots/interface: `core/models.py`, `core/audio_state.py`, `core/cli.py`,
   `core/completion.py`, affected graph/status renderers and controller handlers.
 - Bank parsing: a focused control-side module such as `core/deck_bank.py`.
@@ -258,7 +258,7 @@ for this audible and hardware-specific check.
 
 ## Research verification
 
-An actual native WAV source was created and rendered through `SlotRunner`
+An actual native WAV source was created and rendered through `TrackRunner`
 without opening an audio device. A generated stereo fixture produced native
 transport `progress=1`, `audio_peak=0.125`, and an empty failure string. NumPy is
 unavailable in the current Python environment, so rendered array conversion

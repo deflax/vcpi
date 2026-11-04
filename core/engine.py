@@ -1,4 +1,4 @@
-"""Control-only facade for native output, mixing and isolated slot DSP."""
+"""Control-only facade for native output, mixing and isolated track DSP."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 from core.audio_deps import require_native
 from core.audio_state import plain_value
-from core.models import InstrumentSlot, NUM_SLOTS
+from core.models import InstrumentTrack, NUM_TRACKS
 
 
 logger = logging.getLogger(__name__)
@@ -31,24 +31,24 @@ class _Control:
 class AudioEngine:
     """Python owns commands and snapshots; native code owns every audio thread."""
 
-    _slot_fields = frozenset(
+    _track_fields = frozenset(
         ("gain", "muted", "solo", "enabled", "source_type", "vcv_patch_path", "pd_patch_path"))
     _gain_log_quiet_seconds = 0.3
 
     def __init__(self, sample_rate=44100, buffer_size=512, output_channels=2,
-                 health_buffer=None, *, slot_mode=False):
+                 health_buffer=None, *, track_mode=False):
         if output_channels != 2:
             raise ValueError("native audio output requires two channels")
         backend = require_native()
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
         self.output_channels = output_channels
-        self._native = None if slot_mode else backend.Engine(sample_rate, buffer_size)
+        self._native = None if track_mode else backend.Engine(sample_rate, buffer_size)
         self.runner = None
-        self.slots = [None] * NUM_SLOTS
+        self.tracks = [None] * NUM_TRACKS
         self.master_effects = []
         self.master_gain = 1.0
-        self.isolated_slots = not slot_mode
+        self.isolated_tracks = not track_mode
         self.channel_map = {}
         self.parameter_values = {}
         self.parameter_readers = {}
@@ -67,8 +67,8 @@ class AudioEngine:
         self._running = False
         self._closed = False
         self._output_device = None
-        self.render_workers = NUM_SLOTS
-        self.render_slots = self.eligible_slots = 0
+        self.render_workers = NUM_TRACKS
+        self.render_tracks = self.eligible_tracks = 0
         self.underruns = self.render_errors = self.callback_count = 0
         self.last_callback_ms = self.peak_callback_ms = 0.0
         self.deadline_misses = 0
@@ -79,64 +79,64 @@ class AudioEngine:
         self.output_realtime = {}
         self.refresh_health()
 
-    def route(self, midi_channel, slot_index):
+    def route(self, midi_channel, track_index):
         if not 0 <= midi_channel < 16:
             raise ValueError("MIDI channel must be 1-16")
-        if not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+        if not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
         previous = self.channel_map.get(midi_channel)
-        if previous is not None and self.slots[previous] is not None:
-            self.slots[previous].midi_channels.discard(midi_channel)
-        self.channel_map[midi_channel] = slot_index
-        if self.slots[slot_index] is not None:
-            self.slots[slot_index].midi_channels.add(midi_channel)
+        if previous is not None and self.tracks[previous] is not None:
+            self.tracks[previous].midi_channels.discard(midi_channel)
+        self.channel_map[midi_channel] = track_index
+        if self.tracks[track_index] is not None:
+            self.tracks[track_index].midi_channels.add(midi_channel)
 
     def unroute(self, midi_channel):
         index = self.channel_map.pop(midi_channel, None)
-        if index is not None and self.slots[index] is not None:
-            self.slots[index].midi_channels.discard(midi_channel)
+        if index is not None and self.tracks[index] is not None:
+            self.tracks[index].midi_channels.discard(midi_channel)
 
-    def _control_slot(self, index):
-        if not isinstance(index, int) or not 0 <= index < NUM_SLOTS:
-            raise ValueError(f"slot index must be 0-{NUM_SLOTS - 1}")
-        slot = self.slots[index]
-        if slot is None:
-            raise ValueError(f"slot {index + 1} is empty")
-        return slot
+    def _control_track(self, index):
+        if not isinstance(index, int) or not 0 <= index < NUM_TRACKS:
+            raise ValueError(f"track index must be 0-{NUM_TRACKS - 1}")
+        track = self.tracks[index]
+        if track is None:
+            raise ValueError(f"track {index + 1} is empty")
+        return track
 
     def _send_midi(self, index, message):
-        slot = self.slots[index]
-        if slot is None:
+        track = self.tracks[index]
+        if track is None:
             return
-        worker = slot.render_owner
+        worker = track.render_owner
         if worker is None:
-            raise RuntimeError("slot has no isolated render owner")
+            raise RuntimeError("track has no isolated render owner")
         if getattr(worker, "failure", None) is not None:
             return
         try:
             worker.transport.send_midi(bytes(message.bytes()))
         except (BufferError, ValueError) as error:
             # Overflow/oversized MIDI invalidates this instrument's note state,
-            # not the device or other slots. Retain its visible failure snapshot.
-            worker.failure = f"slot MIDI admission failed: {error}"
+            # not the device or other tracks. Retain its visible failure snapshot.
+            worker.failure = f"track MIDI admission failed: {error}"
             if self._native is not None:
                 self._native.attach(index, None)
 
-    def enqueue_midi(self, slot_index, msg, generation=None):
-        if not isinstance(slot_index, int) or not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError(f"slot index must be 0-{NUM_SLOTS - 1}")
+    def enqueue_midi(self, track_index, msg, generation=None):
+        if not isinstance(track_index, int) or not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track index must be 0-{NUM_TRACKS - 1}")
         with self._control_lock:
             if self._closed:
                 raise RuntimeError("audio engine is shut down")
-            slot = self.slots[slot_index]
-            if generation is not None and generation != (slot.generation if slot else 0):
+            track = self.tracks[track_index]
+            if generation is not None and generation != (track.generation if track else 0):
                 return False
             if self._running:
-                self._send_midi(slot_index, msg)
+                self._send_midi(track_index, msg)
             else:
                 if len(self._midi_queue) >= self._control_capacity:
                     raise BufferError("audio MIDI queue is full")
-                self._midi_queue.append((slot_index, msg))
+                self._midi_queue.append((track_index, msg))
         return True
 
     @property
@@ -165,15 +165,15 @@ class AudioEngine:
 
     def _apply_control(self, control):
         operation, arguments = control.operation, control.arguments
-        if operation == "publish_slot":
-            index, slot = arguments
+        if operation == "publish_track":
+            index, track = arguments
             if self._native is not None:
-                transport = slot.render_owner.transport if slot is not None else None
-                self._native.attach(index, transport, slot.gain if slot else 1.0,
-                                    slot.muted if slot else False, slot.solo if slot else False)
+                transport = track.render_owner.transport if track is not None else None
+                self._native.attach(index, transport, track.gain if track else 1.0,
+                                    track.muted if track else False, track.solo if track else False)
             with self._control_lock:
-                retired = self.slots[index]
-                self.slots[index] = slot
+                retired = self.tracks[index]
+                self.tracks[index] = track
                 self._midi_queue = collections.deque(
                     item for item in self._midi_queue if item[0] != index)
             self._pending_gain_logs.pop(index, None)
@@ -185,16 +185,16 @@ class AudioEngine:
                     raise ValueError("master parameter requires an effect index")
                 effects = self.master_effects
             else:
-                slot = self._control_slot(index)
-                if self.isolated_slots:
-                    raise RuntimeError("isolated slot parameters must be changed by the slot owner")
-                effects = slot.effects
+                track = self._control_track(index)
+                if self.isolated_tracks:
+                    raise RuntimeError("isolated track parameters must be changed by the track owner")
+                effects = track.effects
             if fx_index is not None:
                 if not isinstance(fx_index, int) or not 0 <= fx_index < len(effects):
                     raise ValueError("effect index out of range")
                 plugin = effects[fx_index]
             else:
-                plugin = slot.plugin
+                plugin = track.plugin
             setattr(plugin, name, value)
             actual = plain_value(getattr(plugin, name))
             self.parameter_values.setdefault(id(plugin), {})[name] = actual
@@ -220,8 +220,8 @@ class AudioEngine:
 
     def _apply_mixer_controls(self, controls):
         """Publish adjacent mixer edits with one callback acknowledgment."""
-        states = [(slot.gain, slot.muted, slot.solo) if slot is not None
-                  else (1.0, False, False) for slot in self.slots]
+        states = [(track.gain, track.muted, track.solo) if track is not None
+                  else (1.0, False, False) for track in self.tracks]
         master = self.master_gain
         updates = {}
         master_changed = False
@@ -234,12 +234,12 @@ class AudioEngine:
 
         for control in controls:
             try:
-                if control.operation == "slot":
+                if control.operation == "track":
                     index, fields = control.arguments
-                    self._control_slot(index)
-                    unknown = fields.keys() - self._slot_fields
+                    self._control_track(index)
+                    unknown = fields.keys() - self._track_fields
                     if unknown:
-                        raise TypeError(f"unsupported slot fields: {', '.join(sorted(unknown))}")
+                        raise TypeError(f"unsupported track fields: {', '.join(sorted(unknown))}")
                     applied = {name: (gain(value) if name == "gain" else bool(value)
                                if name in ("muted", "solo", "enabled") else str(value))
                                for name, value in fields.items()}
@@ -261,12 +261,12 @@ class AudioEngine:
         # Cached state and completion notifications remain applied-only: publish
         # them after the entire snapshot has reached the native callback.
         for index, fields in updates.items():
-            slot = self.slots[index]
+            track = self.tracks[index]
             for name, value in fields.items():
-                setattr(slot, name, value)
-            self._applied_updates.append(("slot", index, fields))
+                setattr(track, name, value)
+            self._applied_updates.append(("track", index, fields))
             if "gain" in fields:
-                self._pending_gain_logs[index] = (slot.gain, deadline)
+                self._pending_gain_logs[index] = (track.gain, deadline)
         if master_changed:
             self.master_gain = master
             self._applied_updates.append(("master_gain", master))
@@ -280,7 +280,7 @@ class AudioEngine:
             if index is None:
                 logger.info("master gain -> %.2f (applied)", gain)
             else:
-                logger.info("slot %d gain -> %.2f (applied)", index + 1, gain)
+                logger.info("track %d gain -> %.2f (applied)", index + 1, gain)
             del self._pending_gain_logs[index]
 
     def apply_pending_controls(self):
@@ -294,9 +294,9 @@ class AudioEngine:
                     control = self._control_queue.popleft()
                     remaining -= 1
                     controls = [control]
-                    mixer = control.operation in ("slot", "master_gain")
+                    mixer = control.operation in ("track", "master_gain")
                     if mixer:
-                        while remaining and self._control_queue[0].operation in ("slot", "master_gain"):
+                        while remaining and self._control_queue[0].operation in ("track", "master_gain"):
                             controls.append(self._control_queue.popleft())
                             remaining -= 1
                     controls = [item for item in controls if not item.cancelled]
@@ -319,56 +319,56 @@ class AudioEngine:
                 raise self.control_error
             self._flush_gain_logs()
 
-    def publish_slot(self, index, slot):
-        if not isinstance(index, int) or not 0 <= index < NUM_SLOTS:
-            raise ValueError(f"slot index must be 0-{NUM_SLOTS - 1}")
-        return self._submit_control("publish_slot", (index, slot), True)
+    def publish_track(self, index, track):
+        if not isinstance(index, int) or not 0 <= index < NUM_TRACKS:
+            raise ValueError(f"track index must be 0-{NUM_TRACKS - 1}")
+        return self._submit_control("publish_track", (index, track), True)
 
-    def clear_slot(self, index):
-        return self.publish_slot(index, None)
+    def clear_track(self, index):
+        return self.publish_track(index, None)
 
-    def set_parameter(self, slot_index, name, value, fx_index=None):
-        return self._submit_control("parameter", (slot_index, fx_index, name, value), True)
+    def set_parameter(self, track_index, name, value, fx_index=None):
+        return self._submit_control("parameter", (track_index, fx_index, name, value), True)
 
-    def load_plugin_state(self, slot_index, state, fx_index=None):
+    def load_plugin_state(self, track_index, state, fx_index=None):
         """Restore an opaque chunk on its native control owner."""
         from core.state_transport import validate_native_state
 
         validate_native_state(state)
         if threading.get_ident() != self._owner_thread:
             raise RuntimeError("plugin state must be loaded by the audio owner")
-        if slot_index is None:
+        if track_index is None:
             if self.running:
                 raise RuntimeError("master plugin state requires stopped audio")
             effects = self.master_effects
             if fx_index is None:
                 raise ValueError("master plugin state requires an effect index")
         else:
-            slot = self._control_slot(slot_index)
-            if self.isolated_slots:
-                raise RuntimeError("isolated plugin state must be loaded by the slot owner")
-            effects = slot.effects
+            track = self._control_track(track_index)
+            if self.isolated_tracks:
+                raise RuntimeError("isolated plugin state must be loaded by the track owner")
+            effects = track.effects
         if fx_index is not None:
             if not isinstance(fx_index, int) or not 0 <= fx_index < len(effects):
                 raise ValueError("effect index out of range")
             plugin = effects[fx_index]
         else:
-            plugin = slot.plugin
+            plugin = track.plugin
         if self.runner is not None:
             self.runner.barrier()
         plugin.load_saved_state(state)
 
-    def set_slot_state(self, slot_index, **fields):
-        return self._submit_control("slot", (slot_index, fields), True)
+    def set_track_state(self, track_index, **fields):
+        return self._submit_control("track", (track_index, fields), True)
 
     def set_master_gain(self, value):
         return self._submit_control("master_gain", (value,), True)
 
-    def enqueue_param_change(self, slot_index, param_name, value, fx_index=None):
-        self._submit_control("parameter", (slot_index, fx_index, param_name, value), False)
+    def enqueue_param_change(self, track_index, param_name, value, fx_index=None):
+        self._submit_control("parameter", (track_index, fx_index, param_name, value), False)
 
-    def enqueue_slot_change(self, index, **fields):
-        self._submit_control("slot", (index, fields), False)
+    def enqueue_track_change(self, index, **fields):
+        self._submit_control("track", (index, fields), False)
 
     def enqueue_master_gain(self, value):
         self._submit_control("master_gain", (value,), False)
@@ -377,18 +377,18 @@ class AudioEngine:
         return self._submit_control("barrier", (), True)
 
     def any_solo(self):
-        return any(slot.solo for slot in self.slots if slot is not None)
+        return any(track.solo for track in self.tracks if track is not None)
 
-    def set_effects(self, effects, slot_index=None):
+    def set_effects(self, effects, track_index=None):
         plugins = [effect.native for effect in effects]
-        if slot_index is None:
+        if track_index is None:
             self._native.set_master_effects(plugins)
             self.master_effects = list(effects)
         else:
             if self.runner is None:
-                raise RuntimeError("slot native runner is not initialized")
+                raise RuntimeError("track native runner is not initialized")
             self.runner.set_effects(plugins)
-            self._control_slot(slot_index).effects = list(effects)
+            self._control_track(track_index).effects = list(effects)
 
     @contextmanager
     def edit_effects(self):
@@ -409,7 +409,7 @@ class AudioEngine:
             if self._closed:
                 raise RuntimeError("audio engine is shut down")
             if self._native is None:
-                raise RuntimeError("slot owner cannot open an output device")
+                raise RuntimeError("track owner cannot open an output device")
             self.stop()
             self.apply_pending_controls()
             while self._midi_queue:
@@ -441,18 +441,18 @@ class AudioEngine:
         if self._native is not None:
             stats = self._native.stats()
             self._running = bool(stats["running"])
-            for name in ("eligible_slots", "underruns", "render_errors", "callback_count",
+            for name in ("eligible_tracks", "underruns", "render_errors", "callback_count",
                          "last_callback_ms", "peak_callback_ms", "deadline_misses",
                          "block_period_ms", "backend_label", "output_name", "output_index"):
                 if name in stats:
                     setattr(self, name, stats[name])
             self.output_realtime = stats["realtime"]
-        self.render_slots = sum(slot is not None for slot in self.slots)
+        self.render_tracks = sum(track is not None for track in self.tracks)
         self._publish_health()
 
     def _publish_health(self):
         if self.health_buffer is not None:
-            for index, value in enumerate((self._running, self.eligible_slots, self.underruns,
+            for index, value in enumerate((self._running, self.eligible_tracks, self.underruns,
                     self.render_errors, self.callback_count, self.last_callback_ms,
                     self.peak_callback_ms, self.deadline_misses, self.block_period_ms)):
                 self.health_buffer[index] = float(value)
@@ -484,7 +484,7 @@ class AudioEngine:
             self._closed = True
             self._running = False
             self.master_effects.clear()
-            self.slots[:] = [None] * NUM_SLOTS
+            self.tracks[:] = [None] * NUM_TRACKS
             self._midi_queue.clear()
             with self._control_lock:
                 while self._control_queue:

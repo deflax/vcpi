@@ -10,7 +10,7 @@
 
 namespace vcpi {
 constexpr int outputRealtimePriority = 20;
-constexpr int slotRealtimePriority = 10;
+constexpr int trackRealtimePriority = 10;
 struct RealtimeStats {
     const char* state = "inactive";
     const char* policy = "unknown";

@@ -1,6 +1,7 @@
 """Real VST3 controller conversions and opaque native-state restoration."""
 
 import math
+import os
 from pathlib import Path
 import platform
 import sys
@@ -17,18 +18,26 @@ from core.plugin_host import NativePlugin
 
 class NativeParameterRestorationTests(unittest.TestCase):
     def surge_bundle(self):
-        bundle = Path(__file__).resolve().parents[1] / "vst3" / "Surge XT.vst3"
         if sys.platform == "darwin":
-            binary_directory = bundle / "Contents" / "MacOS"
+            directories = ("~/Library/Audio/Plug-Ins/VST3", "/Library/Audio/Plug-Ins/VST3")
+            binary_suffix = Path("Contents/MacOS")
         elif sys.platform.startswith("linux"):
+            directories = ("~/.vst3", "/usr/lib/vst3", "/usr/local/lib/vst3")
             architecture = {"arm64": "aarch64", "amd64": "x86_64"}.get(
                 platform.machine(), platform.machine())
-            binary_directory = bundle / "Contents" / f"{architecture}-linux"
+            binary_suffix = Path("Contents") / f"{architecture}-linux"
         else:
             self.skipTest("native audio supports Linux and macOS")
-        if not binary_directory.is_dir():
-            self.skipTest("fetch a native Surge XT bundle for this platform")
-        return bundle
+        configured = os.environ.get("SURGE_VST3_PATH")
+        candidates = ([Path(configured).expanduser()] if configured else
+                      [Path(directory).expanduser() / "Surge XT.vst3"
+                       for directory in directories])
+        for bundle in candidates:
+            if (bundle / binary_suffix).is_dir():
+                return bundle.resolve()
+        self.skipTest(
+            "install a native Surge XT bundle in a user/system VST3 directory "
+            "or set SURGE_VST3_PATH")
 
     def test_typed_values_survive_changes_and_complete_restoration(self):
         bundle = self.surge_bundle()
@@ -87,7 +96,7 @@ class NativeParameterRestorationTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         backend = require_native()
         transport = backend.Transport(str(Path(directory.name) / "state.mmap"), 512, True)
-        runner = backend.SlotRunner(transport, plugin.native, 44100, 512)
+        runner = backend.TrackRunner(transport, plugin.native, 44100, 512)
         self.addCleanup(runner.shutdown)
 
         def render_peak(blocks=32):
@@ -139,7 +148,7 @@ class NativeParameterRestorationTests(unittest.TestCase):
             self.assertEqual(getattr(restored, name), expected)
         restored_transport = backend.Transport(
             str(Path(directory.name) / "restored.mmap"), 512, True)
-        restored_runner = backend.SlotRunner(
+        restored_runner = backend.TrackRunner(
             restored_transport, restored.native, 44100, 512)
         self.addCleanup(restored_runner.shutdown)
         restored_transport.send_midi(bytes((0x90, 60, 100)))

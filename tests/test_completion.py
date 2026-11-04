@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from core.audio_state import ParameterSnapshot, PluginSnapshot
 from core.cli import HostCLI
 from core.completion import complete_line
-from core.models import NUM_SLOTS
+from core.models import NUM_TRACKS
 from core.sequencer import NUM_SEQ_BANKS
 
 
@@ -28,10 +28,10 @@ class CompletionTests(unittest.TestCase):
         }, values={"cutoff": 1000.0, "bypass": False, "mode": "Quiet Mode"})
         self.effect = PluginSnapshot(2, parameters={"mix": ParameterSnapshot()})
         self.master = PluginSnapshot(3, parameters={"enabled": ParameterSnapshot(kind="bool")})
-        self.slot = SimpleNamespace(plugin=self.instrument, effects=[self.effect])
+        self.track = SimpleNamespace(plugin=self.instrument, effects=[self.effect])
         self.forbidden = Mock(side_effect=AssertionError("completion requested live state or mutation"))
         self.engine = SimpleNamespace(
-            slots=[self.slot] + [None] * (NUM_SLOTS - 1),
+            tracks=[self.track] + [None] * (NUM_TRACKS - 1),
             master_effects=[self.master, self.effect],
             audio_devices=[
                 {"index": 0, "name": "Input", "max_output_channels": 0},
@@ -95,7 +95,7 @@ class CompletionTests(unittest.TestCase):
         self.assertIn("status", self.matches(""))
         self.assertEqual(self.matches("sta"), ["status"])
         self.assertEqual(self.inserted("  sta", "status"), "  status")
-        self.assertIn("slot", self.matches("help "))
+        self.assertIn("track", self.matches("help "))
         self.assertEqual(self.matches("help aud"), ["audio"])
         self.assertIn("master", self.matches("  gain\t"))
         for before in ("unknown ", "status ", "help audio ", "about ",
@@ -106,14 +106,14 @@ class CompletionTests(unittest.TestCase):
                 self.assertEqual(self.matches(before), [])
 
     def test_finite_command_branches(self):
-        slots = {str(i) for i in range(1, NUM_SLOTS + 1)}
+        tracks = {str(i) for i in range(1, NUM_TRACKS + 1)}
         channels = {str(i) for i in range(1, 17)}
         banks = {str(i) for i in range(1, NUM_SEQ_BANKS + 1)}
         for before in ("mute ", "solo ", "note ", "midi link 16 ",
                        "seq link 16 ", "seq cut "):
-            self.assertEqual(set(self.matches(before)), slots, before)
-        for before in ("gain ", "slot ", "info ", "get ", "set "):
-            self.assertEqual(set(self.matches(before)), slots | {"master"}, before)
+            self.assertEqual(set(self.matches(before)), tracks, before)
+        for before in ("gain ", "track ", "info ", "get ", "set "):
+            self.assertEqual(set(self.matches(before)), tracks | {"master"}, before)
         for before in ("midi link ", "midi cut "):
             self.assertEqual(set(self.matches(before)), channels)
         for before in ("seq link ", "seq clear "):
@@ -126,12 +126,12 @@ class CompletionTests(unittest.TestCase):
                 ("midimix ", {"input", "output"}),
                 ("ableton ", {"link", "cut"}),
                 ("debug ", {"on", "off"}),
-                ("slot master ", {"fx"}),
-                ("slot 8 ", {"vst", "wav", "vcv", "pd", "fx", "clear"})):
+                ("track master ", {"fx"}),
+                ("track 8 ", {"vst", "wav", "vcv", "pd", "fx", "clear"})):
             self.assertEqual(set(self.matches(before)), expected)
         for before in ("midi link 17 ", "midi link 0 ", "seq link 0 ",
-                       "seq link 17 ", "slot 9 ", "slot master clear ",
-                       "slot 1 clear ", "get 0 ", "set 9 ", "info 1 nonsense "):
+                       "seq link 17 ", "track 9 ", "track master clear ",
+                       "track 1 clear ", "get 0 ", "set 9 ", "info 1 nonsense "):
             self.assertEqual(self.matches(before), [], before)
 
     def test_audio_output_indexes_follow_current_snapshot(self):
@@ -174,16 +174,16 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(self.matches("midi ports "), ["input", "output"])
 
     def test_effect_indexes_follow_loaded_chains_only(self):
-        for before in ("info master ", "get master 2", "set master ", "slot master fx clear "):
+        for before in ("info master ", "get master 2", "set master ", "track master fx clear "):
             expected = ["2"] if before.endswith("2") else ["1", "2"]
             self.assertEqual(self.matches(before), expected)
-        for before in ("info 1 fx ", "get 1 fx ", "set 1 fx ", "slot 1 fx clear "):
+        for before in ("info 1 fx ", "get 1 fx ", "set 1 fx ", "track 1 fx clear "):
             self.assertEqual(self.matches(before), ["1"])
-        self.slot.effects.clear()
+        self.track.effects.clear()
         self.engine.master_effects.pop()
         self.assertEqual(self.matches("info 1 "), [])
         self.assertEqual(self.matches("info 1 fx "), [])
-        self.assertEqual(self.matches("slot 1 fx clear "), [])
+        self.assertEqual(self.matches("track 1 fx clear "), [])
         self.assertEqual(self.matches("set master "), ["1"])
         for before in ("info 1 fx 1 ", "set 1 fx 1 ", "get master 2 "):
             self.assertEqual(self.matches(before), [])
@@ -217,11 +217,11 @@ class CompletionTests(unittest.TestCase):
         self.instrument.parameters["fx"] = ParameterSnapshot(kind="bool")
         self.assertIn("fx", self.matches("get 1 "))
         self.assertEqual(self.matches("get 1 fx "), ["1"])
-        self.slot.effects.clear()
+        self.track.effects.clear()
         self.assertNotIn("fx", self.matches("get 1 "))
         self.assertNotIn("fx", self.matches("set 1 "))
         self.effect.parameters["fx"] = ParameterSnapshot(kind="bool")
-        self.slot.effects.append(self.effect)
+        self.track.effects.append(self.effect)
         inserted = self.inserted("get 1 fx 1 ", "fx")
         _, _, plugin, remaining = self.cli._parameter_target(shlex.split(inserted)[1:])
         self.assertIs(plugin, self.effect)
@@ -244,40 +244,40 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.matches('set 1 "unterminated name'), [])
 
     def test_multiword_plugin_replaces_whole_fragment_and_supports_name_option(self):
-        for before in ("slot 1 vst Surge X", 'slot 1 vst "Surge X',
-                       "slot master fx Surge X", "slot 1 fx Surge X"):
+        for before in ("track 1 vst Surge X", 'track 1 vst "Surge X',
+                       "track master fx Surge X", "track 1 fx Surge X"):
             inserted = self.inserted(before, "'Surge XT'")
             plugin_arg = inserted.split(maxsplit=3)[3]
             self.assertEqual(self.cli._parse_vst_args(plugin_arg), ("Surge XT", None))
-        self.assertEqual(self.matches("slot 1 vst Basic "), ["--name"])
-        self.assertEqual(self.matches("slot 1 vst Basic --n"), ["--name"])
-        self.assertEqual(self.matches("slot 1 vst Basic --name "), [])
-        self.assertEqual(self.matches("slot 1 fx clear "), ["1"])
+        self.assertEqual(self.matches("track 1 vst Basic "), ["--name"])
+        self.assertEqual(self.matches("track 1 vst Basic --n"), ["--name"])
+        self.assertEqual(self.matches("track 1 vst Basic --name "), [])
+        self.assertEqual(self.matches("track 1 fx clear "), ["1"])
         (self.root / "vst" / "Fresh.vst3").mkdir()
-        self.assertEqual(self.matches("slot 1 vst Fre"), ["Fresh"])
+        self.assertEqual(self.matches("track 1 vst Fre"), ["Fresh"])
 
     def test_pd_patch_completion_preserves_multiword_and_nested_paths(self):
         for before, name in (
-                ("slot 1 pd Warm P", "Warm Pad"),
-                ('slot 1 pd "Warm P', "Warm Pad"),
-                ("slot 1 pd Player", "Player's Lead"),
-                ("slot 1 pd nested/B", "nested/Bass")):
+                ("track 1 pd Warm P", "Warm Pad"),
+                ('track 1 pd "Warm P', "Warm Pad"),
+                ("track 1 pd Player", "Player's Lead"),
+                ("track 1 pd nested/B", "nested/Bass")):
             inserted = self.inserted(before, shlex.quote(name))
             patch_name, label = self.cli._parse_vst_args(inserted.split(maxsplit=3)[3])
             self.assertEqual(patch_name, name)
             self.assertIsNone(label)
             self.assertTrue((self.root / "patches" / f"{patch_name}.pd").is_file())
-        self.assertEqual(self.matches("slot 1 pd 'Warm Pad' "), ["--name"])
-        self.assertEqual(self.matches("slot 1 pd 'Warm Pad' --n"), ["--name"])
-        self.assertEqual(self.matches("slot 1 pd 'Warm Pad' --name "), [])
-        self.assertEqual(self.matches("slot master pd "), [])
+        self.assertEqual(self.matches("track 1 pd 'Warm Pad' "), ["--name"])
+        self.assertEqual(self.matches("track 1 pd 'Warm Pad' --n"), ["--name"])
+        self.assertEqual(self.matches("track 1 pd 'Warm Pad' --name "), [])
+        self.assertEqual(self.matches("track master pd "), [])
 
     def test_readline_bridge_replaces_multiword_plugin_fragment(self):
-        before = "slot 1 vst Surge X"
+        before = "track 1 vst Surge X"
         with patch("readline.get_line_buffer", return_value=before), \
                 patch("readline.get_endidx", return_value=len(before)), \
                 patch("readline.get_begidx", return_value=0):
-            self.assertEqual(self.cli.complete(before, 0), "slot 1 vst 'Surge XT' ")
+            self.assertEqual(self.cli.complete(before, 0), "track 1 vst 'Surge XT' ")
             self.assertIsNone(self.cli.complete(before, 1))
 
     def test_raw_sessions_and_split_assets_preserve_execution_syntax(self):
@@ -286,11 +286,11 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(inserted, command + " Live Set")
             self.assertEqual(self.cli._resolve_session_path(inserted.partition(" ")[2]),
                              self.root / "sessions" / "Live Set.json")
-        self.assertEqual(self.matches("slot 1 wav "), ["Drums"])
-        self.assertEqual(self.matches("slot 1 wav Drums "), ["Kick"])
-        self.assertEqual(self.matches("slot 1 vcv "), ["Bass"])
-        self.assertEqual(self.matches("slot 1 wav Drums Kick "), [])
-        self.assertEqual(self.matches("slot 1 vcv Bass "), [])
+        self.assertEqual(self.matches("track 1 wav "), ["Drums"])
+        self.assertEqual(self.matches("track 1 wav Drums "), ["Kick"])
+        self.assertEqual(self.matches("track 1 vcv "), ["Bass"])
+        self.assertEqual(self.matches("track 1 wav Drums Kick "), [])
+        self.assertEqual(self.matches("track 1 vcv Bass "), [])
 
     def test_invalid_structural_prefixes_do_not_discover_assets(self):
         with patch.object(self.cli, "_vst_names") as vst, \
@@ -298,9 +298,9 @@ class CompletionTests(unittest.TestCase):
                 patch.object(self.cli, "_sample_names") as samples, \
                 patch.object(self.cli, "_vcv_patch_names") as patches, \
                 patch.object(self.cli, "_session_names") as sessions:
-            for before in ("unknown ", "slot 99 vst ", "slot master vst ",
-                           "slot 1 unknown ", "slot 1 clear ", "slot 1 fx clear ",
-                           "slot 1 wav Drums Kick Label ", "loadx "):
+            for before in ("unknown ", "track 99 vst ", "track master vst ",
+                           "track 1 unknown ", "track 1 clear ", "track 1 fx clear ",
+                           "track 1 wav Drums Kick Label ", "loadx "):
                 self.matches(before)
             for discover in (vst, packs, samples, patches, sessions):
                 discover.assert_not_called()
@@ -309,7 +309,7 @@ class CompletionTests(unittest.TestCase):
         unsafe = ["bad\nstatus", "bad\rstatus", "bad\x00value", "bad\x01value", "bad\x1b[31m", "bad\x7f"]
         with patch.object(self.cli, "_vst_names", return_value=["Good", *unsafe]), \
                 patch.object(self.cli, "_session_names", return_value=["Good Set", *unsafe]):
-            self.assertEqual(self.matches("slot 1 vst "), ["Good"])
+            self.assertEqual(self.matches("track 1 vst "), ["Good"])
             self.assertEqual(self.matches("load "), ["Good Set"])
         self.instrument.parameters["mode"].valid_values = ("Good Choice", *unsafe)
         self.assertEqual(self.matches("set 1 mode "), ["'Good Choice'"])
@@ -320,18 +320,18 @@ class CompletionTests(unittest.TestCase):
     def test_completion_never_mutates_or_requests_live_audio_state(self):
         parameters = copy.deepcopy(self.instrument.parameters)
         values = copy.deepcopy(self.instrument.values)
-        effects = list(self.slot.effects)
+        effects = list(self.track.effects)
         with patch("core.midi.list_midi_input_ports", return_value=[]), \
                 patch("core.midi.list_midi_output_ports", return_value=[]):
             for before in ("", "audio start ", "audio diagnose ", "midi input ",
-                           "midi input close ", "midimix output ", "slot 1 vst ",
-                           "slot 1 fx clear ", "get 1 ", "set 1 mode ",
+                           "midi input close ", "midimix output ", "track 1 vst ",
+                           "track 1 fx clear ", "get 1 ", "set 1 mode ",
                            "set master 1 enabled ", "seq link ", "debug "):
                 self.matches(before)
         self.forbidden.assert_not_called()
         self.assertEqual(self.instrument.parameters, parameters)
         self.assertEqual(self.instrument.values, values)
-        self.assertEqual(self.slot.effects, effects)
+        self.assertEqual(self.track.effects, effects)
 
 
 if __name__ == "__main__":

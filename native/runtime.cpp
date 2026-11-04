@@ -68,26 +68,26 @@ void checkPa(PaError error, const char* operation) {
     if (error != paNoError) throw std::runtime_error(std::string(operation) + ": " + Pa_GetErrorText(error));
 }
 }
-SlotRunner::SlotRunner(std::shared_ptr<Transport> blocks, std::shared_ptr<Plugin> plugin, double rate, int size)
+TrackRunner::TrackRunner(std::shared_ptr<Transport> blocks, std::shared_ptr<Plugin> plugin, double rate, int size)
     : transport(std::move(blocks)), instrument(std::move(plugin)), sampleRate(rate),
       frames((validateAudio(rate, size), size)), left(frames), right(frames) {
     if (!transport || transport->frameCount() != size || !instrument || instrument->isEffect() || !instrument->compatible(rate, size))
-        throw std::invalid_argument("SlotRunner requires a compatible instrument and transport");
+        throw std::invalid_argument("TrackRunner requires a compatible instrument and transport");
     midi.ensureSize(midiStorageBytes);
     observedMidi = transport->shared().midiRead.load(std::memory_order_acquire);
     std::uint32_t empty = 0;
     if (!transport->shared().rendererPid.compare_exchange_strong(empty, static_cast<std::uint32_t>(::getpid()), std::memory_order_acq_rel))
         throw std::invalid_argument("Transport already has a native renderer");
     transport->shared().realtime.reset(true);
-    try { thread = std::thread(&SlotRunner::run, this); }
+    try { thread = std::thread(&TrackRunner::run, this); }
     catch (...) {
         transport->shared().realtime.reset();
         transport->shared().rendererPid.store(0, std::memory_order_release);
         throw;
     }
 }
-SlotRunner::~SlotRunner() { shutdown(); }
-void SlotRunner::collectMidi(std::uint32_t end) {
+TrackRunner::~TrackRunner() { shutdown(); }
+void TrackRunner::collectMidi(std::uint32_t end) {
     const auto count = static_cast<std::uint32_t>(end - observedMidi);
     // A barrier may have observed newer MIDI than the last output request.
     if (count > midiCapacity) return;
@@ -97,7 +97,7 @@ void SlotRunner::collectMidi(std::uint32_t end) {
         ++observedMidi;
     }
 }
-void SlotRunner::process() {
+void TrackRunner::process() {
     std::fill(left.begin(), left.end(), 0.0f);
     std::fill(right.begin(), right.end(), 0.0f);
     instrument->process(left.data(), right.data(), midi);
@@ -107,9 +107,9 @@ void SlotRunner::process() {
     // producer admission thus bounds both buffered and unbuffered MIDI to 4096.
     transport->shared().midiRead.store(observedMidi, std::memory_order_release);
 }
-void SlotRunner::run() noexcept {
+void TrackRunner::run() noexcept {
     // Complete promotion (including a nonterminal denial) before any barrier ACK.
-    transport->shared().realtime.promote(slotRealtimePriority);
+    transport->shared().realtime.promote(trackRealtimePriority);
     while (!stopping.load(std::memory_order_acquire)) {
         if (!gate.tryAcquire()) {
             std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -139,7 +139,7 @@ void SlotRunner::run() noexcept {
             transport->setFailure(error.what());
             stopping.store(true, std::memory_order_release);
         } catch (...) {
-            transport->setFailure("Unknown native slot render failure");
+            transport->setFailure("Unknown native track render failure");
             stopping.store(true, std::memory_order_release);
         }
         gate.release();
@@ -147,10 +147,10 @@ void SlotRunner::run() noexcept {
     }
     transport->shared().realtime.exited();
 }
-void SlotRunner::barrier() {
+void TrackRunner::barrier() {
     std::lock_guard<std::mutex> control(controls);
     checkFailure(*transport);
-    if (stopping.load(std::memory_order_acquire)) throw std::runtime_error("SlotRunner is shut down");
+    if (stopping.load(std::memory_order_acquire)) throw std::runtime_error("TrackRunner is shut down");
     const auto sequence = transport->shared().sequence.load(std::memory_order_acquire);
     const auto end = transport->shared().midiWrite.load(std::memory_order_acquire);
     flushEnd.store(end, std::memory_order_release);
@@ -158,27 +158,27 @@ void SlotRunner::barrier() {
     const auto deadline = Clock::now() + std::chrono::seconds(5);
     while (flushedTicket.load(std::memory_order_acquire) < ticket || transport->shared().submitted.load(std::memory_order_acquire) < sequence) {
         checkFailure(*transport);
-        if (stopping.load(std::memory_order_acquire)) throw std::runtime_error("SlotRunner stopped before barrier");
+        if (stopping.load(std::memory_order_acquire)) throw std::runtime_error("TrackRunner stopped before barrier");
         if (Clock::now() >= deadline) {
-            transport->setFailure("Native slot barrier timed out");
+            transport->setFailure("Native track barrier timed out");
             stopping.store(true, std::memory_order_release);
-            throw NativeTimeout("Native slot barrier timed out");
+            throw NativeTimeout("Native track barrier timed out");
         }
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 }
-void SlotRunner::setEffects(const std::vector<std::shared_ptr<Plugin>>& chain) {
+void TrackRunner::setEffects(const std::vector<std::shared_ptr<Plugin>>& chain) {
     validateEffects(chain, sampleRate, frames, instrument.get());
     std::lock_guard<std::mutex> control(controls);
     checkFailure(*transport);
-    if (stopping.load(std::memory_order_acquire)) throw std::runtime_error("SlotRunner is shut down");
+    if (stopping.load(std::memory_order_acquire)) throw std::runtime_error("TrackRunner is shut down");
     ControlOwnership ownership(gate);
     effects = chain;
 }
-std::vector<float> SlotRunner::renderOnce() {
+std::vector<float> TrackRunner::renderOnce() {
     std::lock_guard<std::mutex> control(controls);
     checkFailure(*transport);
-    if (stopping.load(std::memory_order_acquire)) throw std::runtime_error("SlotRunner is shut down");
+    if (stopping.load(std::memory_order_acquire)) throw std::runtime_error("TrackRunner is shut down");
     ControlOwnership ownership(gate);
     PluginOwnership pluginLocks;
     pluginLocks.acquire(instrument.get(), effects);
@@ -195,7 +195,7 @@ std::vector<float> SlotRunner::renderOnce() {
     transport->shared().progress.fetch_add(1, std::memory_order_relaxed);
     return result;
 }
-void SlotRunner::shutdown() {
+void TrackRunner::shutdown() {
     std::lock_guard<std::mutex> control(controls);
     stopping.store(true, std::memory_order_release);
     if (thread.joinable()) thread.join();
@@ -225,7 +225,7 @@ std::vector<std::string> hostapis() {
     return result;
 }
 Engine::Engine(double rate, int size)
-    : sampleRate(rate), frames((validateAudio(rate, size), size)), left(frames), right(frames), slotLeft(frames), slotRight(frames) {
+    : sampleRate(rate), frames((validateAudio(rate, size), size)), left(frames), right(frames), trackLeft(frames), trackRight(frames) {
     masterMidi.ensureSize(midiStorageBytes);
 }
 Engine::~Engine() {
@@ -248,8 +248,8 @@ void Engine::checkOperational() const {
     throw NativeOwnershipFailure(std::string(operation) + ": " + Pa_GetErrorText(error)
                                  + "; callback ownership unproven, terminate the audio owner");
 }
-void Engine::validateSlot(int index) {
-    if (index < 0 || index >= static_cast<int>(slotCount)) throw std::invalid_argument("Slot index must be 0..7");
+void Engine::validateTrack(int index) {
+    if (index < 0 || index >= static_cast<int>(trackCount)) throw std::invalid_argument("Track index must be 0..7");
 }
 float Engine::validateGain(double gain) {
     if (!std::isfinite(gain) || gain < 0.0 || gain > static_cast<double>(std::numeric_limits<float>::max()))
@@ -289,20 +289,20 @@ void Engine::applyControls() noexcept {
         }
         switch (command.type) {
             case CommandType::Attach:
-                slots[command.index].transport = command.transport;
-                slots[command.index].failureReported = false;
+                tracks[command.index].transport = command.transport;
+                tracks[command.index].failureReported = false;
                 [[fallthrough]];
-            case CommandType::Slot:
-                slots[command.index].gain = command.gain;
-                slots[command.index].muted = command.muted;
-                slots[command.index].solo = command.solo;
+            case CommandType::Track:
+                tracks[command.index].gain = command.gain;
+                tracks[command.index].muted = command.muted;
+                tracks[command.index].solo = command.solo;
                 break;
             case CommandType::MasterGain: masterGain = command.gain; break;
             case CommandType::Mixer:
-                for (std::size_t i = 0; i < slots.size(); ++i) {
-                    slots[i].gain = command.mixerSlots[i].gain;
-                    slots[i].muted = command.mixerSlots[i].muted;
-                    slots[i].solo = command.mixerSlots[i].solo;
+                for (std::size_t i = 0; i < tracks.size(); ++i) {
+                    tracks[i].gain = command.mixerTracks[i].gain;
+                    tracks[i].muted = command.mixerTracks[i].muted;
+                    tracks[i].solo = command.mixerTracks[i].solo;
                 }
                 masterGain = command.gain;
                 break;
@@ -316,10 +316,10 @@ void Engine::applyControls() noexcept {
 }
 void Engine::reconcileRetained() {
     // Only called after ACK of the newest command, or after stream close. No
-    // callback can modify slot pointers until a subsequent control is published.
-    std::array<std::shared_ptr<Transport>, slotCount> active{};
-    for (std::size_t i = 0; i < slots.size(); ++i) {
-        const auto* pointer = slots[i].transport;
+    // callback can modify track pointers until a subsequent control is published.
+    std::array<std::shared_ptr<Transport>, trackCount> active{};
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        const auto* pointer = tracks[i].transport;
         if (!pointer) continue;
         for (const auto& item : retained) if (item.get() == pointer) { active[i] = item; break; }
         if (!active[i])
@@ -329,7 +329,7 @@ void Engine::reconcileRetained() {
     pendingRetirement.clear();
 }
 void Engine::attach(int index, std::shared_ptr<Transport> transport, double gain, bool muted, bool solo) {
-    validateSlot(index);
+    validateTrack(index);
     const auto scalar = validateGain(gain);
     if (transport && transport->frameCount() != frames) throw std::invalid_argument("Transport block size differs from engine");
     std::lock_guard<std::mutex> control(controls);
@@ -337,16 +337,16 @@ void Engine::attach(int index, std::shared_ptr<Transport> transport, double gain
     if (transport) {
         for (std::size_t i = 0; i < retained.size(); ++i)
             if (i != static_cast<std::size_t>(index) && retained[i] && retained[i]->filePath() == transport->filePath())
-                throw std::invalid_argument("A transport can be attached to only one output slot");
+                throw std::invalid_argument("A transport can be attached to only one output track");
         pendingRetirement.push_back(transport);
     }
     submitControl({CommandType::Attach, index, transport.get(), scalar, muted, solo, 0});
 }
-void Engine::setSlot(int index, double gain, bool muted, bool solo) {
-    validateSlot(index);
+void Engine::setTrack(int index, double gain, bool muted, bool solo) {
+    validateTrack(index);
     const auto scalar = validateGain(gain);
     std::lock_guard<std::mutex> control(controls);
-    submitControl({CommandType::Slot, index, nullptr, scalar, muted, solo, 0});
+    submitControl({CommandType::Track, index, nullptr, scalar, muted, solo, 0});
 }
 void Engine::setMasterGain(double gain) {
     const auto scalar = validateGain(gain);
@@ -358,8 +358,8 @@ void Engine::setMixer(const std::array<std::tuple<double, bool, bool>, 8>& mixin
     command.type = CommandType::Mixer;
     command.gain = validateGain(gain);
     for (std::size_t i = 0; i < mixing.size(); ++i) {
-        const auto& [slotGain, muted, solo] = mixing[i];
-        command.mixerSlots[i] = {validateGain(slotGain), muted, solo};
+        const auto& [trackGain, muted, solo] = mixing[i];
+        command.mixerTracks[i] = {validateGain(trackGain), muted, solo};
     }
     std::lock_guard<std::mutex> control(controls);
     submitControl(command);
@@ -446,7 +446,7 @@ void Engine::shutdown() {
     std::lock_guard<std::mutex> control(controls);
     if (closed) return;
     stopUnlocked();
-    for (auto& slot : slots) slot.transport = nullptr;
+    for (auto& track : tracks) track.transport = nullptr;
     for (auto& item : retained) item.reset();
     pendingRetirement.clear();
     masterEffects.clear();
@@ -478,31 +478,31 @@ void Engine::render(float* output) noexcept {
     applyControls();
     if (failure.load(std::memory_order_acquire) != Failure::None) {
         std::fill_n(output, static_cast<std::size_t>(frames) * 2, 0.0f);
-        eligibleSlots.store(0, std::memory_order_relaxed);
+        eligibleTracks.store(0, std::memory_order_relaxed);
         recordTiming(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - started).count()));
         return;
     }
     std::fill(left.begin(), left.end(), 0.0f);
     std::fill(right.begin(), right.end(), 0.0f);
     bool hasSolo = false;
-    for (const auto& slot : slots) if (slot.transport && slot.solo) hasSolo = true;
+    for (const auto& track : tracks) if (track.transport && track.solo) hasSolo = true;
     int eligible = 0;
-    for (auto& slot : slots) {
-        if (!slot.transport) continue;
-        if (!slot.failureReported && slot.transport->shared().failureState.load(std::memory_order_acquire) == 2) {
+    for (auto& track : tracks) {
+        if (!track.transport) continue;
+        if (!track.failureReported && track.transport->shared().failureState.load(std::memory_order_acquire) == 2) {
             renderErrors.fetch_add(1, std::memory_order_relaxed);
-            slot.failureReported = true;
+            track.failureReported = true;
         }
-        slot.transport->consumePrevious(slotLeft.data(), slotRight.data());
-        slot.transport->request();
-        if (slot.muted || (hasSolo && !slot.solo)) continue;
+        track.transport->consumePrevious(trackLeft.data(), trackRight.data());
+        track.transport->request();
+        if (track.muted || (hasSolo && !track.solo)) continue;
         ++eligible;
         for (int frame = 0; frame < frames; ++frame) {
-            left[frame] += slotLeft[frame] * slot.gain;
-            right[frame] += slotRight[frame] * slot.gain;
+            left[frame] += trackLeft[frame] * track.gain;
+            right[frame] += trackRight[frame] * track.gain;
         }
     }
-    eligibleSlots.store(eligible, std::memory_order_relaxed);
+    eligibleTracks.store(eligible, std::memory_order_relaxed);
     masterMidi.clear();
     if (!masterEffects.empty()) {
         PluginOwnership ownership;
@@ -554,7 +554,7 @@ EngineStats Engine::stats() {
     std::lock_guard<std::mutex> control(controls);
     EngineStats result;
     result.running = running.load(std::memory_order_acquire);
-    result.eligibleSlots = eligibleSlots.load(std::memory_order_relaxed);
+    result.eligibleTracks = eligibleTracks.load(std::memory_order_relaxed);
     result.underruns = underruns.load(std::memory_order_relaxed);
     result.renderErrors = renderErrors.load(std::memory_order_relaxed);
     result.callbackCount = callbackCount.load(std::memory_order_relaxed);

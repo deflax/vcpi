@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 import re
 
-from core.models import InstrumentSlot
+from core.models import InstrumentTrack
 
 
 @dataclass(slots=True)
@@ -128,42 +128,42 @@ def capture_plugin(plugin, values, readers, *, capture_native_state=False):
 
 def capture_state(owner, generations, epoch, devices, cached_master_effects=None,
                   *, capture_native_state=False):
-    """Copy remote slot state; inspect native plugins only when stopped."""
+    """Copy remote track state; inspect native plugins only when stopped."""
     from core import audio_deps
 
     engine = owner.engine
     if engine.running and cached_master_effects is None:
         raise RuntimeError("native metadata capture requires stopped audio")
     values, readers = {}, {}
-    slots = []
-    for index, slot in enumerate(engine.slots):
-        if slot is None:
-            slots.append(None)
+    tracks = []
+    for index, track in enumerate(engine.tracks):
+        if track is None:
+            tracks.append(None)
             continue
-        if engine.running and slot.render_owner is None:
-            raise RuntimeError("native slot metadata capture requires stopped audio")
-        slots.append({
-            "name": slot.name,
-            "path": slot.path,
-            "plugin": capture_plugin(slot.plugin, values, readers,
+        if engine.running and track.render_owner is None:
+            raise RuntimeError("native track metadata capture requires stopped audio")
+        tracks.append({
+            "name": track.name,
+            "path": track.path,
+            "plugin": capture_plugin(track.plugin, values, readers,
                                      capture_native_state=capture_native_state),
             "effects": [capture_plugin(effect, values, readers,
                                        capture_native_state=capture_native_state)
-                        for effect in slot.effects],
-            "midi_channels": set(slot.midi_channels),
-            "gain": float(slot.gain),
-            "muted": bool(slot.muted),
-            "solo": bool(slot.solo),
-            "enabled": bool(slot.enabled),
-            "source_type": slot.source_type,
-            "vcv_patch_path": slot.vcv_patch_path,
-            "pd_patch_path": slot.pd_patch_path,
+                        for effect in track.effects],
+            "midi_channels": set(track.midi_channels),
+            "gain": float(track.gain),
+            "muted": bool(track.muted),
+            "solo": bool(track.solo),
+            "enabled": bool(track.enabled),
+            "source_type": track.source_type,
+            "vcv_patch_path": track.vcv_patch_path,
+            "pd_patch_path": track.pd_patch_path,
             "generation": generations[index],
-            "worker_pid": slot.worker_pid,
-            "worker_failure": slot.worker_failure,
-            "worker_misses": slot.worker_misses,
-            "worker_realtime": dict(slot.worker_realtime),
-            "buffering_samples": slot.buffering_samples,
+            "worker_pid": track.worker_pid,
+            "worker_failure": track.worker_failure,
+            "worker_misses": track.worker_misses,
+            "worker_realtime": dict(track.worker_realtime),
+            "buffering_samples": track.buffering_samples,
         })
     master_effects = (
         [capture_plugin(effect, values, readers, capture_native_state=capture_native_state)
@@ -177,7 +177,7 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
         engine.parameter_readers = readers
     return {
         "epoch": epoch,
-        "slots": slots,
+        "tracks": tracks,
         "master_effects": master_effects,
         "master_gain": float(engine.master_gain),
         "channel_map": dict(engine.channel_map),
@@ -192,5 +192,5 @@ def capture_state(owner, generations, epoch, devices, cached_master_effects=None
     }
 
 
-def hydrate_slots(records):
-    return [InstrumentSlot(**record) if record is not None else None for record in records]
+def hydrate_tracks(records):
+    return [InstrumentTrack(**record) if record is not None else None for record in records]

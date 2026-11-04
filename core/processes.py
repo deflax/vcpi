@@ -63,10 +63,10 @@ def render_processes(host: VcpiCore, *, show_all: bool = False) -> str:
     render_threads = {
         (host.engine.owner_pid, host.engine.output_realtime.get("thread_id")): "output render",
     }
-    for index, slot in enumerate(host.engine.slots, 1):
-        if slot is not None and slot.worker_pid:
-            roles[slot.worker_pid] = f"slot {index}"
-            render_threads[(slot.worker_pid, slot.worker_realtime.get("thread_id"))] = f"slot {index} render"
+    for index, track in enumerate(host.engine.tracks, 1):
+        if track is not None and track.worker_pid:
+            roles[track.worker_pid] = f"track {index}"
+            render_threads[(track.worker_pid, track.worker_realtime.get("thread_id"))] = f"track {index} render"
     processes.sort(key=lambda process: (process.pid != root.pid, process.pid))
     before = {}
     notes = []

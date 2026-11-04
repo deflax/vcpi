@@ -43,11 +43,15 @@ extension incrementally before starting the daemon.
 Audio does **not** start automatically. In the client, try a bundled sample:
 
 ```text
-slot 1 wav piano c4-soft
+track 1 wav piano c4-soft
 audio devices
 audio start
 note 1 60 100 500
 ```
+
+Mixer channels are called **tracks** (1–8). Use `track` in place of the former
+`slot` command; no command alias is retained. Existing version 1 and 2 sessions
+still load, and subsequent saves use version 3 with track-based keys.
 
 Use `audio start <device>` to select an output from `audio devices`.
 Use `quit` to disconnect the client; `shutdown` stops the daemon.
@@ -78,20 +82,20 @@ between platforms. Set `CMAKE_BUILD_PARALLEL_LEVEL=1` on memory-constrained syst
 ## Runtime Model
 
 The daemon runs a Python control process, a spawned audio-output process, and a
-persistent process for each loaded slot; the CLI is a separate client connected
+persistent process for each loaded track; the CLI is a separate client connected
 through a local Unix socket. To use it from another machine, SSH into the host
 and run `./vcpi` there.
 
 Command parsing, session files, MIDI ports, sequencing, and Ableton Link stay in
-the control process. Each slot owns its VST3/Cardinal/plugdata or WAV source and insert
-effects on a native render thread. The native PortAudio callback mixes slot
-audio and runs master effects. Neither the callback nor slot DSP enters Python
-or acquires the GIL. Shared-memory slot transport adds one block of buffering.
-Loading or replacing a slot does not stop unrelated slots; read-only plugin
+the control process. Each track owns its VST3/Cardinal/plugdata or WAV source and insert
+effects on a native render thread. The native PortAudio callback mixes track
+audio and runs master effects. Neither the callback nor track DSP enters Python
+or acquires the GIL. Shared-memory track transport adds one block of buffering.
+Loading or replacing a track does not stop unrelated tracks; read-only plugin
 commands use cached snapshots.
 
-Sessions save native VST3 state chunks for instruments, slot inserts, and master
-effects; WAV slots remain path-based. See [session commands](USAGE.md#session-commands)
+Sessions save native VST3 state chunks for instruments, track inserts, and master
+effects; WAV tracks remain path-based. See [session commands](USAGE.md#session-commands)
 for save/restore behavior and legacy session compatibility.
 
 ## Repository Layout
@@ -100,9 +104,9 @@ for save/restore behavior and legacy session compatibility.
 .
   core/               # Main package
     host.py           # Control-process orchestration
-    audio_process.py  # Output owner, control IPC, staged slot publication
-    slot_process.py   # Persistent slot owners and shared-memory audio/MIDI
-    plugin_host.py    # Native lifecycle helpers for output and slot children
+    audio_process.py  # Output owner, control IPC, staged track publication
+    track_process.py   # Persistent track owners and shared-memory audio/MIDI
+    plugin_host.py    # Native lifecycle helpers for output and track children
     audio_state.py    # Plain plugin/parameter snapshots for control and display
     audio_deps.py     # Native extension availability for audio owners
     engine.py         # Control-only facade for native audio
@@ -122,7 +126,6 @@ for save/restore behavior and legacy session compatibility.
     samples/          # Built-in WAV sample packs (808, 909, piano, etc.)
   controllers/        # Hardware controller modules (generic MIDI input, MIDI Mix)
   graph/              # Flow/status/plugin snapshots and plain-text renderers
-  vst3/               # Open-license VST3 plugins (run arch-specific fetch scripts)
   patches/            # Cardinal .vcv and plugdata .pd patches
   sessions/           # User-saved session files (save/load commands)
   tests/              # Automated Python regression tests
@@ -158,7 +161,7 @@ Toggle logging without restarting from the connected client:
 current level. The setting applies to the daemon and audio workers until the
 daemon exits; logs appear in the daemon terminal or service journal.
 Raw native/plugin stdout and stderr are discarded unless DEBUG is enabled, then
-shown with `[daemon]`, `[audio]`, or `[slot N]` prefixes. vcpi creates no
+shown with `[daemon]`, `[audio]`, or `[track N]` prefixes. vcpi creates no
 per-process log files and cannot replay discarded output. Structured vcpi
 activity messages, warnings, and errors remain visible. For startup diagnostics, use
 `LOG_LEVEL=DEBUG ./vcpid`; this also streams build output with `[build]` prefixes.
@@ -168,7 +171,7 @@ diagnostics.
 Full CLI and startup flag reference: [USAGE.md](USAGE.md).
 
 Inside `./vcpi`, press `Tab` for command and argument suggestions. Completion
-comes from the daemon: audio/MIDI subcommands, routing channels and slots,
+comes from the daemon: audio/MIDI subcommands, routing channels and tracks,
 sequencer banks, mixer targets, help topics, and debug modes are supported.
 `get`/`set` suggest cached plugin parameters and boolean/enum choices; effect
 indexes reflect loaded chains. Plugin, patch, sample, and session names are
@@ -178,7 +181,7 @@ supports them. Free-form numeric values are left for you to enter.
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
 `info` display tables. `flow` adds routing, mapped-control, and audio-output tables;
-`flow explore` opens a read-only full-screen explorer with slot/master drill-downs,
+`flow explore` opens a read-only full-screen explorer with track/master drill-downs,
 scrolling, and manual refresh. `get` includes parameter values, units, ranges,
 and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
@@ -191,7 +194,7 @@ environments. For direct Python startup, install them manually with
 To route a hardware MIDI input to a bundled sample:
 
 ```text
-slot 1 wav piano c4-soft
+track 1 wav piano c4-soft
 midi ports input
 midi input <index>
 midi link <ch> 1
@@ -204,25 +207,25 @@ flow
 
 Replace `<index>` with a port index and `<ch>` with the hardware's MIDI channel
 (1–16). `midi link` changes internal routing only; `midi input` opens the port.
-For VST instruments, fetch or install a compatible plugin first, then use
-`slot 1 vst <plugin-name>`. MIDI Mix control and LED ports are optional; see
+For VST instruments, install a compatible plugin first, then use
+`track 1 vst <plugin-name>`. MIDI Mix control and LED ports are optional; see
 [Controller Setup](#controller-setup).
 
-Read or change instrument, slot-effect, and master-effect parameters:
+Read or change instrument, track-effect, and master-effect parameters:
 
 ```text
-get <slot> [name]
-get <slot> fx <index> [name]
+get <track> [name]
+get <track> fx <index> [name]
 get master [index] [name]
-set <slot> <name> <value>
-set <slot> fx <index> <name> <value>
+set <track> <name> <value>
+set <track> fx <index> <name> <value>
 set master <index> <name> <value>
 ```
 
-Slots are 1–8 and effect indexes are 1-based. Omit `name` to read all visible
+Tracks are 1–8 and effect indexes are 1-based. Omit `name` to read all visible
 parameters or supply one name to read just that parameter. For `get master`,
 the effect index defaults to 1; a numeric token immediately after `master`
-is always an index. `set master` requires an explicit index. Slot effects
+is always an index. `set master` requires an explicit index. Track effects
 require the `fx <index>` tokens. Use `help get` and `help set` for detailed
 syntax and examples.
 
@@ -271,20 +274,20 @@ Port indexes can change after reboot/replug, so always re-check with
 ### MIDI inputs (any keyboard, sequencer, etc.)
 
 All MIDI input devices are handled identically. Open any device with
-`midi input <port_index>` and route its MIDI channels to slots:
+`midi input <port_index>` and route its MIDI channels to tracks:
 
 ```text
 vcpi> midi ports input
 vcpi> midi input 0       # e.g. BeatStep Pro
 vcpi> midi input 1       # e.g. keyboard
-vcpi> midi link 1 1      # BSP ch 1 -> slot 1
-vcpi> midi link 2 2      # BSP ch 2 -> slot 2
-vcpi> midi link 10 3     # BSP ch 10 -> slot 3
-vcpi> midi link 5 1      # keyboard ch 5 -> slot 1
+vcpi> midi link 1 1      # BSP ch 1 -> track 1
+vcpi> midi link 2 2      # BSP ch 2 -> track 2
+vcpi> midi link 10 3     # BSP ch 10 -> track 3
+vcpi> midi link 5 1      # keyboard ch 5 -> track 1
 ```
 
 - Generic note inputs use the same commands; MIDI Mix has a separate control input.
-- Routing is channel-based: `midi link <ch> <slot>` maps a MIDI channel to a slot.
+- Routing is channel-based: `midi link <ch> <track>` maps a MIDI channel to a track.
 - Each device sends on its own channel(s); configure channels on the hardware.
 - Use `midi input close <index>` to close an open input.
 
@@ -294,18 +297,18 @@ vcpi> midi link 5 1      # keyboard ch 5 -> slot 1
 - Connect control input with `midimix input <port_index>` (from `midi ports input`).
 - Optional LED feedback is via MIDI output with `midimix output <port_index>` (from `midi ports output`).
 - Factory mapping is used by default:
-  - Channel faders 1-8 -> slot gain
+  - Channel faders 1-8 -> track gain
   - Master fader -> master gain
-  - 3 knobs per strip -> first 3 parameters of that slot's instrument plugin
+  - 3 knobs per strip -> first 3 parameters of that track's instrument plugin
   - MUTE buttons -> mute toggle
   - REC ARM buttons -> solo toggle
 
-Strip-to-slot mapping is fixed: strip 1 controls slot 1, ... strip 8 controls slot 8.
+Strip-to-track mapping is fixed: strip 1 controls track 1, ... strip 8 controls track 8.
 
 MIDI Mix quick mapping (factory defaults):
 
 ```text
-Faders (slots 1-8):   CC 19,23,27,31,49,53,57,61
+Faders (tracks 1-8):   CC 19,23,27,31,49,53,57,61
 Master fader:         CC 62
 Knob 1 (per strip):   CC 16,20,24,28,46,50,54,58
 Knob 2 (per strip):   CC 17,21,25,29,47,51,55,59
@@ -320,27 +323,29 @@ Cardinal + VCV patch quick load:
 
 ```text
 # place patch files under ./patches, e.g. ./patches/ambient.vcv
-vcpi> slot 1 vcv ambient
+vcpi> track 1 vcv ambient
 vcpi> midi link 1 1
 ```
 
-`slot <n> vcv` loads a fresh Cardinal instance into the slot you specify.
-Routing remains explicit via `midi link <ch> <slot>`.
+`track <n> vcv` loads a fresh Cardinal instance into the track you specify.
+Routing remains explicit via `midi link <ch> <track>`.
 
 Pure Data patches run through the plugdata VST3 instrument, without opening an
 editor. Install `plugdata.vst3` from
 [plugdata v0.9.3-2](https://github.com/plugdata-team/plugdata/releases/tag/v0.9.3-2)
-for your OS/architecture into `vst3/`, or set `PLUGDATA_VST3_PATH` to the bundle.
-The bundled plugin fetch scripts do not install it.
+for your OS/architecture into a standard VST3 directory (such as `~/.vst3` or
+`/usr/local/lib/vst3` on Linux), or set `PLUGDATA_VST3_PATH` to the bundle's full
+path. On macOS, use `~/Library/Audio/Plug-Ins/VST3` or
+`/Library/Audio/Plug-Ins/VST3`.
 
 ```text
-vcpi> slot 1 pd sine
+vcpi> track 1 pd sine
 vcpi> midi link 1 1
 vcpi> audio start
 vcpi> note 1 60 100 500
 ```
 
-`slot <n> pd <patch_name[.pd]> [--name <label>]` shares the `patches/` directory
+`track <n> pd <patch_name[.pd]> [--name <label>]` shares the `patches/` directory
 and `VCPI_PATCHES_DIR` setting with Cardinal. Names can contain spaces and nested
 paths; Tab completion quotes them as needed. Import supports plugdata's 0.9.3
 state layout and rejects other layouts. Sessions embed the main patch, but its
@@ -348,22 +353,17 @@ relative abstractions, samples, and custom external dependencies must remain
 available. See [plugdata usage](USAGE.md#host-startup-flags) for installation,
 limits, and patch conventions.
 
-Fetch bundled open-license VST3 plugins and load one:
+Install VST3 plugins for your OS and CPU architecture in a standard user/system
+directory: `~/.vst3`, `/usr/lib/vst3`, or `/usr/local/lib/vst3` on Linux;
+`~/Library/Audio/Plug-Ins/VST3` or `/Library/Audio/Plug-Ins/VST3` on macOS.
+For other locations, set `VST3_PATH` or `VST_PATH` to a colon-separated list of
+plugin directories before starting the daemon. The former repository `vst3/`
+subdirectory is no longer searched automatically.
 
-```bash
-./vst3/fetch-vsts-amd64    # desktop/laptop Linux amd64
-# or
-./vst3/fetch-vsts-aarch64  # Raspberry Pi / Linux aarch64
-```
-
-The Linux x86_64 fetcher includes Dexed, Surge XT, Odin 2, OB-Xf, Geonkick,
-JC-303, Firefly Synth 2 (+FX), and Dragonfly Reverb. The Linux aarch64 fetcher
-includes Surge XT, OB-Xf, and Dragonfly Reverb. These scripts do not install
-macOS plugins; install macOS-compatible VST3 bundles separately.
-See the [plugin catalog](vst3/README.md#plugin-catalog) for architecture-specific details.
+Load an installed plugin by name:
 
 ```text
-vcpi> slot 1 vst Dexed         # Tab completes installed VST names
+vcpi> track 1 vst Dexed         # Tab completes installed VST names
 vcpi> audio start
 vcpi> note 1 60 100 500
 ```
@@ -371,18 +371,18 @@ vcpi> note 1 60 100 500
 Full paths also work:
 
 ```text
-vcpi> slot 1 vst /path/to/Synth.vst3 --name Lead
+vcpi> track 1 vst /path/to/Synth.vst3 --name Lead
 ```
 
-Load a WAV sample into a slot and trigger it from MIDI routing:
+Load a WAV sample into a track and trigger it from MIDI routing:
 
 ```text
-vcpi> slot 2 wav 909 bassdrum
+vcpi> track 2 wav 909 bassdrum
 vcpi> midi link 10 2
 vcpi> midi input 0
 ```
 
-`slot <n> wav` resolves to `sampler/samples/<pack>/<sample>.wav` (for example,
+`track <n> wav` resolves to `sampler/samples/<pack>/<sample>.wav` (for example,
 `sampler/samples/909/bassdrum.wav`) and plays one-shot sample voices on note-on.
 You can include or omit the `.wav` extension in `<sample>`.
 
@@ -397,11 +397,11 @@ Built-in packs include drums (`808`, `909`) plus melodic/synth packs:
 Examples:
 
 ```text
-vcpi> slot 1 wav piano c4-soft
-vcpi> slot 2 wav organ c4-drawbar
-vcpi> slot 3 wav strings c4-ensemble
-vcpi> slot 4 wav synth-pads c4-warm
-vcpi> slot 5 wav synth-leads c4-mono-saw
+vcpi> track 1 wav piano c4-soft
+vcpi> track 2 wav organ c4-drawbar
+vcpi> track 3 wav strings c4-ensemble
+vcpi> track 4 wav synth-pads c4-warm
+vcpi> track 5 wav synth-leads c4-mono-saw
 ```
 
 Internal sequencer (bar-aligned with Ableton Link when enabled):
@@ -409,18 +409,18 @@ Internal sequencer (bar-aligned with Ableton Link when enabled):
 ```text
 vcpi> seq 1 d c b a          # define 4-note pattern in bank 1
 vcpi> seq 2 c                # single note in bank 2
-vcpi> seq link 1 5           # play bank 1 through slot 5
-vcpi> seq link 2 3           # play bank 2 through slot 3
-vcpi> seq cut 5              # stop sequence on slot 5
+vcpi> seq link 1 5           # play bank 1 through track 5
+vcpi> seq link 2 3           # play bank 2 through track 3
+vcpi> seq cut 5              # stop sequence on track 5
 vcpi> seq                    # show all banks
 ```
 
 Typical multi-instrument setup:
 
 ```text
-vcpi> slot 1 vst Dexed --name Lead
-vcpi> slot 2 vst OB-Xf --name Bass
-vcpi> slot 3 vst Geonkick --name Drums
+vcpi> track 1 vst Dexed --name Lead
+vcpi> track 2 vst OB-Xf --name Bass
+vcpi> track 3 vst Geonkick --name Drums
 
 vcpi> midi link 1 1
 vcpi> midi link 2 2
@@ -429,18 +429,18 @@ vcpi> midi link 10 3
 vcpi> midi input 0
 vcpi> midi input 1
 vcpi> midimix input 2
-vcpi> slot 1 fx DragonflyRoomReverb --name Reverb
+vcpi> track 1 fx DragonflyRoomReverb --name Reverb
 vcpi> audio start
 vcpi> ableton link 120
 vcpi> status
 
-vcpi> flow              # signal flow: all slots, FX chains, master bus
-vcpi> flow explore      # navigate MIDI, controls, audio, slots, and master
+vcpi> flow              # signal flow: all tracks, FX chains, master bus
+vcpi> flow explore      # navigate MIDI, controls, audio, tracks, and master
 vcpi> flow controls     # exact MIDI Mix bindings and cached parameter targets
 vcpi> info 1            # plugin metadata: vendor, category, version, etc.
-vcpi> info 1 fx 1       # info for slot 1's first effect
+vcpi> info 1 fx 1       # info for track 1's first effect
 vcpi> get 1             # all visible instrument parameters
-vcpi> get 1 fx 1        # parameters for slot 1's first effect
+vcpi> get 1 fx 1        # parameters for track 1's first effect
 vcpi> get master 1     # parameters for the first master effect
 ```
 
@@ -493,8 +493,9 @@ including the native JUCE 8 audio engine. See [LICENSE](LICENSE) for the full te
 
 The native engine uses JUCE 8.0.6 under AGPL-3.0, pybind11 under BSD-3-Clause,
 and PortAudio under its permissive license. Third-party licenses and copyright
-notices remain unchanged; `aalink` and the bundled VST3 plugins retain their
-GPL-3.0 licenses. GPLv3 text is retained in [LICENSE.GPL-3.0](LICENSE.GPL-3.0).
+notices remain unchanged; `aalink` retains its GPL-3.0 license. Separately installed
+VST3 plugins retain their respective licenses. GPLv3 text is retained in
+[LICENSE.GPL-3.0](LICENSE.GPL-3.0).
 
 If you modify vcpi and let users interact with it remotely over a network,
 AGPLv3 requires offering those users the corresponding source for the version

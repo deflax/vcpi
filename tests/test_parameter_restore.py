@@ -1,4 +1,4 @@
-"""Applied native controls and incremental slot/session cache regressions."""
+"""Applied native controls and incremental track/session cache regressions."""
 
 import base64
 import json
@@ -12,11 +12,11 @@ from types import SimpleNamespace
 
 from core.audio_process import RemoteAudioEngine, _OwnerRuntime
 from core.engine import AudioEngine
-from core.models import InstrumentSlot
+from core.models import InstrumentTrack
 from core.cli import HostCLI
 from core.session import _apply_plugin_params, _restore_plugin_state, _saved_plugin_state
-from core.slot_process import (
-    PARAMETER_BATCH_LIMIT, SlotProcessError, SlotWorker, _execute, _slot_state,
+from core.track_process import (
+    PARAMETER_BATCH_LIMIT, TrackProcessError, TrackWorker, _execute, _track_state,
 )
 from core.audio_state import PluginSnapshot, capture_plugin
 from core.state_transport import (
@@ -82,7 +82,7 @@ class ControlledInstrument:
     @mode.setter
     def mode(self, value):
         terminal = {"timeout": TimeoutError, "overflow": BufferError,
-                    "terminal": SlotProcessError}
+                    "terminal": TrackProcessError}
         if value in terminal:
             raise terminal[value](f"native {value}")
         if value not in ("Normal", "Quiet Mode"):
@@ -107,29 +107,29 @@ class LocalRemoteEngine(RemoteAudioEngine):
         self.worker = worker
 
     @property
-    def slots(self):
-        slots = [None] * 8
-        slots[self.worker.slot_index] = self.worker.slot
-        return slots
+    def tracks(self):
+        tracks = [None] * 8
+        tracks[self.worker.track_index] = self.worker.track
+        return tracks
 
     def request(self, operation, **arguments):
-        reply = _execute(self.owner, self.worker.slot_index, operation, arguments)
+        reply = _execute(self.owner, self.worker.track_index, operation, arguments)
         self.worker._accept(reply)
         return reply["result"]
 
 
 class ParameterRestoreTests(unittest.TestCase):
     def setUp(self):
-        self.engine = AudioEngine(buffer_size=8, slot_mode=True)
+        self.engine = AudioEngine(buffer_size=8, track_mode=True)
         self.addCleanup(self.engine.shutdown)
         self.instrument = ControlledInstrument()
-        self.native_slot = InstrumentSlot("controls", "controls", self.instrument)
-        self.engine.slots[2] = self.native_slot
+        self.native_track = InstrumentTrack("controls", "controls", self.instrument)
+        self.engine.tracks[2] = self.native_track
         self.owner = SimpleNamespace(engine=self.engine)
-        self.worker = SlotWorker.__new__(SlotWorker)
-        self.worker.slot_index = 2
-        self.worker.slot = None
-        self.worker._accept({"ok": True, "state": _slot_state(self.owner, 2)})
+        self.worker = TrackWorker.__new__(TrackWorker)
+        self.worker.track_index = 2
+        self.worker.track = None
+        self.worker._accept({"ok": True, "state": _track_state(self.owner, 2)})
         self.remote = LocalRemoteEngine(self.owner, self.worker)
 
     def execute(self, operation, **arguments):
@@ -138,10 +138,10 @@ class ParameterRestoreTests(unittest.TestCase):
         self.worker._accept(reply)
         return reply
 
-    def test_cli_slot_effect_write_preserves_types_clamping_and_target_isolation(self):
+    def test_cli_track_effect_write_preserves_types_clamping_and_target_isolation(self):
         effect = ControlledInstrument()
-        self.native_slot.effects.append(effect)
-        self.worker._accept({"ok": True, "state": _slot_state(self.owner, 2)})
+        self.native_track.effects.append(effect)
+        self.worker._accept({"ok": True, "state": _track_state(self.owner, 2)})
         output = io.StringIO()
         cli = HostCLI(SimpleNamespace(engine=self.remote), stdout=output, owns_host=False)
         cli.onecmd("set 3 fx 1 bypass false")
@@ -172,19 +172,19 @@ class ParameterRestoreTests(unittest.TestCase):
 
     def test_single_setter_returns_actual_value_and_live_reader_delta(self):
         self.instrument.bypass = False
-        snapshot = self.worker.slot.plugin
+        snapshot = self.worker.track.plugin
         reply = self.execute("set_parameter", name="amplitude", value=0.95)
         self.assertEqual(reply["result"], 0.75)
-        self.assertIs(self.worker.slot.plugin, snapshot)
+        self.assertIs(self.worker.track.plugin, snapshot)
         self.assertEqual(snapshot.values["amplitude"], 0.75)
         self.assertEqual(snapshot.parameters["amplitude"].raw_value, 0.75)
         self.assertEqual(snapshot.parameters["amplitude"].string_value, "applied:0.75")
 
     def test_batch_preserves_types_order_partial_errors_and_mixer_cache(self):
-        slot = self.worker.slot
-        snapshot = slot.plugin
-        slot.gain, slot.generation, slot.midi_channels = 0.375, 42, {3}
-        slot.muted, slot.solo = True, True
+        track = self.worker.track
+        snapshot = track.plugin
+        track.gain, track.generation, track.midi_channels = 0.375, 42, {3}
+        track.muted, track.solo = True, True
         reply = self.execute("set_parameters", params={
             "bypass": False, "removed_parameter": 0.9,
             "mode": "Quiet Mode", "amplitude": 0.4,
@@ -198,32 +198,32 @@ class ParameterRestoreTests(unittest.TestCase):
         self.assertIn("removed_parameter", result["errors"]["removed_parameter"])
         self.assertEqual([update[3] for update in reply["updates"]],
                          ["bypass", "mode", "amplitude"])
-        self.assertIs(slot.plugin, snapshot)
+        self.assertIs(track.plugin, snapshot)
         self.assertEqual(snapshot.values, result["values"])
         self.assertEqual(snapshot.parameters["mode"].raw_value, 1.0)
         self.assertEqual(snapshot.parameters["mode"].string_value, "applied:Quiet Mode")
-        self.assertEqual((slot.gain, slot.generation, slot.midi_channels), (0.375, 42, {3}))
-        self.assertTrue(slot.muted)
-        self.assertTrue(slot.solo)
+        self.assertEqual((track.gain, track.generation, track.midi_channels), (0.375, 42, {3}))
+        self.assertTrue(track.muted)
+        self.assertTrue(track.solo)
 
 
     def test_insert_metadata_deltas_preserve_instrument_and_other_insert(self):
         first, second = ControlledInstrument(), ControlledInstrument()
-        self.native_slot.effects = [first, second]
-        self.worker._accept({"ok": True, "state": _slot_state(self.owner, 2)})
-        slot = self.worker.slot
-        instrument_values = dict(slot.plugin.values)
-        first_values = dict(slot.effects[0].values)
-        second_cache = slot.effects[1]
+        self.native_track.effects = [first, second]
+        self.worker._accept({"ok": True, "state": _track_state(self.owner, 2)})
+        track = self.worker.track
+        instrument_values = dict(track.plugin.values)
+        first_values = dict(track.effects[0].values)
+        second_cache = track.effects[1]
         self.execute("set_parameters", fx_index=1, params={
             "bypass": False, "mode": "Quiet Mode", "amplitude": 0.6,
         })
         reply = self.execute(
             "set_parameter", fx_index=1, name="amplitude", value=0.4)
         self.assertEqual(reply["result"], 0.4)
-        self.assertEqual(slot.plugin.values, instrument_values)
-        self.assertEqual(slot.effects[0].values, first_values)
-        self.assertIs(slot.effects[1], second_cache)
+        self.assertEqual(track.plugin.values, instrument_values)
+        self.assertEqual(track.effects[0].values, first_values)
+        self.assertIs(track.effects[1], second_cache)
         self.assertEqual(second_cache.values["amplitude"], 0.4)
         self.assertEqual(second_cache.parameters["amplitude"].raw_value, 0.4)
         self.assertEqual(second_cache.parameters["amplitude"].string_value, "applied:0.4")
@@ -234,11 +234,11 @@ class ParameterRestoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exceeds 64"):
             self.execute("set_parameters", params=params)
         self.assertEqual(self.instrument.amplitude, 0.25)
-        self.assertEqual(self.worker.slot.plugin.values["amplitude"], 0.25)
+        self.assertEqual(self.worker.track.plugin.values["amplitude"], 0.25)
 
     def test_terminal_parameter_failures_are_not_partial_compatibility_errors(self):
         for mode, error in (("timeout", TimeoutError), ("overflow", BufferError),
-                            ("terminal", SlotProcessError)):
+                            ("terminal", TrackProcessError)):
             with self.subTest(mode=mode):
                 self.instrument.bypass = False
                 with self.assertRaisesRegex(error, f"native {mode}"):
@@ -258,9 +258,9 @@ class ParameterRestoreTests(unittest.TestCase):
             })
         self.assertEqual(len(messages.output), 1)
         self.assertIn("removed_parameter", messages.output[0])
-        self.assertIs(self.worker.slot.plugin.values["bypass"], False)
-        self.assertEqual(self.worker.slot.plugin.values["mode"], "Quiet Mode")
-        self.assertEqual(self.worker.slot.plugin.values["amplitude"], 0.6)
+        self.assertIs(self.worker.track.plugin.values["bypass"], False)
+        self.assertEqual(self.worker.track.plugin.values["mode"], "Quiet Mode")
+        self.assertEqual(self.worker.track.plugin.values["amplitude"], 0.6)
 
     def test_session_filters_unknown_controls_before_ordered_legacy_batch(self):
         params = {f"removed_{index}": index for index in range(PARAMETER_BATCH_LIMIT - 1)}
@@ -270,14 +270,14 @@ class ParameterRestoreTests(unittest.TestCase):
         for index, message in enumerate(messages.output):
             self.assertIn(f"'removed_{index}'", message)
         self.assertEqual(len(messages.output), PARAMETER_BATCH_LIMIT - 1)
-        self.assertIs(self.worker.slot.plugin.values["bypass"], False)
-        self.assertEqual(self.worker.slot.plugin.values["mode"], "Quiet Mode")
-        self.assertEqual(self.worker.slot.plugin.values["amplitude"], 0.6)
+        self.assertIs(self.worker.track.plugin.values["bypass"], False)
+        self.assertEqual(self.worker.track.plugin.values["mode"], "Quiet Mode")
+        self.assertEqual(self.worker.track.plugin.values["amplitude"], 0.6)
 
     def test_legacy_nonautomatable_control_cannot_trigger_sound_side_effect(self):
         self.instrument.bypass = False
-        self.worker._accept({"ok": True, "state": _slot_state(self.owner, 2)})
-        self.worker.slot.plugin.parameters["bypass"].is_automatable = False
+        self.worker._accept({"ok": True, "state": _track_state(self.owner, 2)})
+        self.worker.track.plugin.parameters["bypass"].is_automatable = False
         with self.assertLogs("core.session", level="WARNING") as messages:
             _apply_plugin_params(SimpleNamespace(engine=self.remote), 2, {
                 "bypass": True, "mode": "Quiet Mode", "amplitude": 0.6,
@@ -288,7 +288,7 @@ class ParameterRestoreTests(unittest.TestCase):
         self.assertIn("not automatable", messages.output[0])
 
     def test_native_chunk_precedence_refreshes_instrument_and_insert_without_replay(self):
-        self.native_slot.effects = [ControlledInstrument()]
+        self.native_track.effects = [ControlledInstrument()]
         saved = json.dumps([0.6, False, "Quiet Mode"]).encode()
         for fx_index in (None, 0):
             with self.subTest(fx_index=fx_index):
@@ -296,8 +296,8 @@ class ParameterRestoreTests(unittest.TestCase):
                          "params": {"mode": "timeout", "amplitude": 0.0}}
                 _restore_plugin_state(
                     SimpleNamespace(engine=self.remote), 2, entry, 2, fx_index)
-                cached = (self.worker.slot.plugin if fx_index is None
-                          else self.worker.slot.effects[fx_index])
+                cached = (self.worker.track.plugin if fx_index is None
+                          else self.worker.track.effects[fx_index])
                 self.assertIsInstance(cached, PluginSnapshot)
                 self.assertEqual(cached.values["amplitude"], 0.6)
                 self.assertEqual(cached.values["mode"], "Quiet Mode")
@@ -328,7 +328,7 @@ class ParameterRestoreTests(unittest.TestCase):
         runtime.update_serial = 0
         saved = json.dumps([0.6, False, "Quiet Mode"]).encode()
         reply = pickle.loads(runtime.execute(
-            "load_plugin_state", {"slot_index": None, "fx_index": 0, "state": saved}))
+            "load_plugin_state", {"track_index": None, "fx_index": 0, "state": saved}))
         self.assertIsInstance(reply["result"], PluginSnapshot)
         self.assertEqual(reply["result"].values["amplitude"], 0.6)
         self.assertIsNone(reply["result"].native_state)

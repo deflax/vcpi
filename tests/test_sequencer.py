@@ -18,14 +18,14 @@ class FreewheelTimingTests(unittest.TestCase):
         clock = SimpleNamespace(now=0.0)
         events: list[tuple[float, int, int]] = []
 
-        def enqueue(slot, message, generation=None):
-            events.append((clock.now, slot, message.note))
+        def enqueue(track, message, generation=None):
+            events.append((clock.now, track, message.note))
 
         host = SimpleNamespace(engine=AudioEngine(), link=SimpleNamespace(bpm=120.0, enabled=False))
         seq = Sequencer(host)
         for index, notes in enumerate(patterns):
             bank = seq.set_bank(index, notes)
-            bank.linked_slot = index
+            bank.linked_track = index
 
         delays = iter(overshoots)
 
@@ -60,8 +60,8 @@ class FreewheelTimingTests(unittest.TestCase):
             [["C4", "E4", "G4"], ["C5", "D5", "E5", "F5"]], 2.1,
             overshoots=(0.004,) * 13,
         )
-        triples = [(timestamp, note) for timestamp, slot, note in events if slot == 0]
-        quarters = [(timestamp, note) for timestamp, slot, note in events if slot == 1]
+        triples = [(timestamp, note) for timestamp, track, note in events if track == 0]
+        quarters = [(timestamp, note) for timestamp, track, note in events if track == 1]
         self.assertEqual([note for _, note in triples], [60, 64, 67, 60])
         self.assertEqual([note for _, note in quarters], [72, 74, 76, 77, 72])
         for (timestamp, _), expected in zip(triples, (0, 2 / 3, 4 / 3, 2)):

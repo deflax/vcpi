@@ -25,7 +25,7 @@ class _CachedEngine:
         plugin = PluginSnapshot(1, parameters={
             "mode": ParameterSnapshot(kind="enum", valid_values=("Quiet Mode", "Loud Mode")),
         }, values={"mode": "Quiet Mode"})
-        self.slots = [SimpleNamespace(plugin=plugin, effects=[]), *[None] * 7]
+        self.tracks = [SimpleNamespace(plugin=plugin, effects=[]), *[None] * 7]
         self.master_effects = []
         self.devices = [{"index": 3, "name": "Output", "max_output_channels": 2}]
         self.device_read_threads = []
@@ -113,7 +113,7 @@ class CompletionProtocolTests(unittest.TestCase):
         self.assertTrue(self.engine.device_read_threads)
         self.assertTrue(all(thread is threading.current_thread()
                             for thread in self.engine.device_read_threads))
-        self.assertEqual(self.engine.slots[0].plugin.values, {"mode": "Quiet Mode"})
+        self.assertEqual(self.engine.tracks[0].plugin.values, {"mode": "Quiet Mode"})
 
     def test_completion_inserts_at_cursor_and_preserves_text_after_it(self):
         before = "debug o"

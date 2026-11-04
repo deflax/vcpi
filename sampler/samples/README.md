@@ -1,8 +1,8 @@
 # Built-in Sample Packs
 
-These WAV files are intended for the `slot <n> wav` sampler command.
+These WAV files are intended for the `track <n> wav` sampler command.
 
-`slot <n> wav <pack> <sample>` resolves to `samples/<pack>/<sample>.wav`.
+`track <n> wav <pack> <sample>` resolves to `samples/<pack>/<sample>.wav`.
 
 Available packs:
 
@@ -17,9 +17,9 @@ Available packs:
 Examples:
 
 ```text
-vcpi> slot 2 wav piano c4-soft
-vcpi> slot 3 wav organ c4-drawbar
-vcpi> slot 4 wav strings c4-ensemble
-vcpi> slot 5 wav synth-pads c4-warm
-vcpi> slot 6 wav synth-leads c4-mono-saw
+vcpi> track 2 wav piano c4-soft
+vcpi> track 3 wav organ c4-drawbar
+vcpi> track 4 wav strings c4-ensemble
+vcpi> track 5 wav synth-pads c4-warm
+vcpi> track 6 wav synth-leads c4-mono-saw
 ```

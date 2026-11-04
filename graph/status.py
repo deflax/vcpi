@@ -71,15 +71,15 @@ def render_status(host: VcpiCore) -> str:
     rows.append(("Output realtime", format_realtime(engine.output_realtime)))
 
     # -- Render capacity and callback health ---------------------------------
-    # Capacity is the maximum worker count, not active threads/eligible slots.
+    # Capacity is the maximum worker count, not active threads/eligible tracks.
     workers = engine.render_workers
-    slots = engine.render_slots
+    tracks = engine.render_tracks
     cpus = os.cpu_count() or 0
-    mode = "idle" if slots == 0 else "isolated processes"
-    slot_label = "slot" if slots == 1 else "slots"
+    mode = "idle" if tracks == 0 else "isolated processes"
+    track_label = "track" if tracks == 1 else "tracks"
     rows.append(
-        ("Render", f"max: {workers} slot processes / {cpus} CPUs"
-         f"  (last callback: {slots} eligible {slot_label}, {mode})")
+        ("Render", f"max: {workers} track processes / {cpus} CPUs"
+         f"  (last callback: {tracks} eligible {track_label}, {mode})")
     )
     rows.append(("Callbacks", str(engine.callback_count)))
     rows.append(
@@ -91,14 +91,14 @@ def render_status(host: VcpiCore) -> str:
     rows.append(("Underruns", str(engine.underruns)))
     rows.append(("Render errors", str(engine.render_errors)))
     buffering_ms = host.buffer_size * 1000.0 / host.sample_rate
-    rows.append(("Slot buffering", f"{host.buffer_size} samples / {buffering_ms:.3f} ms (1 block)"))
-    for index, slot in enumerate(engine.slots):
-        if slot is None:
+    rows.append(("Track buffering", f"{host.buffer_size} samples / {buffering_ms:.3f} ms (1 block)"))
+    for index, track in enumerate(engine.tracks):
+        if track is None:
             continue
-        state = f"FAILED: {slot.worker_failure}" if slot.worker_failure else "ready"
-        rows.append((f"Slot {index + 1} worker",
-                     f"PID {slot.worker_pid}  {state}  missing blocks: {slot.worker_misses}"))
-        rows.append((f"Slot {index + 1} realtime", format_realtime(slot.worker_realtime)))
+        state = f"FAILED: {track.worker_failure}" if track.worker_failure else "ready"
+        rows.append((f"Track {index + 1} worker",
+                     f"PID {track.worker_pid}  {state}  missing blocks: {track.worker_misses}"))
+        rows.append((f"Track {index + 1} realtime", format_realtime(track.worker_realtime)))
 
     rows.append(("", ""))  # spacer
 

@@ -2,12 +2,12 @@
 
 Procedurally generated organ-style one-shots.
 
-These WAV files are intended for the `slot <n> wav` sampler command.
+These WAV files are intended for the `track <n> wav` sampler command.
 
 Example:
 
 ```text
-vcpi> slot 2 wav organ c4-drawbar
+vcpi> track 2 wav organ c4-drawbar
 ```
 
 This resolves to `samples/organ/c4-drawbar.wav`.

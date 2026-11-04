@@ -1,3 +1,0 @@
-# Downloaded VST3 bundles (fetched by fetch-vsts, not committed)
-*.vst3
-.cache/

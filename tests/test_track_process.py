@@ -20,13 +20,13 @@ import numpy as np
 from core.audio_state import PluginSnapshot
 from core.audio_deps import require_native
 from core.engine import AudioEngine
-from core.slot_process import (
-    MIDI_CAPACITY, SlotProcessError, SlotWorker, _watch_parent,
+from core.track_process import (
+    MIDI_CAPACITY, TrackProcessError, TrackWorker, _watch_parent,
 )
 
 
-def _own_slot_for_orphan_test(connection, sample):
-    worker = SlotWorker(44100, 64, 2, "load_wav", {"wav_path": sample})
+def _own_track_for_orphan_test(connection, sample):
+    worker = TrackWorker(44100, 64, 2, "load_wav", {"wav_path": sample})
     try:
         connection.send((worker.pid, DupFd(worker._process.sentinel)))
         connection.recv()
@@ -94,9 +94,9 @@ class NativeTransportTests(unittest.TestCase):
 
 
 
-class SpawnedSlotTests(unittest.TestCase):
+class SpawnedTrackTests(unittest.TestCase):
     def setUp(self):
-        directory = tempfile.TemporaryDirectory(prefix="vcpi-slot-test-")
+        directory = tempfile.TemporaryDirectory(prefix="vcpi-track-test-")
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.sample = self.root / "sample.wav"
@@ -107,15 +107,15 @@ class SpawnedSlotTests(unittest.TestCase):
             sample.writeframes(struct.pack("<h", 4096) * 4096)
 
     def worker(self, **kwargs):
-        worker = SlotWorker(44100, 64, 2, "load_wav",
+        worker = TrackWorker(44100, 64, 2, "load_wav",
                             {"wav_path": str(self.sample), "name": "remote"}, **kwargs)
         engine = AudioEngine(buffer_size=64)
-        engine.publish_slot(2, worker.slot)
-        engine.set_slot_state(2, gain=1.0)
+        engine.publish_track(2, worker.track)
+        engine.set_track_state(2, gain=1.0)
         worker.test_engine = engine
 
         def close():
-            engine.clear_slot(2)
+            engine.clear_track(2)
             worker.shutdown()
             engine.shutdown()
 
@@ -135,14 +135,14 @@ class SpawnedSlotTests(unittest.TestCase):
             if worker.poll_failure():
                 self.fail(worker.failure)
             time.sleep(0.001)
-        self.fail("spawned slot did not finish the offered block")
+        self.fail("spawned track did not finish the offered block")
 
     def test_persistent_native_owner_and_one_block_sampler_audio(self):
         worker = self.worker()
         self.assertNotEqual(worker.pid, os.getpid())
         self.assertFalse(worker._process.daemon)
-        self.assertIsInstance(worker.slot.plugin, PluginSnapshot)
-        self.assertIs(worker.slot.render_owner, worker)
+        self.assertIsInstance(worker.track.plugin, PluginSnapshot)
+        self.assertIs(worker.track.render_owner, worker)
         np.testing.assert_array_equal(
             self.render(worker, [mido.Message("note_on", note=60, velocity=127)]), 0)
         self.await_render(worker, 1)
@@ -155,14 +155,14 @@ class SpawnedSlotTests(unittest.TestCase):
         reply = worker.request("sync_state")
         self.assertEqual(worker.pid, pid)
         self.assertIsInstance(reply["state"]["plugin"], PluginSnapshot)
-        worker.test_engine.clear_slot(2)
+        worker.test_engine.clear_track(2)
         worker.shutdown()
         worker.shutdown()
         self.assertFalse(worker._process.is_alive())
         self.assertFalse(worker._io_thread.is_alive())
         self.assertEqual(worker._process.exitcode, 0)
 
-    def test_slot_ignores_foreground_interrupt_and_still_cleans_up(self):
+    def test_track_ignores_foreground_interrupt_and_still_cleans_up(self):
         worker = self.worker()
         os.kill(worker.pid, signal.SIGINT)
         reply = worker.request("sync_state")
@@ -171,7 +171,7 @@ class SpawnedSlotTests(unittest.TestCase):
         self.await_render(worker, 1)
         np.testing.assert_array_equal(
             self.render(worker), np.full((64, 2), 0.125, dtype=np.float32))
-        worker.test_engine.clear_slot(2)
+        worker.test_engine.clear_track(2)
         worker.shutdown()
         self.assertEqual(worker._process.exitcode, 0)
         self.assertFalse(worker._io_thread.is_alive())
@@ -232,21 +232,21 @@ class SpawnedSlotTests(unittest.TestCase):
 
     def test_snapshot_refresh_preserves_parent_mixer_state(self):
         worker = self.worker()
-        worker.slot.gain = 0.375
-        worker.slot.muted = True
-        worker.slot.solo = True
-        worker.slot.generation = 42
-        worker.slot.midi_channels = {3}
+        worker.track.gain = 0.375
+        worker.track.muted = True
+        worker.track.solo = True
+        worker.track.generation = 42
+        worker.track.midi_channels = {3}
         worker.request("sync_state")
-        self.assertEqual(worker.slot.gain, 0.375)
-        self.assertTrue(worker.slot.muted)
-        self.assertTrue(worker.slot.solo)
-        self.assertEqual(worker.slot.generation, 42)
-        self.assertEqual(worker.slot.midi_channels, {3})
+        self.assertEqual(worker.track.gain, 0.375)
+        self.assertTrue(worker.track.muted)
+        self.assertTrue(worker.track.solo)
+        self.assertEqual(worker.track.generation, 42)
+        self.assertEqual(worker.track.midi_channels, {3})
 
     def test_invalid_load_preserves_native_validation_error(self):
         with self.assertRaises(FileNotFoundError):
-            SlotWorker(44100, 64, 2, "load_wav",
+            TrackWorker(44100, 64, 2, "load_wav",
                        {"wav_path": str(self.root / "missing.wav")})
 
     def test_dead_child_does_not_escape_into_audio_callback(self):
@@ -254,14 +254,14 @@ class SpawnedSlotTests(unittest.TestCase):
         worker._process.terminate()
         worker._process.join(2)
         self.assertIsNotNone(worker.poll_failure())
-        with self.assertRaises(SlotProcessError):
+        with self.assertRaises(TrackProcessError):
             worker.request("sync_state")
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX descriptor transfer")
     def test_child_exits_when_output_owner_is_killed(self):
         context = mp.get_context("spawn")
         connection, child_connection = context.Pipe()
-        owner = context.Process(target=_own_slot_for_orphan_test,
+        owner = context.Process(target=_own_track_for_orphan_test,
                                 args=(child_connection, str(self.sample)),
                                 daemon=False)
         owner.start()
@@ -276,7 +276,7 @@ class SpawnedSlotTests(unittest.TestCase):
             owner.join(2)
             self.assertFalse(owner.is_alive())
             self.assertTrue(wait_connections([sentinel], timeout=5),
-                            "slot survived the output owner's death")
+                            "track survived the output owner's death")
         finally:
             if sentinel is not None:
                 if not wait_connections([sentinel], timeout=0):
@@ -304,11 +304,11 @@ class SpawnedSlotTests(unittest.TestCase):
         self.assertIn("main thread", str(errors[0]))
 
     @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "requires POSIX suspension")
-    def test_rpc_timeout_remains_slot_local_and_cleanup_is_bounded(self):
+    def test_rpc_timeout_remains_track_local_and_cleanup_is_bounded(self):
         worker = self.worker()
         os.kill(worker.pid, signal.SIGSTOP)
-        with patch("core.slot_process.PARAMETER_TIMEOUT", 0.02):
-            with self.assertRaises(SlotProcessError):
+        with patch("core.track_process.PARAMETER_TIMEOUT", 0.02):
+            with self.assertRaises(TrackProcessError):
                 worker.request("sync_state")
         self.assertIsNotNone(worker.failure)
         self.assertFalse(worker._process.is_alive())

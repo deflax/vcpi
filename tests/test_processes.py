@@ -15,7 +15,7 @@ class ProcessDisplayTests(unittest.TestCase):
     def render(self, show_all: bool = False) -> str:
         process = SimpleNamespace(pid=100, children=lambda recursive: [])
         host = SimpleNamespace(engine=SimpleNamespace(
-            owner_pid=100, output_realtime={"thread_id": 104}, slots=[]))
+            owner_pid=100, output_realtime={"thread_id": 104}, tracks=[]))
         first = _Snapshot(1, 10, 10485760, "sleeping", "python", 7,
                           {100: 1, 101: 1, 102: 1, 103: 1, 104: 1, 105: 1})
         last = _Snapshot(2, 11, 10485760, "sleeping", "python", 7,

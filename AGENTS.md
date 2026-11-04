@@ -11,7 +11,6 @@ Read this file first in new sessions. It is a durable map of the repo, not a ful
 - `README.md` — top-level repo map, quick start, and typical workflows
 - `USAGE.md` — startup flags, CLI command reference, and important runtime conventions
 - `requirements.txt` — Python dependency set
-- `vst3/README.md` — bundled plugin fetch flow and catalog
 - `rpi-build/README.md` — Raspberry Pi image build and first-boot provisioning
 
 ## Top-level structure
@@ -24,7 +23,6 @@ Read this file first in new sessions. It is a durable map of the repo, not a ful
 ├── sampler/       WAV sampler package and built-in sample packs
 ├── patches/       Cardinal/VCV `.vcv` patch files
 ├── sessions/      Saved session files
-├── vst3/          Fetch scripts and docs for bundled VST3 plugins
 ├── rpi-build/     Raspberry Pi image build/provisioning tools
 ├── main.py        Top-level Python entry point
 ├── vcpid          Server launcher
@@ -55,7 +53,7 @@ Hidden directories present in the workspace:
 | Akai MIDI Mix mapping | `controllers/akai_midimix.py` |
 | WAV sampler | `sampler/plugin.py`, `sampler/wav.py` |
 | Signal/status renderers | `graph/` |
-| Bundled plugin fetch flow | `vst3/README.md`, `vst3/fetch-vsts-*` |
+| Plugin installation and discovery | `USAGE.md`, `core/cli.py`, `core/plugin_host.py` |
 | Raspberry Pi deployment | `rpi-build/README.md`, `rpi-build/services/` |
 
 ## Runtime model
@@ -68,20 +66,20 @@ Hidden directories present in the workspace:
 
 ## Core repo conventions
 
-- Slots are `1-8`.
+- Tracks are `1-8`.
 - MIDI channels are `1-16`.
 - `fx_index` values in CLI commands are `1-based`.
 - `master` refers to the global master effects bus.
-- `midi link <ch> <slot>` only changes internal routing; it does **not** open hardware ports.
+- `midi link <ch> <track>` only changes internal routing; it does **not** open hardware ports.
 - Use `midi ports input` / `midi ports output` to discover current indexes before opening devices.
 - Port indexes can change after reboot or replug.
 
 ## Plugin and asset behavior
 
-- `slot <n> vst` and `slot <n> fx` accept either a plugin name or a full path.
-- VST3 search includes the repo `vst3/` directory, `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`, and documented macOS paths.
-- `slot <n> vcv` loads a Cardinal patch from `patches/` by default and does not auto-route channels.
-- `slot <n> wav <pack> <sample>` resolves to `sampler/samples/<pack>/<sample>.wav`.
+- `track <n> vst` and `track <n> fx` accept either a plugin name or a full path.
+- VST3 name search checks `VST3_PATH` and `VST_PATH` directories, then the working directory, repository root, `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`, and documented macOS paths. The former `vst3/` subdirectory is not searched automatically.
+- `track <n> vcv` loads a Cardinal patch from `patches/` by default and does not auto-route channels.
+- `track <n> wav <pack> <sample>` resolves to `sampler/samples/<pack>/<sample>.wav`.
 - Built-in sample packs documented in `USAGE.md` are: `808`, `909`, `piano`, `organ`, `strings`, `synth-pads`, `synth-leads`.
 
 ## Dependency stack
@@ -110,10 +108,6 @@ pip install -r requirements.txt
 # Direct Python equivalents
 python main.py serve
 python main.py cli
-
-# Fetch bundled VST3 plugins
-./vst3/fetch-vsts-amd64
-./vst3/fetch-vsts-aarch64
 ```
 
 ## Raspberry Pi notes
@@ -128,7 +122,7 @@ python main.py cli
 1. This file
 2. `README.md`
 3. `USAGE.md`
-4. The specific module you plan to change under `core/`, `controllers/`, `sampler/`, `graph/`, `vst3/`, or `rpi-build/`
+4. The specific module you plan to change under `core/`, `controllers/`, `sampler/`, `graph/`, or `rpi-build/`
 
 ## Recent findings / current priorities
 

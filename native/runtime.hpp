@@ -10,10 +10,10 @@
 #include <vector>
 
 namespace vcpi {
-class SlotRunner {
+class TrackRunner {
 public:
-    SlotRunner(std::shared_ptr<Transport> transport, std::shared_ptr<Plugin> plugin, double sampleRate, int frames);
-    ~SlotRunner();
+    TrackRunner(std::shared_ptr<Transport> transport, std::shared_ptr<Plugin> plugin, double sampleRate, int frames);
+    ~TrackRunner();
     void setEffects(const std::vector<std::shared_ptr<Plugin>>& effects);
     void barrier();
     void shutdown();
@@ -46,7 +46,7 @@ std::vector<DeviceInfo> devices();
 std::vector<std::string> hostapis();
 struct EngineStats {
     bool running = false;
-    int eligibleSlots = 0;
+    int eligibleTracks = 0;
     int outputIndex = -1;
     std::uint64_t underruns = 0, renderErrors = 0, callbackCount = 0, deadlineMisses = 0;
     double lastCallbackMs = 0.0, peakCallbackMs = 0.0, blockPeriodMs = 0.0;
@@ -59,7 +59,7 @@ public:
     Engine(double sampleRate, int frames);
     ~Engine();
     void attach(int index, std::shared_ptr<Transport> transport, double gain, bool muted, bool solo);
-    void setSlot(int index, double gain, bool muted, bool solo);
+    void setTrack(int index, double gain, bool muted, bool solo);
     void setMasterGain(double gain);
     void setMixer(const std::array<std::tuple<double, bool, bool>, 8>& mixing, double masterGain);
     void setMasterEffects(const std::vector<std::shared_ptr<Plugin>>& effects);
@@ -70,9 +70,9 @@ public:
     EngineStats stats();
     std::vector<float> renderBlock();
 private:
-    static constexpr std::size_t slotCount = 8, commandCapacity = 128;
-    enum class CommandType { Attach, Slot, MasterGain, Mixer, Barrier };
-    struct MixerSlot {
+    static constexpr std::size_t trackCount = 8, commandCapacity = 128;
+    enum class CommandType { Attach, Track, MasterGain, Mixer, Barrier };
+    struct MixerTrack {
         float gain = 1.0f;
         bool muted = false, solo = false;
     };
@@ -83,9 +83,9 @@ private:
         float gain = 1.0f;
         bool muted = false, solo = false;
         std::uint64_t ticket = 0;
-        std::array<MixerSlot, slotCount> mixerSlots{};
+        std::array<MixerTrack, trackCount> mixerTracks{};
     };
-    struct Slot {
+    struct Track {
         Transport* transport = nullptr;
         float gain = 1.0f;
         bool muted = false, solo = false;
@@ -100,14 +100,14 @@ private:
     void recordTiming(std::uint64_t elapsed) noexcept;
     [[noreturn]] void ownershipFailure(PaError error, const char* operation);
     static int callback(const void*, void*, unsigned long, const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void*) noexcept;
-    static void validateSlot(int index);
+    static void validateTrack(int index);
     static float validateGain(double gain);
     const double sampleRate;
     const int frames;
     std::mutex controls;
-    std::array<Slot, slotCount> slots{};
+    std::array<Track, trackCount> tracks{};
     // Lifetimes retained/reclaimed only by the control thread after callback ACK.
-    std::array<std::shared_ptr<Transport>, slotCount> retained{};
+    std::array<std::shared_ptr<Transport>, trackCount> retained{};
     std::vector<std::shared_ptr<Transport>> pendingRetirement;
     std::vector<std::shared_ptr<Plugin>> masterEffects;
     std::array<Command, commandCapacity> commands{};
@@ -115,7 +115,7 @@ private:
     std::atomic<std::uint64_t> acknowledged{0};
     std::uint64_t nextTicket = 0;
     float masterGain = 1.0f;
-    std::vector<float> left, right, slotLeft, slotRight;
+    std::vector<float> left, right, trackLeft, trackRight;
     juce::MidiBuffer masterMidi;
     PaStream* stream = nullptr;
     std::atomic<bool> running{false};
@@ -125,7 +125,7 @@ private:
     static_assert(std::atomic<Failure>::is_always_lock_free, "Output failure latch must be lock free");
     std::atomic<Failure> failure{Failure::None};
     bool closed = false;
-    std::atomic<int> eligibleSlots{0};
+    std::atomic<int> eligibleTracks{0};
     std::atomic<std::uint64_t> underruns{0}, renderErrors{0}, callbackCount{0}, deadlineMisses{0}, lastCallbackNs{0}, peakCallbackNs{0};
     std::atomic<std::uint32_t> outputPeakBits{0};
     std::string backendLabel, outputName;

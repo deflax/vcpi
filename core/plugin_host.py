@@ -11,7 +11,7 @@ from typing import Optional
 
 from core import audio_deps as deps
 from core.engine import AudioEngine
-from core.models import InstrumentSlot, NUM_SLOTS
+from core.models import InstrumentTrack, NUM_TRACKS
 
 
 logger = logging.getLogger(__name__)
@@ -98,13 +98,13 @@ DEFAULT_PATCHES_DIR = "patches"
 
 class PluginHost:
     def __init__(self, sample_rate: int = 44100, buffer_size: int = 512,
-                 *, slot_mode=False):
+                 *, track_mode=False):
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
         self.patches_dir = Path(
             os.environ.get(PATCHES_DIR_ENV, DEFAULT_PATCHES_DIR)
         ).expanduser()
-        self.engine = AudioEngine(sample_rate, buffer_size, slot_mode=slot_mode)
+        self.engine = AudioEngine(sample_rate, buffer_size, track_mode=track_mode)
         self._shutdown = False
 
     @property
@@ -163,10 +163,10 @@ class PluginHost:
         plugin.load_preset(str(patch_path))
         return "patch imported via Cardinal VST3 state"
 
-    def load_vcv(self, slot_index: int, vcv_path: str,
+    def load_vcv(self, track_index: int, vcv_path: str,
                  cardinal_path: Optional[str] = None,
-                 name: Optional[str] = None) -> tuple[InstrumentSlot, str, str]:
-        """Load Cardinal in a slot and import a .vcv project file."""
+                 name: Optional[str] = None) -> tuple[InstrumentTrack, str, str]:
+        """Load Cardinal in a track and import a .vcv project file."""
         patch_path = Path(vcv_path).expanduser()
         if not patch_path.exists() or not patch_path.is_file():
             raise FileNotFoundError(f".vcv patch not found: {patch_path}")
@@ -175,21 +175,21 @@ class PluginHost:
             logger.warning("load_vcv called with non-.vcv file: %s", patch_path)
 
         cardinal_vst_path = self._resolve_cardinal_path(cardinal_path)
-        slot_label = name or f"Cardinal:{patch_path.stem}"
+        track_label = name or f"Cardinal:{patch_path.stem}"
 
-        slot = self.load_instrument(slot_index, str(cardinal_vst_path), slot_label)
-        slot.source_type = "vcv"
-        slot.vcv_patch_path = str(patch_path)
-        patch_result = self._apply_vcv_patch(slot.plugin, patch_path)
+        track = self.load_instrument(track_index, str(cardinal_vst_path), track_label)
+        track.source_type = "vcv"
+        track.vcv_patch_path = str(patch_path)
+        patch_result = self._apply_vcv_patch(track.plugin, patch_path)
 
         logger.info(
-            "[VCV] slot %d loaded from %s with patch %s (%s)",
-            slot_index + 1,
+            "[VCV] track %d loaded from %s with patch %s (%s)",
+            track_index + 1,
             cardinal_vst_path,
             patch_path,
             patch_result,
         )
-        return slot, patch_result, str(cardinal_vst_path)
+        return track, patch_result, str(cardinal_vst_path)
 
     def _resolve_plugdata_path(self, plugdata_path: Optional[str]) -> Path:
         """Resolve an explicit override or discover the installed plugdata bundle."""
@@ -197,27 +197,23 @@ class PluginHost:
         if override:
             candidates = [Path(override).expanduser()]
         else:
-            candidates = [
-                Path(__file__).resolve().parents[1] / "vst3" / "plugdata.vst3",
-                Path.cwd() / "vst3" / "plugdata.vst3",
-                *(Path(path).expanduser() for path in PLUGDATA_VST3_CANDIDATES),
-            ]
+            candidates = [Path(path).expanduser() for path in PLUGDATA_VST3_CANDIDATES]
         for candidate in candidates:
             if candidate.exists():
                 return candidate.resolve()
         tried = ", ".join(str(candidate) for candidate in candidates)
         raise FileNotFoundError(
             "plugdata VST3 not found. Pass plugdata_path, set "
-            f"{PLUGDATA_VST3_ENV}, or install vst3/plugdata.vst3 "
+            f"{PLUGDATA_VST3_ENV}, or install plugdata in a standard VST3 directory "
             f"(tried: {tried})."
         )
 
-    def load_pd(self, slot_index: int, pd_path: str,
+    def load_pd(self, track_index: int, pd_path: str,
                 plugdata_path: Optional[str] = None,
-                name: Optional[str] = None) -> tuple[InstrumentSlot, str, str]:
+                name: Optional[str] = None) -> tuple[InstrumentTrack, str, str]:
         """Import a Pure Data patch before publishing its plugdata instrument."""
-        if not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+        if not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
         patch_path = Path(pd_path).expanduser().resolve()
         if not patch_path.is_file():
             raise FileNotFoundError(f".pd patch not found: {patch_path}")
@@ -228,27 +224,27 @@ class PluginHost:
             str(plugin_path), self.sample_rate, self.buffer_size, "instrument")
         self._set_plugin_info_type(plugin, "Instrument")
         plugin.load_preset(str(patch_path))
-        slot = InstrumentSlot(
+        track = InstrumentTrack(
             name=name or f"plugdata:{patch_path.stem}",
             path=str(plugin_path),
             plugin=plugin,
             source_type="pd",
             pd_patch_path=str(patch_path),
         )
-        self.engine.slots[slot_index] = slot
+        self.engine.tracks[track_index] = track
         patch_result = "patch imported via plugdata VST3 state"
-        logger.info("[PD] slot %d loaded from %s with patch %s (%s)",
-                    slot_index + 1, plugin_path, patch_path, patch_result)
-        return slot, patch_result, str(plugin_path)
+        logger.info("[PD] track %d loaded from %s with patch %s (%s)",
+                    track_index + 1, plugin_path, patch_path, patch_result)
+        return track, patch_result, str(plugin_path)
 
-    def load_pd_patch(self, slot_index: int, patch_name: str,
+    def load_pd_patch(self, track_index: int, patch_name: str,
                       plugdata_path: Optional[str] = None,
-                      name: Optional[str] = None) -> tuple[InstrumentSlot, str, str, Path]:
+                      name: Optional[str] = None) -> tuple[InstrumentTrack, str, str, Path]:
         """Load a .pd patch from the shared configured patches directory."""
         patch_path = self._resolve_patch_path(patch_name, ".pd").resolve()
-        slot, patch_result, used_plugdata = self.load_pd(
-            slot_index, str(patch_path), plugdata_path=plugdata_path, name=name)
-        return slot, patch_result, used_plugdata, patch_path
+        track, patch_result, used_plugdata = self.load_pd(
+            track_index, str(patch_path), plugdata_path=plugdata_path, name=name)
+        return track, patch_result, used_plugdata, patch_path
 
     def _resolve_patch_path(self, patch_name: str, extension: str = ".vcv") -> Path:
         """Resolve a patch file name from the configured patches directory."""
@@ -274,55 +270,55 @@ class PluginHost:
             f"patch '{patch_name}' not found in {patches_dir} (tried: {tried})"
         )
 
-    def load_vcv_patch(self, slot_index: int, patch_name: str,
+    def load_vcv_patch(self, track_index: int, patch_name: str,
                        cardinal_path: Optional[str] = None,
-                       name: Optional[str] = None) -> tuple[InstrumentSlot, str, str, Path]:
-        """Load a patch from patches/ into an explicit slot using Cardinal."""
+                       name: Optional[str] = None) -> tuple[InstrumentTrack, str, str, Path]:
+        """Load a patch from patches/ into an explicit track using Cardinal."""
         patch_path = self._resolve_patch_path(patch_name)
-        slot_label = name or f"Cardinal:{patch_path.stem}"
-        slot, patch_result, used_cardinal = self.load_vcv(
-            slot_index,
+        track_label = name or f"Cardinal:{patch_path.stem}"
+        track, patch_result, used_cardinal = self.load_vcv(
+            track_index,
             str(patch_path),
             cardinal_path=cardinal_path,
-            name=slot_label,
+            name=track_label,
         )
-        return slot, patch_result, used_cardinal, patch_path
+        return track, patch_result, used_cardinal, patch_path
 
     # -- instrument loading ---------------------------------------------------
 
-    def load_instrument(self, slot_index: int, path: str,
-                        name: Optional[str] = None) -> InstrumentSlot:
+    def load_instrument(self, track_index: int, path: str,
+                        name: Optional[str] = None) -> InstrumentTrack:
         """Load and warm a native VST3 instrument on its control owner."""
-        if not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+        if not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
 
-        slot_name = name or Path(path).stem
+        track_name = name or Path(path).stem
         t0 = time.monotonic()
-        logger.info("[INST] loading slot %d '%s' from %s …",
-                    slot_index + 1, slot_name, path)
+        logger.info("[INST] loading track %d '%s' from %s …",
+                    track_index + 1, track_name, path)
 
         plugin = NativePlugin(path, self.sample_rate, self.buffer_size, "instrument")
         self._set_plugin_info_type(plugin, "Instrument")
 
-        slot = InstrumentSlot(
-            name=slot_name,
+        track = InstrumentTrack(
+            name=track_name,
             path=path,
             plugin=plugin,
             source_type="plugin",
         )
 
         # The child lifecycle dispatcher has stopped audio before publication.
-        self.engine.slots[slot_index] = slot
+        self.engine.tracks[track_index] = track
 
         elapsed = time.monotonic() - t0
-        logger.info("[INST] slot %d ready (%.2fs)", slot_index + 1, elapsed)
-        return slot
+        logger.info("[INST] track %d ready (%.2fs)", track_index + 1, elapsed)
+        return track
 
-    def load_wav(self, slot_index: int, wav_path: str,
-                 name: Optional[str] = None) -> InstrumentSlot:
-        """Load a WAV file as a one-shot sampler instrument into a slot."""
-        if not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+    def load_wav(self, track_index: int, wav_path: str,
+                 name: Optional[str] = None) -> InstrumentTrack:
+        """Load a WAV file as a one-shot sampler instrument into a track."""
+        if not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
 
         path = Path(wav_path).expanduser()
         if not path.is_absolute():
@@ -339,74 +335,74 @@ class PluginHost:
         plugin = NativePlugin(resolved, self.sample_rate, self.buffer_size, "wav")
         self._set_plugin_info_type(plugin, "Sample")
 
-        slot = InstrumentSlot(
+        track = InstrumentTrack(
             name=name or Path(resolved).stem,
             path=resolved,
             plugin=plugin,
             source_type="wav",
         )
-        self.engine.slots[slot_index] = slot
-        logger.info("[WAV] slot %d loaded from %s", slot_index + 1, resolved)
-        return slot
+        self.engine.tracks[track_index] = track
+        logger.info("[WAV] track %d loaded from %s", track_index + 1, resolved)
+        return track
 
-    def remove_instrument(self, slot_index: int) -> InstrumentSlot:
-        """Unload and clear one instrument slot."""
-        if not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+    def remove_instrument(self, track_index: int) -> InstrumentTrack:
+        """Unload and clear one instrument track."""
+        if not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
 
-        slot = self.engine.slots[slot_index]
-        if slot is None:
-            raise ValueError(f"Slot {slot_index + 1} is already empty")
+        track = self.engine.tracks[track_index]
+        if track is None:
+            raise ValueError(f"Track {track_index + 1} is already empty")
 
-        self.engine.slots[slot_index] = None
-        logger.info("[INST] removed slot %d (%s)", slot_index + 1, slot.name)
-        return slot
+        self.engine.tracks[track_index] = None
+        logger.info("[INST] removed track %d (%s)", track_index + 1, track.name)
+        return track
 
-    def load_effect(self, path: str, slot_index: Optional[int] = None,
+    def load_effect(self, path: str, track_index: Optional[int] = None,
                     name: Optional[str] = None):
         """Publish a native insert/master chain; warmup happens in Plugin."""
-        if slot_index is not None:
-            if not 0 <= slot_index < NUM_SLOTS:
-                raise ValueError(f"slot must be 1-{NUM_SLOTS}")
-            if self.engine.slots[slot_index] is None:
-                raise ValueError(f"Slot {slot_index + 1} is empty")
+        if track_index is not None:
+            if not 0 <= track_index < NUM_TRACKS:
+                raise ValueError(f"track must be 1-{NUM_TRACKS}")
+            if self.engine.tracks[track_index] is None:
+                raise ValueError(f"Track {track_index + 1} is empty")
 
         plugin = NativePlugin(path, self.sample_rate, self.buffer_size, "effect")
         plugin._vcpi_path = path  # stash load path for session save
         self._set_plugin_info_type(plugin, "Effect")
         label = name or Path(path).stem
         with self.engine.edit_effects():
-            slot = None
-            if slot_index is not None:
-                slot = self.engine.slots[slot_index]
-                if slot is None:
-                    raise ValueError(f"Slot {slot_index + 1} is empty")
+            track = None
+            if track_index is not None:
+                track = self.engine.tracks[track_index]
+                if track is None:
+                    raise ValueError(f"Track {track_index + 1} is empty")
             effects = [
-                *(slot.effects if slot is not None else self.engine.master_effects),
+                *(track.effects if track is not None else self.engine.master_effects),
                 plugin,
             ]
-            self.engine.set_effects(effects, slot_index)
-        if slot is not None:
-            logger.info("[FX] '%s' -> slot %d (%s)", label, slot_index + 1, slot.name)
+            self.engine.set_effects(effects, track_index)
+        if track is not None:
+            logger.info("[FX] '%s' -> track %d (%s)", label, track_index + 1, track.name)
         else:
             logger.info("[FX] '%s' -> master bus", label)
 
 
-    def remove_effect(self, slot_index: Optional[int], effect_index: int):
+    def remove_effect(self, track_index: Optional[int], effect_index: int):
         """Publish a replacement chain without mutating or processing the old one."""
-        if slot_index is not None and not 0 <= slot_index < NUM_SLOTS:
-            raise ValueError(f"slot must be 1-{NUM_SLOTS}")
+        if track_index is not None and not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
         with self.engine.edit_effects():
-            slot = None
-            if slot_index is not None:
-                slot = self.engine.slots[slot_index]
-                if slot is None:
-                    raise ValueError(f"Slot {slot_index + 1} is empty")
+            track = None
+            if track_index is not None:
+                track = self.engine.tracks[track_index]
+                if track is None:
+                    raise ValueError(f"Track {track_index + 1} is empty")
             effects = list(
-                slot.effects if slot is not None else self.engine.master_effects
+                track.effects if track is not None else self.engine.master_effects
             )
             del effects[effect_index]
-            self.engine.set_effects(effects, slot_index)
+            self.engine.set_effects(effects, track_index)
 
     def _resolve_audio_device_by_name(self, name: str):
         """Resolve an audio output device name to a device index.

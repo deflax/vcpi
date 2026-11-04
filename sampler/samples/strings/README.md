@@ -2,12 +2,12 @@
 
 Procedurally generated strings-style one-shots.
 
-These WAV files are intended for the `slot <n> wav` sampler command.
+These WAV files are intended for the `track <n> wav` sampler command.
 
 Example:
 
 ```text
-vcpi> slot 2 wav strings c4-ensemble
+vcpi> track 2 wav strings c4-ensemble
 ```
 
 This resolves to `samples/strings/c4-ensemble.wav`.

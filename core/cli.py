@@ -1,7 +1,7 @@
 """Interactive command-line interface for vcpi.
 
-All slot numbers and MIDI channels are presented 1-based to the user
-(slots 1-8, MIDI channels 1-16) and converted to 0-based internally.
+All track numbers and MIDI channels are presented 1-based to the user
+(tracks 1-8, MIDI channels 1-16) and converted to 0-based internally.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from core.completion import complete_line
 from core.deps import HAS_LINK, HAS_RTMIDI, HAS_MIDO
 from core.host import VcpiCore
 from core.midi import list_midi_input_ports, list_midi_output_ports
-from core.models import NUM_SLOTS
+from core.models import NUM_TRACKS
 from core.logging_setup import set_log_level
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
 from core.processes import render_processes
@@ -41,11 +41,11 @@ VCPI_ASCII_LOGO = r"""
 """.strip("\n")
 
 
-def _slot_to_internal(user_slot: int) -> int:
-    """Convert 1-based user slot to 0-based index, with validation."""
-    if not 1 <= user_slot <= NUM_SLOTS:
-        raise ValueError(f"slot must be 1-{NUM_SLOTS}")
-    return user_slot - 1
+def _track_to_internal(user_track: int) -> int:
+    """Convert 1-based user track to 0-based index, with validation."""
+    if not 1 <= user_track <= NUM_TRACKS:
+        raise ValueError(f"track must be 1-{NUM_TRACKS}")
+    return user_track - 1
 
 
 def _ch_to_internal(user_ch: int) -> int:
@@ -60,10 +60,10 @@ class HostCLI(cmd.Cmd):
         "\n"
         f"{VCPI_ASCII_LOGO}\n"
         "Type 'help' for available commands.\n"
-        "Slots are numbered 1-8.  MIDI channels are numbered 1-16."
+        "Tracks are numbered 1-8.  MIDI channels are numbered 1-16."
     )
     prompt = "vcpi> "
-    SLOT_TYPES = ("vst", "wav", "vcv", "pd", "fx", "clear")
+    TRACK_TYPES = ("vst", "wav", "vcv", "pd", "fx", "clear")
 
     def __init__(self, host: VcpiCore, stdout=None, owns_host: bool = True):
         super().__init__(stdout=stdout)
@@ -150,7 +150,7 @@ class HostCLI(cmd.Cmd):
         width = max(len(name) for name, _ in entries)
         self._print("Available commands:")
         groups = (
-            ("Instruments & effects", {"slot", "get", "set", "info"}),
+            ("Instruments & effects", {"track", "get", "set", "info"}),
             ("Volume, mute & solo", {"gain", "mute", "solo"}),
             ("Audio devices & output", {"audio"}),
             ("MIDI ports & routing", {"midi", "midimix", "note"}),
@@ -177,15 +177,15 @@ class HostCLI(cmd.Cmd):
 
     # -- plugins -------------------------------------------------------------
 
-    def _slot_usage(self) -> str:
+    def _track_usage(self) -> str:
         return (
-            "slot <1-8> vst <path|vst_name> [--name <label>] | "
-            "slot <1-8> wav <pack> <sample> [name] | "
-            "slot <1-8> vcv <patch_name[.vcv]> [name] | "
-            "slot <1-8> pd <patch_name[.pd]> [--name <label>] | "
-            "slot <1-8|master> fx <path|vst_name> [--name <label>] | "
-            "slot <1-8> clear | "
-            "slot <1-8|master> fx clear <fx_index>"
+            "track <1-8> vst <path|vst_name> [--name <label>] | "
+            "track <1-8> wav <pack> <sample> [name] | "
+            "track <1-8> vcv <patch_name[.vcv]> [name] | "
+            "track <1-8> pd <patch_name[.pd]> [--name <label>] | "
+            "track <1-8|master> fx <path|vst_name> [--name <label>] | "
+            "track <1-8> clear | "
+            "track <1-8|master> fx clear <fx_index>"
         )
 
     @staticmethod
@@ -228,8 +228,6 @@ class HostCLI(cmd.Cmd):
 
         candidates = [
             *env_tokens,
-            str(self._repo_root() / "vst3"),
-            str(Path.cwd() / "vst3"),
             str(Path.cwd()),
             str(self._repo_root()),
             "~/.vst3",
@@ -397,57 +395,57 @@ class HostCLI(cmd.Cmd):
         except IndexError:
             return None
 
-    def do_slot(self, arg):
-        """Slot management: slot <1-8> vst <path|name> [--name <label>] | slot <1-8> wav <pack> <sample> [name] | slot <1-8> vcv <patch> [name] | slot <1-8> pd <patch> [--name <label>] | slot <1-8|master> fx <path|name> [--name <label>] | slot <1-8> clear | slot <1-8|master> fx clear <fx_index>"""
+    def do_track(self, arg):
+        """Track management: track <1-8> vst <path|name> [--name <label>] | track <1-8> wav <pack> <sample> [name] | track <1-8> vcv <patch> [name] | track <1-8> pd <patch> [--name <label>] | track <1-8|master> fx <path|name> [--name <label>] | track <1-8> clear | track <1-8|master> fx clear <fx_index>"""
         text = arg.strip()
         if not text:
-            self._print(f"Usage: {self._slot_usage()}")
+            self._print(f"Usage: {self._track_usage()}")
             return
 
         parts = text.split()
         target = parts[0]
 
-        # Determine slot index (or None for master).
+        # Determine track index (or None for master).
         if target == "master":
-            slot_num = None
+            track_num = None
         else:
             try:
-                slot_num = int(target)
-                _slot_to_internal(slot_num)  # validate
+                track_num = int(target)
+                _track_to_internal(track_num)  # validate
             except ValueError as e:
                 self._print(f"Error: {e}")
-                self._print(f"Usage: {self._slot_usage()}")
+                self._print(f"Usage: {self._track_usage()}")
                 return
 
         if len(parts) < 2:
-            self._print(f"Usage: {self._slot_usage()}")
+            self._print(f"Usage: {self._track_usage()}")
             return
 
         mode = parts[1].lower()
 
-        # -- slot <num> clear ------------------------------------------------
-        if mode == "clear" and slot_num is not None:
-            idx = _slot_to_internal(slot_num)
+        # -- track <num> clear ------------------------------------------------
+        if mode == "clear" and track_num is not None:
+            idx = _track_to_internal(track_num)
             try:
                 removed = self.host.remove_instrument(idx)
                 self.host.refresh_mixer_leds([idx])
-                self._print(f"  slot {slot_num} cleared ({removed.name})")
+                self._print(f"  track {track_num} cleared ({removed.name})")
             except Exception as e:
                 self._print(f"Error: {e}")
             return
 
-        # -- slot <num|master> fx ... ----------------------------------------
+        # -- track <num|master> fx ... ----------------------------------------
         if mode == "fx":
             if len(parts) < 3:
-                self._print(f"Usage: slot <1-8|master> fx <path|vst_name> [--name <label>] | slot <1-8|master> fx clear <fx_index>")
+                self._print(f"Usage: track <1-8|master> fx <path|vst_name> [--name <label>] | track <1-8|master> fx clear <fx_index>")
                 return
 
-            slot_idx = None if slot_num is None else _slot_to_internal(slot_num)
+            track_idx = None if track_num is None else _track_to_internal(track_num)
 
-            # slot <num|master> fx clear <fx_index>
+            # track <num|master> fx clear <fx_index>
             if parts[2].lower() == "clear":
                 if len(parts) < 4:
-                    self._print(f"Usage: slot <1-8|master> fx clear <fx_index>")
+                    self._print(f"Usage: track <1-8|master> fx clear <fx_index>")
                     return
                 try:
                     fx_idx = int(parts[3]) - 1
@@ -458,13 +456,13 @@ class HostCLI(cmd.Cmd):
                     self._print("Error: fx_index must be >= 1")
                     return
                 try:
-                    self.host.remove_effect(slot_idx, fx_idx)
+                    self.host.remove_effect(track_idx, fx_idx)
                     self._print("  Removed.")
                 except Exception as e:
                     self._print(f"Error: {e}")
                 return
 
-            # slot <num|master> fx <path|vst_name> [--name <label>]
+            # track <num|master> fx <path|vst_name> [--name <label>]
             try:
                 path_token, name = self._parse_vst_args(text.split(maxsplit=2)[2])
                 path = self._resolve_vst_token(path_token)
@@ -472,83 +470,83 @@ class HostCLI(cmd.Cmd):
                 self._print(f"Error: {e}")
                 return
             try:
-                self.host.load_effect(path, slot_idx, name)
+                self.host.load_effect(path, track_idx, name)
             except Exception as e:
                 self._print(f"Error: {e}")
             return
 
-        # Remaining modes require a numeric slot.
-        if slot_num is None:
+        # Remaining modes require a numeric track.
+        if track_num is None:
             self._print("Error: master only supports 'fx' subcommand")
-            self._print(f"Usage: {self._slot_usage()}")
+            self._print(f"Usage: {self._track_usage()}")
             return
 
-        idx = _slot_to_internal(slot_num)
+        idx = _track_to_internal(track_num)
 
-        # -- slot <num> vst <path|name> [--name <label>] ----------------------
+        # -- track <num> vst <path|name> [--name <label>] ----------------------
         if mode == "vst":
             rest = text.split(maxsplit=2)
             if len(rest) < 3:
-                self._print(f"Usage: slot <1-8> vst <path|vst_name> [--name <label>]")
+                self._print(f"Usage: track <1-8> vst <path|vst_name> [--name <label>]")
                 return
             try:
                 path_token, name = self._parse_vst_args(rest[2])
                 path = self._resolve_vst_token(path_token)
-                slot = self.host.load_instrument(idx, path, name)
-                self._print(f"  slot {slot_num} = {slot.name}")
-                self._print(f"  vst      : {slot.path}")
+                track = self.host.load_instrument(idx, path, name)
+                self._print(f"  track {track_num} = {track.name}")
+                self._print(f"  vst      : {track.path}")
             except Exception as e:
                 self._print(f"Error: {e}")
             return
 
-        # -- slot <num> vcv <patch> [name] -----------------------------------
+        # -- track <num> vcv <patch> [name] -----------------------------------
         if mode == "vcv":
             rest = text.split(maxsplit=3)
             if len(rest) < 3:
-                self._print(f"Usage: slot <1-8> vcv <patch_name[.vcv]> [name]")
+                self._print(f"Usage: track <1-8> vcv <patch_name[.vcv]> [name]")
                 return
             patch_name = rest[2]
             name = rest[3] if len(rest) > 3 else None
             try:
-                slot, patch_result, cardinal_path, patch_path = self.host.load_vcv_patch(
+                track, patch_result, cardinal_path, patch_path = self.host.load_vcv_patch(
                     idx, patch_name, name=name,
                 )
             except Exception as e:
                 self._print(f"Error: {e}")
                 return
-            self._print(f"  slot {slot_num} = {slot.name}")
+            self._print(f"  track {track_num} = {track.name}")
             self._print(f"  patch    : {patch_path}")
             self._print(f"  cardinal : {cardinal_path}")
             self._print(f"  result   : {patch_result}")
-            self._print(f"  route with: midi link <channel 1-16> {slot_num}")
+            self._print(f"  route with: midi link <channel 1-16> {track_num}")
             return
 
-        # -- slot <num> pd <patch> [--name <label>] --------------------------
+        # -- track <num> pd <patch> [--name <label>] --------------------------
         if mode == "pd":
             rest = text.split(maxsplit=2)
             if len(rest) < 3:
-                self._print("Usage: slot <1-8> pd <patch_name[.pd]> [--name <label>]")
+                self._print("Usage: track <1-8> pd <patch_name[.pd]> [--name <label>]")
                 return
             try:
                 patch_name, name = self._parse_vst_args(rest[2])
-                slot, patch_result, plugdata_path, patch_path = self.host.load_pd_patch(
+                track, patch_result, plugdata_path, patch_path = self.host.load_pd_patch(
                     idx, patch_name, name=name,
                 )
             except Exception as e:
                 self._print(f"Error: {e}")
                 return
-            self._print(f"  slot {slot_num} = {slot.name}")
+            self._print(f"  track {track_num} = {track.name}")
             self._print(f"  patch    : {patch_path}")
             self._print(f"  plugdata : {plugdata_path}")
             self._print(f"  result   : {patch_result}")
-            self._print(f"  route with: midi link <channel 1-16> {slot_num}")
+            self._print(f"  route with: midi link <channel 1-16> {track_num}")
             return
 
-        # -- slot <num> wav <pack> <sample> [name] ---------------------------
+        # -- track <num> wav <pack> <sample> [name] ---------------------------
         if mode == "wav":
             rest = text.split(maxsplit=4)
             if len(rest) < 4:
-                self._print(f"Usage: slot <1-8> wav <pack> <sample> [name]")
+                self._print(f"Usage: track <1-8> wav <pack> <sample> [name]")
                 return
             pack_name = rest[2].strip().strip("/")
             sample_name = rest[3].strip()
@@ -575,18 +573,18 @@ class HostCLI(cmd.Cmd):
             wav_path = Path("sampler") / "samples" / pack_path / sample_path
 
             try:
-                slot = self.host.load_wav(idx, str(wav_path), display_name)
+                track = self.host.load_wav(idx, str(wav_path), display_name)
             except Exception as e:
                 self._print(f"Error: {e}")
                 return
 
-            self._print(f"  slot {slot_num} = {slot.name}")
-            self._print(f"  wav      : {slot.path}")
-            self._print(f"  route with: midi link <channel 1-16> {slot_num}")
+            self._print(f"  track {track_num} = {track.name}")
+            self._print(f"  wav      : {track.path}")
+            self._print(f"  route with: midi link <channel 1-16> {track_num}")
             return
 
         self._print(f"Error: unknown subcommand '{mode}'")
-        self._print(f"Usage: {self._slot_usage()}")
+        self._print(f"Usage: {self._track_usage()}")
 
     def _parameter_target(self, parts, *, require_master_index=False):
         """Resolve a cached plugin and leave parameter/value arguments unconsumed."""
@@ -612,22 +610,22 @@ class HostCLI(cmd.Cmd):
                 raise ValueError("fx_index out of range")
             plugin = effects[fx_idx]
         else:
-            idx = _slot_to_internal(int(parts[0]))
-            slot = self.host.engine.slots[idx]
-            if slot is None:
-                raise ValueError(f"Slot {parts[0]} is empty")
+            idx = _track_to_internal(int(parts[0]))
+            track = self.host.engine.tracks[idx]
+            if track is None:
+                raise ValueError(f"Track {parts[0]} is empty")
             consumed = 1
-            plugin = slot.plugin
+            plugin = track.plugin
             if len(parts) > 1 and parts[1] == "fx":
                 if len(parts) < 3:
-                    raise ValueError("missing slot fx_index")
+                    raise ValueError("missing track fx_index")
                 try:
                     fx_idx = int(parts[2]) - 1
                 except ValueError:
                     raise ValueError("fx_index must be a positive integer") from None
-                if not 0 <= fx_idx < len(slot.effects):
+                if not 0 <= fx_idx < len(track.effects):
                     raise ValueError("fx_index out of range")
-                plugin = slot.effects[fx_idx]
+                plugin = track.effects[fx_idx]
                 consumed = 3
         if plugin is None:
             raise ValueError("No plugin loaded")
@@ -636,8 +634,8 @@ class HostCLI(cmd.Cmd):
     def do_get(self, arg):
         """Read cached plugin parameters, including units, ranges, and choices.
 
-        get <slot 1-8> [name]
-        get <slot 1-8> fx <fx_index> [name]
+        get <track 1-8> [name]
+        get <track 1-8> fx <fx_index> [name]
         get master [fx_index] [name]
 
         Omit name to list all parameters; master defaults to its first effect.
@@ -670,13 +668,13 @@ class HostCLI(cmd.Cmd):
                 self._print(f"  {name} = {value}{units}{details}")
         except ValueError as error:
             self._print(f"Error: {error}")
-            self._print("Usage: get <slot> [fx <index>] [name] | get master [index] [name]")
+            self._print("Usage: get <track> [fx <index>] [name] | get master [index] [name]")
 
     def do_set(self, arg):
         """Set a plugin parameter and show its actual applied value.
 
-        set <slot 1-8> <name> <value>
-        set <slot 1-8> fx <fx_index> <name> <value>
+        set <track 1-8> <name> <value>
+        set <track 1-8> fx <fx_index> <name> <value>
         set master <fx_index> <name> <value>
 
         Boolean values accept true/false; quote enum values containing spaces.
@@ -700,7 +698,7 @@ class HostCLI(cmd.Cmd):
                         pval = pval.lower() == "true"
         except ValueError as error:
             self._print(f"Error: {error}")
-            self._print("Usage: set <slot> [fx <index>] <name> <value> | set master <index> <name> <value>")
+            self._print("Usage: set <track> [fx <index>] <name> <value> | set master <index> <name> <value>")
             return
         try:
             actual = self.host.engine.set_parameter(idx, pname, pval, fx_index=fx_idx)
@@ -712,10 +710,10 @@ class HostCLI(cmd.Cmd):
 
 
     def do_gain(self, arg):
-        """Set gain: gain <slot 1-8> <0.0-1.0> | gain master [0.0-1.0]"""
+        """Set gain: gain <track 1-8> <0.0-1.0> | gain master [0.0-1.0]"""
         parts = arg.strip().split()
         if not parts:
-            self._print("Usage: gain <slot 1-8> <value> | gain master [value]")
+            self._print("Usage: gain <track 1-8> <value> | gain master [value]")
             return
 
         if parts[0] == "master":
@@ -738,16 +736,16 @@ class HostCLI(cmd.Cmd):
             return
 
         if len(parts) < 2:
-            self._print("Usage: gain <slot 1-8> <value> | gain master [value]")
+            self._print("Usage: gain <track 1-8> <value> | gain master [value]")
             return
         try:
-            idx = _slot_to_internal(int(parts[0]))
+            idx = _track_to_internal(int(parts[0]))
         except ValueError as e:
             self._print(f"Error: {e}")
             return
-        slot = self.host.engine.slots[idx]
-        if slot is None:
-            self._print(f"Error: slot {parts[0]} is empty")
+        track = self.host.engine.tracks[idx]
+        if track is None:
+            self._print(f"Error: track {parts[0]} is empty")
             return
 
         try:
@@ -761,54 +759,54 @@ class HostCLI(cmd.Cmd):
             return
 
         try:
-            slot = self.host.engine.set_slot_state(idx, gain=gain)
-            self._print(f"  gain = {slot.gain:.2f}")
+            track = self.host.engine.set_track_state(idx, gain=gain)
+            self._print(f"  gain = {track.gain:.2f}")
         except Exception as e:
             self._print(f"Error: {e}")
 
     def do_mute(self, arg):
-        """Toggle mute: mute <slot 1-8>"""
+        """Toggle mute: mute <track 1-8>"""
         token = arg.strip()
         if not token:
-            self._print("Usage: mute <slot 1-8>")
+            self._print("Usage: mute <track 1-8>")
             return
         try:
-            idx = _slot_to_internal(int(token))
+            idx = _track_to_internal(int(token))
         except ValueError as e:
             self._print(f"Error: {e}")
             return
-        slot = self.host.engine.slots[idx]
-        if slot is None:
-            self._print(f"Error: slot {token} is empty")
+        track = self.host.engine.tracks[idx]
+        if track is None:
+            self._print(f"Error: track {token} is empty")
             return
 
         try:
-            slot = self.host.engine.set_slot_state(idx, muted=not slot.muted)
+            track = self.host.engine.set_track_state(idx, muted=not track.muted)
             self.host.refresh_mixer_leds([idx])
-            self._print(f"  {slot.name}: {'MUTED' if slot.muted else 'unmuted'}")
+            self._print(f"  {track.name}: {'MUTED' if track.muted else 'unmuted'}")
         except Exception as e:
             self._print(f"Error: {e}")
 
     def do_solo(self, arg):
-        """Toggle solo: solo <slot 1-8>"""
+        """Toggle solo: solo <track 1-8>"""
         token = arg.strip()
         if not token:
-            self._print("Usage: solo <slot 1-8>")
+            self._print("Usage: solo <track 1-8>")
             return
         try:
-            idx = _slot_to_internal(int(token))
+            idx = _track_to_internal(int(token))
         except ValueError as e:
             self._print(f"Error: {e}")
             return
-        slot = self.host.engine.slots[idx]
-        if slot is None:
-            self._print(f"Error: slot {token} is empty")
+        track = self.host.engine.tracks[idx]
+        if track is None:
+            self._print(f"Error: track {token} is empty")
             return
 
         try:
-            slot = self.host.engine.set_slot_state(idx, solo=not slot.solo)
+            track = self.host.engine.set_track_state(idx, solo=not track.solo)
             self.host.refresh_mixer_leds([idx])
-            self._print(f"  {slot.name}: {'SOLO' if slot.solo else 'unsolo'}")
+            self._print(f"  {track.name}: {'SOLO' if track.solo else 'unsolo'}")
         except Exception as e:
             self._print(f"Error: {e}")
 
@@ -817,7 +815,7 @@ class HostCLI(cmd.Cmd):
     def do_flow(self, arg):
         """Explore cached signal routing: flow [all|midi|controls|audio|1-8|master|explore]
 
-        With no argument, show the compact overview. Named views and slot
+        With no argument, show the compact overview. Named views and track
         numbers show a detailed table; all prints every table. explore opens
         the full-screen read-only explorer in the interactive client only.
         No hardware discovery, owner requests, or routing changes are performed.
@@ -825,7 +823,7 @@ class HostCLI(cmd.Cmd):
         parts = arg.strip().split()
         views = {"all", "midi", "controls", "audio", "master", "explore"}
         if len(parts) > 1 or (parts and parts[0] not in views
-                              and parts[0] not in {str(i) for i in range(1, NUM_SLOTS + 1)}):
+                              and parts[0] not in {str(i) for i in range(1, NUM_TRACKS + 1)}):
             self._print("Usage: flow [all|midi|controls|audio|1-8|master|explore]")
             return
         view = parts[0] if parts else "overview"
@@ -833,14 +831,14 @@ class HostCLI(cmd.Cmd):
             self._print("flow explore requires the interactive client; use flow all for plain output.")
             return
         snapshot = build_flow_snapshot(self.host)
-        section_id = f"slot{view}" if view.isdecimal() else view
+        section_id = f"track{view}" if view.isdecimal() else view
         self._print(render_flow_snapshot(snapshot, None if view == "all" else section_id))
 
     def do_info(self, arg):
-        """Show plugin info: info <slot 1-8> | info <slot 1-8> fx <fx_index> | info master <fx_index>"""
+        """Show plugin info: info <track 1-8> | info <track 1-8> fx <fx_index> | info master <fx_index>"""
         parts = arg.strip().split()
         if not parts:
-            self._print("Usage: info <slot 1-8> | info <slot 1-8> fx <fx_index> | info master <fx_index>")
+            self._print("Usage: info <track 1-8> | info <track 1-8> fx <fx_index> | info master <fx_index>")
             return
 
         if parts[0] == "master":
@@ -859,33 +857,33 @@ class HostCLI(cmd.Cmd):
             label = f"Master FX {fx_idx + 1}"
         else:
             try:
-                idx = _slot_to_internal(int(parts[0]))
+                idx = _track_to_internal(int(parts[0]))
             except ValueError as e:
                 self._print(f"Error: {e}")
                 return
-            slot = self.host.engine.slots[idx]
-            if slot is None:
-                self._print(f"  Slot {parts[0]} is empty")
+            track = self.host.engine.tracks[idx]
+            if track is None:
+                self._print(f"  Track {parts[0]} is empty")
                 return
 
-            # info <slot> fx <fx_index>  -- show info for a slot effect
+            # info <track> fx <fx_index>  -- show info for a track effect
             if len(parts) >= 2 and parts[1] == "fx":
-                if not slot.effects:
-                    self._print(f"  Slot {parts[0]} has no effects")
+                if not track.effects:
+                    self._print(f"  Track {parts[0]} has no effects")
                     return
                 try:
                     fx_idx = int(parts[2]) - 1 if len(parts) > 2 else 0
                 except ValueError:
                     self._print("Error: fx_index must be a positive integer")
                     return
-                if not 0 <= fx_idx < len(slot.effects):
+                if not 0 <= fx_idx < len(track.effects):
                     self._print("Error: fx_index out of range")
                     return
-                plugin = slot.effects[fx_idx]
-                label = f"Slot {parts[0]} FX {fx_idx + 1}"
+                plugin = track.effects[fx_idx]
+                label = f"Track {parts[0]} FX {fx_idx + 1}"
             else:
-                plugin = slot.plugin
-                label = f"Slot {parts[0]}: {slot.name}"
+                plugin = track.plugin
+                label = f"Track {parts[0]}: {track.name}"
 
         self._print(render_plugin_info(plugin, label))
 
@@ -961,25 +959,25 @@ class HostCLI(cmd.Cmd):
                 f"  Output peak since audio-owner creation "
                 f"(final device samples): {output['output_peak']:.6g}"
             )
-            if not diagnosis["slots"]:
-                self._print("  No loaded slots.")
-            for slot in diagnosis["slots"]:
+            if not diagnosis["tracks"]:
+                self._print("  No loaded tracks.")
+            for track in diagnosis["tracks"]:
                 self._print(
-                    f"  Slot {slot['index']}: {slot['name']} "
-                    f"| gain={slot['gain']:.3f} "
-                    f"| muted={slot['muted']} | solo={slot['solo']}"
+                    f"  Track {track['index']}: {track['name']} "
+                    f"| gain={track['gain']:.3f} "
+                    f"| muted={track['muted']} | solo={track['solo']}"
                 )
                 self._print(
-                    f"    MIDI sent={slot['midi_sent']} "
-                    f"consumed={slot['midi_consumed']} pending={slot['midi_pending']} "
-                    f"| missing blocks={slot['misses']}"
+                    f"    MIDI sent={track['midi_sent']} "
+                    f"consumed={track['midi_consumed']} pending={track['midi_pending']} "
+                    f"| missing blocks={track['misses']}"
                 )
                 self._print(
-                    f"    Audio peak since slot creation "
-                    f"(before mixer gain/mute/solo): {slot['audio_peak']:.6g}"
+                    f"    Audio peak since track creation "
+                    f"(before mixer gain/mute/solo): {track['audio_peak']:.6g}"
                 )
-                self._print(f"    Worker failure: {slot['worker_failure'] or 'none'}")
-                self._print(f"    Realtime: {format_realtime(slot['realtime'])}")
+                self._print(f"    Worker failure: {track['worker_failure'] or 'none'}")
+                self._print(f"    Realtime: {format_realtime(track['realtime'])}")
 
         else:
             self._print(f"Unknown audio subcommand: {sub}")
@@ -987,14 +985,14 @@ class HostCLI(cmd.Cmd):
     # -- MIDI (unified) ------------------------------------------------------
 
     def do_midi(self, arg):
-        """MIDI commands: midi ports input | midi ports output | midi input <port> | midi input close <index> | midi link <ch> <slot> | midi cut <ch>
+        """MIDI commands: midi ports input | midi ports output | midi input <port> | midi input close <index> | midi link <ch> <track> | midi cut <ch>
 
         Subcommands:
           midi ports input       -- list MIDI input ports
           midi ports output      -- list MIDI output ports
           midi input <port>      -- open a MIDI input port
           midi input close <idx> -- close a MIDI input by index
-          midi link <ch> <slot>  -- route MIDI channel to slot
+          midi link <ch> <track>  -- route MIDI channel to track
           midi cut <ch>          -- remove MIDI channel route
         """
         parts = arg.strip().split()
@@ -1002,7 +1000,7 @@ class HostCLI(cmd.Cmd):
             self._print(
                 "Usage: midi ports input | midi ports output | "
                 "midi input <port> | midi input close <index> | "
-                "midi link <ch> <slot> | midi cut <ch>"
+                "midi link <ch> <track> | midi cut <ch>"
             )
             return
 
@@ -1055,19 +1053,19 @@ class HostCLI(cmd.Cmd):
                     self._print(f"Error: {e}")
             return
 
-        # --- midi link <ch> <slot> ------------------------------------------
+        # --- midi link <ch> <track> ------------------------------------------
         if sub == "link":
             if len(parts) < 3:
-                self._print("Usage: midi link <channel 1-16> <slot 1-8>")
+                self._print("Usage: midi link <channel 1-16> <track 1-8>")
                 return
             try:
                 ch = _ch_to_internal(int(parts[1]))
-                idx = _slot_to_internal(int(parts[2]))
+                idx = _track_to_internal(int(parts[2]))
             except ValueError as e:
                 self._print(f"Error: {e}")
                 return
             self.host.route(ch, idx)
-            self._print(f"  ch {parts[1]} -> slot {parts[2]}")
+            self._print(f"  ch {parts[1]} -> track {parts[2]}")
             return
 
         # --- midi cut <ch> --------------------------------------------------
@@ -1125,13 +1123,13 @@ class HostCLI(cmd.Cmd):
         self._print("Usage: midimix input <port> | midimix output <port>")
 
     def do_note(self, arg):
-        """Test note: note <slot 1-8> <midi_note> [vel] [dur_ms]"""
+        """Test note: note <track 1-8> <midi_note> [vel] [dur_ms]"""
         parts = arg.strip().split()
         if len(parts) < 2:
-            self._print("Usage: note <slot 1-8> <note> [velocity] [dur_ms]")
+            self._print("Usage: note <track 1-8> <note> [velocity] [dur_ms]")
             return
         try:
-            idx = _slot_to_internal(int(parts[0]))
+            idx = _track_to_internal(int(parts[0]))
         except ValueError as e:
             self._print(f"Error: {e}")
             return
@@ -1151,7 +1149,7 @@ class HostCLI(cmd.Cmd):
     # -- sequencer -----------------------------------------------------------
 
     def do_seq(self, arg):
-        """Sequencer: seq | seq <bank> <notes...> | seq link <bank> <slot> | seq cut <slot> | seq clear <bank>
+        """Sequencer: seq | seq <bank> <notes...> | seq link <bank> <track> | seq cut <track> | seq clear <bank>
 
         Examples:
           seq                  -- show all sequence banks
@@ -1159,8 +1157,8 @@ class HostCLI(cmd.Cmd):
           seq 1 c              -- set bank 1 to just C (1 note per bar)
           seq 3 C#5 Bb4        -- sharps/flats and octave suffixes work
           seq clear 1          -- clear bank 1
-          seq link 1 5         -- attach sequence bank 1 to slot 5
-          seq cut 5            -- remove sequences from slot 5
+          seq link 1 5         -- attach sequence bank 1 to track 5
+          seq cut 5            -- remove sequences from track 5
         """
         parts = arg.strip().split()
 
@@ -1173,8 +1171,8 @@ class HostCLI(cmd.Cmd):
                     continue
                 any_bank = True
                 notes_str = " ".join(midi_to_note_name(n) for n in bank.notes)
-                if bank.linked_slot is not None:
-                    link_str = f" -> slot {bank.linked_slot + 1}"
+                if bank.linked_track is not None:
+                    link_str = f" -> track {bank.linked_track + 1}"
                 else:
                     link_str = ""
                 self._print(f"  seq {bi + 1}: {notes_str}{link_str}")
@@ -1182,10 +1180,10 @@ class HostCLI(cmd.Cmd):
                 self._print("  No sequences defined. Use: seq <bank> <note> [note ...]")
             return
 
-        # --- seq link <bank> <slot> -----------------------------------------
+        # --- seq link <bank> <track> -----------------------------------------
         if parts[0].lower() == "link":
             if len(parts) < 3:
-                self._print("Usage: seq link <bank 1-16> <slot 1-8>")
+                self._print("Usage: seq link <bank 1-16> <track 1-8>")
                 return
             try:
                 bi = int(parts[1]) - 1
@@ -1195,29 +1193,29 @@ class HostCLI(cmd.Cmd):
                 self._print(f"Error: {e}")
                 return
             try:
-                si = _slot_to_internal(int(parts[2]))
+                si = _track_to_internal(int(parts[2]))
             except ValueError as e:
                 self._print(f"Error: {e}")
                 return
             try:
                 self.host.sequencer.link(bi, si)
-                self._print(f"  seq {bi + 1} -> slot {si + 1}")
+                self._print(f"  seq {bi + 1} -> track {si + 1}")
             except ValueError as e:
                 self._print(f"Error: {e}")
             return
 
-        # --- seq cut <slot> -------------------------------------------------
+        # --- seq cut <track> -------------------------------------------------
         if parts[0].lower() == "cut":
             if len(parts) < 2:
-                self._print("Usage: seq cut <slot 1-8>")
+                self._print("Usage: seq cut <track 1-8>")
                 return
             try:
-                si = _slot_to_internal(int(parts[1]))
+                si = _track_to_internal(int(parts[1]))
             except ValueError as e:
                 self._print(f"Error: {e}")
                 return
-            self.host.sequencer.detach_slot(si)
-            self._print(f"  slot {si + 1}: sequences detached")
+            self.host.sequencer.detach_track(si)
+            self._print(f"  track {si + 1}: sequences detached")
             return
 
         # --- seq clear <bank> -----------------------------------------------
@@ -1254,8 +1252,8 @@ class HostCLI(cmd.Cmd):
                 self._print(f"  seq {bank_num}: (empty)")
             else:
                 notes_str = " ".join(midi_to_note_name(n) for n in bank.notes)
-                if bank.linked_slot is not None:
-                    link_str = f" -> slot {bank.linked_slot + 1}"
+                if bank.linked_track is not None:
+                    link_str = f" -> track {bank.linked_track + 1}"
                 else:
                     link_str = ""
                 self._print(f"  seq {bank_num}: {notes_str}{link_str}")
@@ -1332,7 +1330,7 @@ class HostCLI(cmd.Cmd):
         debug off returns logging to INFO. New workers inherit the setting.
         Changes last until the daemon exits; logs stay in its terminal/service log.
         Raw native/plugin output is discarded unless debug is on, then shown with
-        [daemon], [audio], or [slot N] prefixes. No per-process log files are kept.
+        [daemon], [audio], or [track N] prefixes. No per-process log files are kept.
         For startup diagnostics, launch with LOG_LEVEL=DEBUG ./vcpid.
         """
         mode = arg.strip().lower()
@@ -1451,7 +1449,7 @@ class HostCLI(cmd.Cmd):
     def do_ps(self, arg):
         """Show daemon processes and threads with resource usage: ps [all]
 
-        Includes the daemon and all descendants (audio, slots, helpers), not
+        Includes the daemon and all descendants (audio, tracks, helpers), not
         the separate CLI client. Samples CPU over ~200 ms; 100% is one core.
         Process rows show total CPU, resident memory (MiB), state and thread
         count. Thread rows show native TIDs and CPU, not separate memory.
