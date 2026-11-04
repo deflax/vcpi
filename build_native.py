@@ -9,57 +9,40 @@ import shlex
 import sys
 
 
-# Keep only the last 64 KiB of a quiet step for actionable failure diagnostics.
-FAILURE_TAIL_BYTES = 64 * 1024
 OUTPUT_FRAGMENT_BYTES = 4096
 
 
-def _write_debug_fragment(fragment):
+def _write_build_fragment(fragment):
     text = fragment.decode("utf-8", errors="replace")
     sys.stdout.write("[build] " + text + ("" if text.endswith("\n") else "\n"))
     sys.stdout.flush()
 
 
 def run_build_step(command):
-    """Run a build step, streaming DEBUG output or retaining a bounded failure tail."""
-    debug = os.environ.get("LOG_LEVEL", "INFO").strip().upper() == "DEBUG"
+    """Run a build step, streaming prefixed output regardless of logging level."""
     pending = bytearray()
-    truncated = False
     with subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0
     ) as process:
         while chunk := process.stdout.read(OUTPUT_FRAGMENT_BYTES):
             pending.extend(chunk)
-            if debug:
-                while pending:
-                    newline = pending.find(b"\n", 0, OUTPUT_FRAGMENT_BYTES)
-                    if newline >= 0:
-                        end = newline + 1
-                    elif len(pending) >= OUTPUT_FRAGMENT_BYTES:
-                        end = OUTPUT_FRAGMENT_BYTES
-                    else:
-                        break
-                    _write_debug_fragment(pending[:end])
-                    del pending[:end]
-            elif len(pending) > FAILURE_TAIL_BYTES:
-                del pending[:-FAILURE_TAIL_BYTES]
-                truncated = True
+            while pending:
+                newline = pending.find(b"\n", 0, OUTPUT_FRAGMENT_BYTES)
+                if newline >= 0:
+                    end = newline + 1
+                elif len(pending) >= OUTPUT_FRAGMENT_BYTES:
+                    end = OUTPUT_FRAGMENT_BYTES
+                else:
+                    break
+                _write_build_fragment(pending[:end])
+                del pending[:end]
         returncode = process.wait()
-    if debug and pending:
-        _write_debug_fragment(pending)
+    if pending:
+        _write_build_fragment(pending)
     if returncode:
         sys.stderr.write(
             f"[build] Command failed ({returncode}): {shlex.join(command)}\n"
         )
-        if not debug:
-            if truncated:
-                sys.stderr.write(
-                    f"[build] Showing the last {FAILURE_TAIL_BYTES} bytes of diagnostics:\n"
-                )
-            text = pending.decode("utf-8", errors="replace")
-            sys.stderr.write(text)
-            if text and not text.endswith("\n"):
-                sys.stderr.write("\n")
         sys.stderr.flush()
         raise subprocess.CalledProcessError(returncode, command)
 

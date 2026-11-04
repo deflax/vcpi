@@ -85,11 +85,10 @@ warnings, and errors continue to appear. Long or unterminated lines may be split
 prefixed fragments. Existing service-journal retention is managed by systemd,
 not by vcpi.
 
-To see startup output, use `LOG_LEVEL=DEBUG ./vcpid` before the daemon starts.
-The launcher also gates successful build output: it is quiet by default and
-streams with `[build]` prefixes at DEBUG. Failed builds always report their
-diagnostics; in quiet mode only the final 64 KiB of a failed step is retained
-in memory and printed, with a notice if earlier output was discarded.
+To see runtime startup diagnostics, use `LOG_LEVEL=DEBUG ./vcpid` before the
+daemon starts. The launcher's native CMake configure and build output always
+streams with `[build]` prefixes, regardless of `LOG_LEVEL`, including on the
+first launch. Failed builds report the failing command and stop startup.
 
 VST3 plugin search and name resolution:
 

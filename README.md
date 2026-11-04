@@ -183,9 +183,8 @@ Raw native/plugin stdout and stderr are discarded unless DEBUG is enabled, then
 shown with `[daemon]`, `[audio]`, or `[track N]` prefixes. vcpi creates no
 per-process log files and cannot replay discarded output. Structured vcpi
 activity messages, warnings, and errors remain visible. For startup diagnostics, use
-`LOG_LEVEL=DEBUG ./vcpid`; this also streams build output with `[build]` prefixes.
-Successful builds are otherwise quiet; failures show the final 64 KiB of
-diagnostics.
+`LOG_LEVEL=DEBUG ./vcpid`. Native build progress and diagnostics always stream
+with `[build]` prefixes, regardless of `LOG_LEVEL`, including on the first launch.
 
 Full CLI and startup flag reference: [USAGE.md](USAGE.md).
 
