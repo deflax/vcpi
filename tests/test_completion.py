@@ -97,6 +97,9 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.inserted("  sta", "status"), "  status")
         self.assertIn("track", self.matches("help "))
         self.assertEqual(self.matches("help aud"), ["audio"])
+        self.assertNotIn("info", self.matches(""))
+        self.assertNotIn("info", self.matches("help "))
+        self.assertEqual(self.matches("info "), [])
         self.assertIn("master", self.matches("  gain\t"))
         for before in ("unknown ", "status ", "help audio ", "about ",
                        "audio stop ", "audio devices ", "audio diagnose ",
@@ -112,7 +115,7 @@ class CompletionTests(unittest.TestCase):
         for before in ("mute ", "solo ", "note ", "midi link 16 ",
                        "seq link 16 ", "seq cut "):
             self.assertEqual(set(self.matches(before)), tracks, before)
-        for before in ("gain ", "track ", "info ", "get ", "set "):
+        for before in ("gain ", "track ", "get ", "set "):
             self.assertEqual(set(self.matches(before)), tracks | {"master"}, before)
         for before in ("midi link ", "midi cut "):
             self.assertEqual(set(self.matches(before)), channels)
@@ -120,6 +123,7 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(set(self.matches(before)), banks)
         self.assertEqual(set(self.matches("seq ")), banks | {"link", "cut", "clear"})
         for before, expected in (
+                ("show ", tracks | {"all", "midi", "controls", "audio", "master", "explore"}),
                 ("audio ", {"start", "stop", "devices", "diagnose"}),
                 ("midi ", {"ports", "input", "link", "cut"}),
                 ("midi ports ", {"input", "output"}),
@@ -131,7 +135,7 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(set(self.matches(before)), expected)
         for before in ("midi link 17 ", "midi link 0 ", "seq link 0 ",
                        "seq link 17 ", "track 9 ", "track master clear ",
-                       "track 1 clear ", "get 0 ", "set 9 ", "info 1 nonsense "):
+                       "track 1 clear ", "get 0 ", "set 9 ", "show 1 nonsense "):
             self.assertEqual(self.matches(before), [], before)
 
     def test_audio_output_indexes_follow_current_snapshot(self):
@@ -174,19 +178,31 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(self.matches("midi ports "), ["input", "output"])
 
     def test_effect_indexes_follow_loaded_chains_only(self):
-        for before in ("info master ", "get master 2", "set master ", "track master fx clear "):
+        for before in ("show master fx ", "get master 2", "set master ", "track master fx clear "):
             expected = ["2"] if before.endswith("2") else ["1", "2"]
             self.assertEqual(self.matches(before), expected)
-        for before in ("info 1 fx ", "get 1 fx ", "set 1 fx ", "track 1 fx clear "):
+        for before in ("show 1 fx ", "get 1 fx ", "set 1 fx ", "track 1 fx clear "):
             self.assertEqual(self.matches(before), ["1"])
+        self.assertEqual(self.matches("show master fx 2"), ["2"])
+        for before in ("show 1 ", "show master "):
+            self.assertEqual(self.matches(before), ["fx"])
+        for before in ("show 2 ", "show all ", "show midi ", "show controls ",
+                       "show audio ", "show explore ", "show 0 ", "show 9 ",
+                       "show 1 fx 1 ", "show master fx 2 ", "show master 1 ",
+                       "show 1 fx 0", "show master fx 3", "show 1 fx -1"):
+            self.assertEqual(self.matches(before), [], before)
         self.track.effects.clear()
         self.engine.master_effects.pop()
-        self.assertEqual(self.matches("info 1 "), [])
-        self.assertEqual(self.matches("info 1 fx "), [])
+        self.assertEqual(self.matches("show 1 "), [])
+        self.assertEqual(self.matches("show 1 fx "), [])
         self.assertEqual(self.matches("track 1 fx clear "), [])
+        self.assertEqual(self.matches("show master fx "), ["1"])
         self.assertEqual(self.matches("set master "), ["1"])
-        for before in ("info 1 fx 1 ", "set 1 fx 1 ", "get master 2 "):
+        for before in ("show 1 fx 1 ", "set 1 fx 1 ", "get master 2 "):
             self.assertEqual(self.matches(before), [])
+        self.engine.master_effects.clear()
+        self.assertEqual(self.matches("show master "), [])
+        self.assertEqual(self.matches("show master fx "), [])
 
     def test_parameters_and_finite_values_use_cached_metadata(self):
         self.assertIn("fx", self.matches("get 1 "))
@@ -326,7 +342,9 @@ class CompletionTests(unittest.TestCase):
             for before in ("", "audio start ", "audio diagnose ", "midi input ",
                            "midi input close ", "midimix output ", "track 1 vst ",
                            "track 1 fx clear ", "get 1 ", "set 1 mode ",
-                           "set master 1 enabled ", "seq link ", "debug "):
+                           "set master 1 enabled ", "seq link ", "debug ",
+                           "show ", "show 1 ", "show 1 fx ", "show master fx ",
+                           "show master fx 1 "):
                 self.matches(before)
         self.forbidden.assert_not_called()
         self.assertEqual(self.instrument.parameters, parameters)

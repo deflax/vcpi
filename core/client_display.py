@@ -41,6 +41,8 @@ def _table(title: str, *columns: str) -> Table:
 
 def _help(console: Console, lines: list[str]) -> None:
     table = _table("Available commands", "Category", "Command", "Description")
+    # Keep the open table style, with a visible rule at explicit section breaks.
+    table.box = box.Box("    \n    \n ── \n    \n ── \n ── \n    \n    \n")
     table.columns[0].style = "bold"
     table.columns[1].no_wrap = True
     colours = ("cyan", "green", "yellow", "magenta",
@@ -53,7 +55,9 @@ def _help(console: Console, lines: list[str]) -> None:
         stripped = line.strip()
         if not stripped or stripped == "Available commands:":
             continue
-        if not line.startswith(" ") and stripped.endswith(":"):
+        if stripped == "-" * 60:
+            table.add_section()
+        elif not line.startswith(" ") and stripped.endswith(":"):
             category = stripped[:-1]
             colour = colours[group_index % len(colours)]
             group_index += 1
@@ -70,8 +74,8 @@ def _help(console: Console, lines: list[str]) -> None:
         console.print(Text(note))
 
 
-def _info_table(lines: list[str], title: str) -> Table | None:
-    """Recognize complete status/info boxes without swallowing error responses."""
+def _status_table(lines: list[str], title: str) -> Table | None:
+    """Recognize complete status boxes without swallowing error responses."""
     if len(lines) < 3 or not re.fullmatch(r"\+-+\+", lines[0]):
         return None
     table = _table(title, "Field", "Value")
@@ -116,8 +120,8 @@ def display_response(console: Console, command: str, lines: list[str]) -> None:
         _help(console, lines)
         return
     table = None
-    if name in ("status", "info"):
-        table = _info_table(lines, "Status" if name == "status" else "Plugin info")
+    if name == "status":
+        table = _status_table(lines, "Status")
     elif name == "get":
         table = _get_table(lines)
     if table is not None:
@@ -141,6 +145,6 @@ def display_response(console: Console, command: str, lines: list[str]) -> None:
             logo_row += 1
         if line.lstrip().startswith(("Error:", "***")):
             text.stylize("bold red")
-        elif name == "flow":
+        elif name == "show":
             text.stylize("cyan")
         console.print(text, soft_wrap=True)

@@ -16,6 +16,7 @@ from controllers.akai_midimix import (
 )
 from core.models import NUM_TRACKS
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
+from graph.plugin_info import plugin_metadata_rows
 from graph.status import format_output_device
 
 
@@ -36,6 +37,31 @@ def _value(value) -> str:
 def _section(section_id, title, columns, rows) -> dict:
     return {"id": section_id, "title": title, "columns": list(columns),
             "rows": [[str(cell) for cell in row] for row in rows]}
+
+
+def show_view(arguments: list[str]) -> str:
+    """Resolve public show arguments to a snapshot section, without owner calls."""
+    if not arguments:
+        return "overview"
+    target = arguments[0]
+    tracks = {str(index) for index in range(1, NUM_TRACKS + 1)}
+    if len(arguments) == 1:
+        if target in tracks:
+            return f"track{target}"
+        if target in {"all", "midi", "controls", "audio", "master", "explore"}:
+            return target
+    elif len(arguments) == 3 and target in tracks | {"master"} and arguments[1] == "fx":
+        try:
+            effect_index = int(arguments[2])
+        except ValueError:
+            raise ValueError("fx_index must be a positive integer") from None
+        if effect_index < 1:
+            raise ValueError("fx_index must be a positive integer")
+        return f"{'master' if target == 'master' else 'track' + target}fx{effect_index}"
+    raise ValueError(
+        "Usage: show [all|midi|controls|audio|1-8|master|explore] | "
+        "show <1-8|master> fx <fx_index>"
+    )
 
 
 def _target(tracks, index) -> str:
@@ -263,7 +289,7 @@ def _build_flow_snapshot(host, engine) -> dict:
         ["Output device", output_name_audio,
          "opened PortAudio entry (cached)" if running else "last opened PortAudio entry; stopped"],
         ["Backend", backend, audio_state],
-        ["Stream format", f"{sample_rate} Hz; {buffer_size} frames/block; {output_format}", "no live signal levels are collected by flow"],
+        ["Stream format", f"{sample_rate} Hz; {buffer_size} frames/block; {output_format}", "no live signal levels are collected by show"],
         ["Audio owner failure", failure or "none", "cached owner health"],
     ])
     sections.append(_section("audio", "Audio graph & output", ["Stage", "Path / value", "State / detail"], audio_rows))
@@ -289,6 +315,10 @@ def _build_flow_snapshot(host, engine) -> dict:
                  f"failure: {track.worker_failure or 'none'}; missed blocks: {track.worker_misses}"],
                 ["Worker buffering", f"{track.buffering_samples} samples", "cached worker configuration"],
             ])
+            if track.plugin is not None:
+                rows.extend([field, value, "cached instrument metadata"]
+                            for field, value in plugin_metadata_rows(track.plugin)
+                            if field != "Name" and (field != "Path" or value != track.path))
             if track.vcv_patch_path:
                 rows.append(["VCV patch", track.vcv_patch_path, "loaded source patch"])
             if track.pd_patch_path:
@@ -303,6 +333,12 @@ def _build_flow_snapshot(host, engine) -> dict:
             rows.append([f"{label}: {binding}", f"{target}; {value}", state])
         rows.append(["Audio destination", "master sum -> master FX -> master gain -> output", states[index]])
         sections.append(_section(f"track{index + 1}", f"Track {index + 1}", ["Stage / control", "Path / cached value", "State / detail"], rows))
+        if track is not None:
+            for effect_index, effect in enumerate(track.effects, 1):
+                sections.append(_section(
+                    f"track{index + 1}fx{effect_index}",
+                    f"Track {index + 1} FX {effect_index}",
+                    ["Field", "Value"], plugin_metadata_rows(effect)))
 
     master_rows = [["Input", "sum of eligible track outputs", "track gains / mute / solo applied before sum"]]
     for index, effect in enumerate(master_effects):
@@ -316,15 +352,21 @@ def _build_flow_snapshot(host, engine) -> dict:
         ["Stream", f"{sample_rate} Hz; {buffer_size} frames/block; {output_format}", "no live meters; no external audio input"],
     ])
     sections.append(_section("master", "Master bus & output", ["Stage", "Path / cached value", "State / detail"], master_rows))
+    for index, effect in enumerate(master_effects, 1):
+        sections.append(_section(
+            f"masterfx{index}", f"Master FX {index}",
+            ["Field", "Value"], plugin_metadata_rows(effect)))
     return {"title": "vcpi Signal Flow", "sections": sections}
 
 
 def render_flow_snapshot(snapshot: dict, section_id: str | None = None) -> str:
     """Render all sections, or one section, as literal non-terminal text."""
+    sections = [section for section in snapshot["sections"]
+                if section_id is None or section["id"] == section_id]
+    if not sections:
+        raise ValueError(f"No loaded show target: {section_id}")
     lines = [snapshot["title"]]
-    for section in snapshot["sections"]:
-        if section_id is not None and section["id"] != section_id:
-            continue
+    for section in sections:
         lines.extend(["", f"== {section['title']} =="])
         columns = section["columns"]
         rows = section["rows"]

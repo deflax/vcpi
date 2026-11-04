@@ -30,6 +30,7 @@ from rich.console import Console
 
 from core.client_display import display_response
 from core.flow_display import display_flow, explore_flow
+from graph.signal_flow import show_view
 from core.paths import DEFAULT_SOCK_PATH
 
 # Must match the sentinel used by server.py
@@ -85,20 +86,17 @@ def connect(sock_path: str | Path | None = None):
             # Rich flow views use the same cached snapshot as the text command.
             # Navigation stays client-local; the daemon never owns terminal input.
             tokens = line.strip().split()
-            if console is not None and tokens and tokens[0] == "flow":
-                views = {"all", "midi", "controls", "audio", "master",
-                         *(str(i) for i in range(1, 9))}
-                view = tokens[1] if len(tokens) == 2 else "overview"
-                if len(tokens) <= 2 and (len(tokens) == 1 or view in views or view == "explore"):
-                    try:
-                        fetch = lambda: _fetch_flow_snapshot(rfile, wfile)
-                        if view == "explore":
-                            explore_flow(fetch)
-                        else:
-                            display_flow(console, fetch(), view)
-                    except (OSError, ValueError) as error:
-                        console.print(f"Error: {error}", markup=False, style="bold red")
-                    continue
+            if console is not None and tokens and tokens[0] == "show":
+                try:
+                    view = show_view(tokens[1:])
+                    fetch = lambda: _fetch_flow_snapshot(rfile, wfile)
+                    if view == "explore":
+                        explore_flow(fetch)
+                    else:
+                        display_flow(console, fetch(), view)
+                except (OSError, ValueError) as error:
+                    console.print(f"Error: {error}", markup=False, style="bold red")
+                continue
 
             try:
                 wfile.write(line + "\n")

@@ -21,8 +21,7 @@ from core.models import NUM_TRACKS
 from core.logging_setup import set_log_level
 from core.sequencer import NUM_SEQ_BANKS, midi_to_note_name
 from core.processes import render_processes
-from graph.signal_flow import build_flow_snapshot, render_flow_snapshot
-from graph.plugin_info import render_plugin_info
+from graph.signal_flow import build_flow_snapshot, render_flow_snapshot, show_view
 from graph.status import format_output_device, format_realtime, render_status
 
 
@@ -150,17 +149,22 @@ class HostCLI(cmd.Cmd):
         width = max(len(name) for name, _ in entries)
         self._print("Available commands:")
         groups = (
-            ("Instruments & effects", {"track", "get", "set", "info"}),
+            ("Save & load sessions", {"save", "load"}),
+            ("Status, signal & logging", {"status", "ps", "show", "deps", "debug"}),
+            ("Help, exit & shutdown", {"help", "about", "quit", "exit", "shutdown"}),
+            None,
+            ("Instruments & effects", {"track", "get", "set"}),
             ("Volume, mute & solo", {"gain", "mute", "solo"}),
             ("Audio devices & output", {"audio"}),
             ("MIDI ports & routing", {"midi", "midimix", "note"}),
             ("Sequencing, tempo & Link", {"seq", "tempo", "ableton"}),
-            ("Save & load sessions", {"save", "load"}),
-            ("Status, signal & logging", {"status", "ps", "flow", "deps", "debug"}),
-            ("Help, exit & shutdown", {"help", "about", "quit", "exit", "shutdown"}),
         )
         remaining = dict(entries)
-        for title, commands in groups:
+        for group in groups:
+            if group is None:
+                self._print("\n" + "-" * 60)
+                continue
+            title, commands = group
             rows = [(name, summary) for name, summary in entries if name in commands]
             if not rows:
                 continue
@@ -812,80 +816,24 @@ class HostCLI(cmd.Cmd):
 
     # -- routing / MIDI ------------------------------------------------------
 
-    def do_flow(self, arg):
-        """Explore cached signal routing: flow [all|midi|controls|audio|1-8|master|explore]
+    def do_show(self, arg):
+        """Inspect routing and plugin metadata: show [all|midi|controls|audio|1-8|master|explore]
 
-        With no argument, show the compact overview. Named views and track
-        numbers show a detailed table; all prints every table. explore opens
-        the full-screen read-only explorer in the interactive client only.
-        No hardware discovery, owner requests, or routing changes are performed.
+        show <track> includes instrument metadata and the track's routing/mixer state.
+        show <track> fx <index> or show master fx <index> inspects one effect.
+        With no argument, show the compact overview; all prints every table.
+        explore opens the interactive read-only explorer. All views use cached state.
         """
-        parts = arg.strip().split()
-        views = {"all", "midi", "controls", "audio", "master", "explore"}
-        if len(parts) > 1 or (parts and parts[0] not in views
-                              and parts[0] not in {str(i) for i in range(1, NUM_TRACKS + 1)}):
-            self._print("Usage: flow [all|midi|controls|audio|1-8|master|explore]")
-            return
-        view = parts[0] if parts else "overview"
-        if view == "explore":
-            self._print("flow explore requires the interactive client; use flow all for plain output.")
-            return
-        snapshot = build_flow_snapshot(self.host)
-        section_id = f"track{view}" if view.isdecimal() else view
-        self._print(render_flow_snapshot(snapshot, None if view == "all" else section_id))
+        try:
+            view = show_view(arg.strip().split())
+            if view == "explore":
+                self._print("show explore requires the interactive client; use show all for plain output.")
+                return
+            snapshot = build_flow_snapshot(self.host)
+            self._print(render_flow_snapshot(snapshot, None if view == "all" else view))
+        except ValueError as error:
+            self._print(f"Error: {error}")
 
-    def do_info(self, arg):
-        """Show plugin info: info <track 1-8> | info <track 1-8> fx <fx_index> | info master <fx_index>"""
-        parts = arg.strip().split()
-        if not parts:
-            self._print("Usage: info <track 1-8> | info <track 1-8> fx <fx_index> | info master <fx_index>")
-            return
-
-        if parts[0] == "master":
-            if not self.host.engine.master_effects:
-                self._print("  No master effects loaded")
-                return
-            try:
-                fx_idx = int(parts[1]) - 1 if len(parts) > 1 else 0
-            except ValueError:
-                self._print("Error: fx_index must be a positive integer")
-                return
-            if not 0 <= fx_idx < len(self.host.engine.master_effects):
-                self._print("Error: fx_index out of range")
-                return
-            plugin = self.host.engine.master_effects[fx_idx]
-            label = f"Master FX {fx_idx + 1}"
-        else:
-            try:
-                idx = _track_to_internal(int(parts[0]))
-            except ValueError as e:
-                self._print(f"Error: {e}")
-                return
-            track = self.host.engine.tracks[idx]
-            if track is None:
-                self._print(f"  Track {parts[0]} is empty")
-                return
-
-            # info <track> fx <fx_index>  -- show info for a track effect
-            if len(parts) >= 2 and parts[1] == "fx":
-                if not track.effects:
-                    self._print(f"  Track {parts[0]} has no effects")
-                    return
-                try:
-                    fx_idx = int(parts[2]) - 1 if len(parts) > 2 else 0
-                except ValueError:
-                    self._print("Error: fx_index must be a positive integer")
-                    return
-                if not 0 <= fx_idx < len(track.effects):
-                    self._print("Error: fx_index out of range")
-                    return
-                plugin = track.effects[fx_idx]
-                label = f"Track {parts[0]} FX {fx_idx + 1}"
-            else:
-                plugin = track.plugin
-                label = f"Track {parts[0]}: {track.name}"
-
-        self._print(render_plugin_info(plugin, label))
 
     # -- audio ---------------------------------------------------------------
 

@@ -1,6 +1,6 @@
-"""Plugin info panel renderer for vcpi.
+"""Cached plugin metadata rows shared by track and effect inspection.
 
-Displays cached metadata captured by the audio owner process:
+Reads only metadata captured by the audio owner process:
 name, vendor, category, version, latency, parameter count, etc.
 """
 
@@ -17,16 +17,8 @@ def _metadata_text(value, default: str = "n/a") -> str:
     return default if value is None else str(value)
 
 
-def render_plugin_info(plugin: PluginSnapshot, label: str = "") -> str:
-    """Return an ASCII info box for a cached plugin snapshot.
-
-    Parameters
-    ----------
-    plugin : PluginSnapshot
-        Plain metadata published by the audio owner while stopped.
-    label : str, optional
-        An optional heading (e.g. "Track 1" or "Master FX 2").
-    """
+def plugin_metadata_rows(plugin: PluginSnapshot) -> list[tuple[str, str]]:
+    """Return metadata fields without accessing a live native plugin."""
     # -- gather metadata -----------------------------------------------------
     name = _metadata_text(plugin.name, "Unknown")
     descriptive = _metadata_text(plugin.descriptive_name)
@@ -48,10 +40,6 @@ def render_plugin_info(plugin: PluginSnapshot, label: str = "") -> str:
     # -- compose rows --------------------------------------------------------
     rows: list[tuple[str, str]] = []
 
-    if label:
-        rows.append(("", label))
-        rows.append(("", ""))  # spacer
-
     rows.append(("Name", name))
     if descriptive != name and descriptive != "n/a":
         rows.append(("Desc", descriptive))
@@ -64,28 +52,10 @@ def render_plugin_info(plugin: PluginSnapshot, label: str = "") -> str:
     if path:
         rows.append(("Path", path))
     rows.append(("Latency", f"{latency} samples"))
-    rows.append(("", ""))  # spacer
     rows.append(("Parameters", str(param_count)))
     if param_count > 0:
-        rows.append(("  automatable", str(automatable)))
-        rows.append(("  boolean", str(boolean_count)))
-        rows.append(("  discrete", str(discrete_count)))
+        rows.append(("Automatable", str(automatable)))
+        rows.append(("Boolean", str(boolean_count)))
+        rows.append(("Discrete", str(discrete_count)))
 
-    # -- render box ----------------------------------------------------------
-    key_width = max(len(k) for k, _ in rows) if rows else 0
-    val_width = max(len(v) for _, v in rows) if rows else 0
-    body_width = key_width + 3 + val_width  # " : " separator
-
-    border = "+" + "-" * (body_width + 2) + "+"
-    lines = [border]
-    for key, val in rows:
-        if not key and not val:
-            lines.append(f"| {'':<{body_width}} |")
-        elif not key:
-            lines.append(f"| {val:^{body_width}} |")
-        else:
-            line_text = f"{key:<{key_width}} : {val}"
-            lines.append(f"| {line_text:<{body_width}} |")
-    lines.append(border)
-
-    return "\n".join(lines)
+    return rows

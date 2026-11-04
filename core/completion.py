@@ -161,8 +161,18 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         return choices(("all",)) if not args else empty
     if command == "ableton":
         return choices(("link", "cut")) if not args else empty
-    if command == "flow":
-        return choices(("all", "midi", "controls", "audio", *_TRACKS, "master", "explore")) if not args else empty
+    if command == "show":
+        if not args:
+            return choices(("all", "midi", "controls", "audio", *_TRACKS, "master", "explore"))
+        target = args[0]
+        if target not in (*_TRACKS, "master"):
+            return empty
+        effects = _effects(cli, target)
+        if len(args) == 1:
+            return choices(("fx",) if effects else ())
+        if len(args) == 2 and args[1] == "fx":
+            return choices(_indexes(effects))
+        return empty
     if command == "audio":
         if not args:
             return choices(("start", "stop", "devices", "diagnose"))
@@ -244,7 +254,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
             if len(args) == 3:
                 return choices(asset_tokens(cli._sample_names(args[2])))
         return empty
-    if command in ("info", "get", "set"):
+    if command in ("get", "set"):
         if not args:
             return choices((*_TRACKS, "master"))
         target = args[0]
@@ -253,7 +263,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         effects = _effects(cli, target)
         indexes = _indexes(effects)
         if target == "master" and len(args) == 1:
-            if command in ("info", "set"):
+            if command == "set":
                 return choices(indexes)
             target_choices = indexes
         elif target != "master" and len(args) == 1:
@@ -262,8 +272,6 @@ def complete_line(cli: HostCLI, before: str) -> dict:
             return choices(indexes)
         else:
             target_choices = []
-        if command == "info":
-            return choices(target_choices)
         try:
             _, _, plugin, remaining = cli._parameter_target(
                 args, require_master_index=command == "set")

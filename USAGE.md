@@ -223,9 +223,11 @@ Server/client specific:
 
 ## Interactive Commands
 
-Type `help` for commands grouped by purpose: instruments & effects; volume,
-mute & solo; audio devices & output; MIDI ports & routing; sequencing, tempo
-& Link; save & load sessions; status, signal & logging; and help, exit & shutdown.
+Type `help` for commands grouped by purpose. System-related groups come first:
+save & load sessions; status, signal & logging; and help, exit & shutdown.
+A horizontal separator precedes the sound-related groups: instruments & effects;
+volume, mute & solo; audio devices & output; MIDI ports & routing; and
+sequencing, tempo & Link. The separator appears in both plain and interactive output.
 Commands are alphabetical within each group. Use `help <command>` for
 detailed syntax and usage; `help get` and `help set` include parameter-targeting
 syntax and examples.
@@ -234,8 +236,8 @@ category's heading and command names; descriptions remain neutral. Descriptions
 wrap to the terminal width; detailed `help <command>` output is unchanged.
 
 The interactive client uses `prompt_toolkit` for the `vcpi>` command line
-and Rich for terminal presentation. `help`, `get`, `status`, `info`, and
-`flow` use tables. `flow explore` temporarily opens a full-screen routing
+and Rich for terminal presentation. `help`, `get`, `status`, and
+`show` use tables. `show explore` temporarily opens a full-screen routing
 explorer, then returns to the prompt. Piped output remains plain text.
 Other responses, including `help <command>`, retain their text.
 
@@ -261,7 +263,7 @@ parameters.
 | `ableton` / `debug` | Link actions and debug on/off |
 | `gain` / `mute` / `solo` / `note` | Valid track targets; `gain` also offers `master` |
 | `track` | Track types, installed plugins, patch names, sample packs/samples, and loaded effect indexes for `fx clear` |
-| `info` / `get` / `set` | Plugin targets and actual loaded effect indexes |
+| `show` / `get` / `set` | View or plugin targets and actual loaded effect indexes |
 | `get` / `set` parameter names | Cached visible parameters, excluding MIDI CC helpers |
 | `set` value | Boolean literals and enum choices, quoted when necessary |
 | `save` / `load` | Saved session names from the daemon's sessions directory |
@@ -289,9 +291,9 @@ hardware or empty plugin/effect lists may also yield no choices.
 | `set <track> <name> <value>` | Set instrument parameter |
 | `set <track> fx <fx_index> <name> <value>` | Set track-effect parameter |
 | `set master <fx_index> <name> <value>` | Set master-effect parameter; explicit index required |
-| `info <track>` | Show plugin metadata (vendor, category, version, latency, param count) |
-| `info <track> fx <fx_index>` | Show metadata for a track effect |
-| `info master [fx_index]` | Show metadata for a master bus effect |
+| `show <track>` | Show track state and full cached instrument metadata |
+| `show <track> fx <fx_index>` | Show full metadata for a track effect; explicit 1-based index required |
+| `show master fx <fx_index>` | Show full metadata for a master bus effect; explicit 1-based index required |
 
 VST names and paths may contain spaces: `track 1 vst Acid V` loads the plugin
 named `Acid V` and uses that name as the track label. Quotes are also supported.
@@ -335,7 +337,7 @@ slider bars. An empty parameter list prints `  No parameters`.
 `set` waits for the owning process to apply the change between render blocks
 and prints the actual applied value, including plugin clamping. Boolean values
 may use `true`/`false`; quote enum values containing spaces, for example
-`set 1 transpose_semitones "24 semitones"`. `get` and `info`
+`set 1 transpose_semitones "24 semitones"`. `get` and `show`
 read cached snapshots and never call live plugin getters. Track metadata is
 captured at loading, chain edits, and explicit session-state capture, sequentially
 with native rendering in that track's process. Master metadata capture requires
@@ -356,7 +358,7 @@ display filter; MIDI CC input and underlying parameter access are unchanged.
 | `gain master [value]` | Get or set master gain |
 | `mute <track>` | Toggle track mute |
 | `solo <track>` | Toggle track solo |
-| `flow [all\|midi\|controls\|audio\|1-8\|master\|explore]` | Inspect routing, mapped controls, and output; see visualization commands |
+| `show [all\|midi\|controls\|audio\|1-8\|master\|explore]` | Inspect routing, mapped controls, output, and plugin metadata; see visualization commands |
 
 ### Audio Commands
 
@@ -388,7 +390,7 @@ device metadata, including CoreAudio devices on macOS.
 `audio start` without an argument uses PortAudio's default output. After a
 successful start, vcpi prints the opened entry as `[index] name` with its
 backend. The same index/name appears in `status`, `audio diagnose`, and the
-`flow` output views; `audio devices` marks it `[active]`. Once stopped, the
+`show` output views; `audio devices` marks it `[active]`. Once stopped, the
 cached identity is retained as the last-opened device, not an active stream.
 The identity changes only after a replacement stream starts successfully.
 
@@ -741,29 +743,36 @@ before unlinking orphaned shared semaphore resources.
 
 ### Visualization Commands
 
-The `flow` and `info` commands use cached control-side
+The `show` command uses cached control-side
 metadata from the native JUCE VST3 host. Parameter inspection uses `get`,
 described under [Plugin Commands](#plugin-commands). Numeric parameters retain
 display values and unit-qualified names (kHz displays use Hz values).
 Text choices and boolean switches are inferred at load even when a plugin
 omits VST3 step counts. `raw_value` remains normalized.
 
-**`flow`** shows a routing overview: connected MIDI inputs, MIDI Mix connections,
+**`show`** shows a routing overview: connected MIDI inputs, MIDI Mix connections,
 sequencer clock, all eight instrument/FX chains, track eligibility, master bus,
 and audio output. Focused views expose the details without one oversized table:
+The command is named `show` (formerly `flow`); the old command name is not an alias.
 
 | Command | View |
 |---|---|
-| `flow` | Compact whole-system overview |
-| `flow midi` | Open generic inputs, all 16 channel routes, sequencer bank destinations and patterns |
-| `flow controls` | MIDI Mix CC/note bindings, knob targets, cached values/ranges, and LED feedback connection |
-| `flow audio` | Ordered audio chains, output device/backend, stream format, and output health |
-| `flow 1` … `flow 8` | Track source/path, MIDI and sequencer inputs, inserts, mixer/worker state, and controls |
-| `flow master` | Master effects, gain/control, and output |
-| `flow all` | Every view, including empty tracks and unlinked routes |
-| `flow explore` | Read-only full-screen explorer in the interactive client |
+| `show` | Compact whole-system overview |
+| `show midi` | Open generic inputs, all 16 channel routes, sequencer bank destinations and patterns |
+| `show controls` | MIDI Mix CC/note bindings, knob targets, cached values/ranges, and LED feedback connection |
+| `show audio` | Ordered audio chains, output device/backend, stream format, and output health |
+| `show 1` … `show 8` | Track source/path, MIDI and sequencer inputs, inserts, mixer/worker state, controls, and full cached instrument metadata |
+| `show <track> fx <index>` | Full cached metadata for the selected track effect |
+| `show master` | Master effects, gain/control, and output |
+| `show master fx <index>` | Full cached metadata for the selected master effect |
+| `show all` | Every view, including empty tracks, unlinked routes, and loaded track/master effect metadata sections |
+| `show explore` | Read-only full-screen explorer in the interactive client |
 
-Inside `flow explore`:
+Effect metadata views require an explicit 1-based index. `show master` remains
+the master routing/mixer/output view; it does not select an effect implicitly.
+Loaded effect sections also appear in the explorer's view cycle.
+
+Inside `show explore`:
 
 - Left/Right or Tab/Shift-Tab cycle through views.
 - `o`, `m`, `c`, `a` jump to overview, MIDI, controls, or audio.
@@ -774,7 +783,7 @@ Inside `flow explore`:
 - `q`, Escape, Ctrl-C, or Ctrl-D return to the command prompt.
 
 Tables wrap to the terminal width. Redirected input/output uses plain-text
-tables; `flow explore` explains the interactive-client requirement instead of
+tables; `show explore` explains the interactive-client requirement instead of
 blocking the daemon.
 
 In colour-capable terminals, state words use **green** for on/true, active,
@@ -802,35 +811,18 @@ changes. They show cached applied values and routing eligibility, **not live
 meters or proof of audible sound**. Link tempo is the cached configured tempo,
 not a fresh peer-tempo reading. There is no external audio-input path.
 
-**`info`** shows plugin metadata:
+`show <track>` combines existing routing, mixer, worker, and control state with
+the instrument's cached name, path, vendor, version, category, type, ID, latency,
+description, and parameter counts (total, automatable, boolean, and discrete).
+Effect views expose the same full cached plugin metadata for the selected effect:
 
 ```text
-vcpi> info 1
-+-----------------------------------------------+
-|                Track 1: Dexed                 |
-|                                               |
-| Name          : Dexed                         |
-| Vendor        : Digital Suburban              |
-| Category      : Instrument|Synth              |
-| Version       : 0.9.6                         |
-| Type          : Instrument                    |
-| Path          : /home/pi/vcpi/vst3/Dexed.vst3 |
-| Latency       : 0 samples                     |
-|                                               |
-| Parameters    : 24                            |
-|   automatable : 24                            |
-|   boolean     : 2                             |
-|   discrete    : 5                             |
-+-----------------------------------------------+
+show 1             # track 1 state and instrument metadata
+show 1 fx 1        # track 1, first effect metadata
+show master fx 1   # first master bus effect metadata
 ```
 
-`info` supports track instruments, per-track effects, and master bus effects:
-
-```text
-info 1            # track 1 instrument
-info 1 fx 1       # track 1, first effect
-info master 1     # first master bus effect
-```
+Metadata inspection is part of `show`; there is no `info` command or alias.
 
 To inspect the corresponding parameters, use `get`:
 

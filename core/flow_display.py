@@ -110,7 +110,7 @@ def display_flow(console: Console, snapshot: dict, view: str = "overview") -> No
         if view == "all" or section["id"] == section_id
     ]
     if not sections:
-        raise ValueError(f"Unknown flow section: {view}")
+        raise ValueError(f"No loaded show target: {view}")
     console.print(Text(snapshot["title"], style="bold cyan"))
     for section in sections:
         console.print(_section_table(section, console.width))

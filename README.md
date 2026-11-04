@@ -180,10 +180,10 @@ supports them. Free-form numeric values are left for you to enter.
 
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
-`info` display tables. `flow` adds routing, mapped-control, and audio-output tables;
-`flow explore` opens a read-only full-screen explorer with track/master drill-downs,
-scrolling, and manual refresh. `get` includes parameter values, units, ranges,
-and choices without slider bars.
+`show` display tables. `show` combines routing, mapped controls, audio output,
+and cached plugin metadata; `show explore` opens a read-only full-screen explorer
+with track/master/effect views, scrolling, and manual refresh. `get` includes
+parameter values, units, ranges, and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
 table; use `help <command>` for detailed syntax.
 Piped input/output remains plain text. `./vcpi` and `./vcpid` install dependencies
@@ -202,7 +202,7 @@ audio devices
 audio start
 tempo 120
 status
-flow
+show
 ```
 
 Replace `<index>` with a port index and `<ch>` with the hardware's MIDI channel
@@ -234,10 +234,15 @@ with `  (range low .. high)` or `  (choices choice1, choice2)` on the same line.
 An empty parameter list prints `  No parameters`; an unknown name is an error.
 JUCE-generated `MIDI CC <channel>|<controller>` helpers are hidden, while
 ordinary controls, including non-automatable ones, remain visible.
-`get` and `info` read cached metadata rather than calling live plugin getters;
+`get` and `show` read cached metadata rather than calling live plugin getters;
 plugin-side changes can remain stale until a full capture. `set` waits for
 the owning process and reports the actual applied value, including clamping.
 See [USAGE.md](USAGE.md#plugin-commands) for capture details and parameter examples.
+
+`show <track>` includes instrument vendor, version, category, type, ID, latency,
+description, and parameter counts alongside routing, mixer, and worker state.
+Use `show <track> fx <index>` or `show master fx <index>` for full effect metadata;
+both require an explicit 1-based effect index.
 
 ### Finding MIDI port indexes
 
@@ -434,11 +439,12 @@ vcpi> audio start
 vcpi> ableton link 120
 vcpi> status
 
-vcpi> flow              # signal flow: all tracks, FX chains, master bus
-vcpi> flow explore      # navigate MIDI, controls, audio, tracks, and master
-vcpi> flow controls     # exact MIDI Mix bindings and cached parameter targets
-vcpi> info 1            # plugin metadata: vendor, category, version, etc.
-vcpi> info 1 fx 1       # info for track 1's first effect
+vcpi> show              # signal flow: all tracks, FX chains, master bus
+vcpi> show explore      # navigate MIDI, controls, audio, tracks, master, and effects
+vcpi> show controls     # exact MIDI Mix bindings and cached parameter targets
+vcpi> show 1            # track state and full cached instrument metadata
+vcpi> show 1 fx 1       # full metadata for track 1's first effect
+vcpi> show master fx 1  # full metadata for the first master effect
 vcpi> get 1             # all visible instrument parameters
 vcpi> get 1 fx 1        # parameters for track 1's first effect
 vcpi> get master 1     # parameters for the first master effect
