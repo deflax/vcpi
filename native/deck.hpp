@@ -24,7 +24,7 @@ struct DeckStatus {
     double bpm = 0, beatOffset = 0, beatConfidence = 0, playbackSpeed = 1, beatPhaseError = 0;
 };
 
-// Readers, filters and ring storage belong to this object until its worker joins.
+// Readers and ring storage belong to this object until its worker joins.
 // render() neither owns nor releases dynamically allocated resources.
 // Callers serialize control operations with each other; Plugin uses a control
 // mutex. Render-state mutations use its short ownership guard. Catalog edits
@@ -46,7 +46,7 @@ public:
     const std::string& bankPath() const noexcept { return locator; }
 private:
     static constexpr std::size_t capacity = 262144, mirror = 512;
-    static constexpr int decodeFrames = 4096, filterStages = 8, history = 200, preRoll = 2048;
+    static constexpr int decodeFrames = 4096, history = 200;
     enum State { free, preparing, ready, held, active, retired };
     enum Mode { selection, seek, recall, restore };
     struct BeatGrid { double bpm = 0, offset = 0, confidence = 0; bool analyzed = false; };
@@ -59,13 +59,11 @@ private:
         Request request;
         std::unique_ptr<juce::AudioFormatReader> reader;
         std::array<std::vector<float>, 2> ring;
-        std::array<std::array<juce::IIRFilter, filterStages>, 2> filters;
         std::array<juce::WindowedSincInterpolator, 2> sinc;
         std::atomic<std::uint64_t> read{0}, written{0};
         double rate = 0, target = 0;
         BeatGrid grid;
         juce::int64 length = 0, nextSource = 0;
-        int discard = 0;
         std::atomic<bool> failed{false};
     };
     void request(int track, double seconds, Mode mode);

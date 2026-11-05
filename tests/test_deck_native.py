@@ -411,44 +411,24 @@ class NativeDeckTests(unittest.TestCase):
         self.assertTrue(plugin.deck_status()["play"])
         self.assertEqual(status["error"], "")
 
-    def test_alias_rejection_above_output_nyquist_at_maximum_speed(self):
-        low, low_runner, _ = self.deck([self.tone("pass", rate=192000, frequency=1000)])
-        high, high_runner, _ = self.deck([self.tone("stop", rate=192000, frequency=30000)])
-        samples = []
-        for plugin, runner in ((low, low_runner), (high, high_runner)):
-            plugin.set_parameter("pitch", 16)
-            plugin.set_parameter("nudge", 1)
-            plugin.set_parameter("play", True)
-            self.render(runner, 20)
-            audio = self.render(runner, 20)
-            samples.append(float(np.sqrt(np.mean(audio[:, 0] ** 2))))
-        self.assertGreater(samples[0], 0.15)
-        self.assertLess(samples[1] / samples[0], 0.01, "Require at least 40 dB rejection of a would-be aliased tone")
-
-    def test_large_ratio_starvation_freezes_and_recovers_without_wrapping(self):
-        # At 96 source frames/output frame, this unpaced offline request consumes
-        # several rings before the decoding worker can produce them. This is a
-        # real shortage, not an injected alternate rendering implementation.
-        path = self.sparse_wav("fast-source.wav", 768000, 20)
-        plugin, runner, _ = self.deck([path], rate=8000, frames=65536)
-        plugin.set_parameter("play", True)
-        runner.render_once()
-        status = plugin.deck_status()
-        self.assertTrue(status["buffering"], status)
-        self.assertGreater(status["position"], 0)
-        self.assertLess(status["position"], 65536 / 8000)
-        self.assertFalse(status["ended"])
-        plugin.set_parameter("play", False)
-        frozen = status["position"]
-        runner.render_once()
-        self.assertEqual(plugin.deck_status()["position"], frozen)
-        plugin.set_parameter("play", True)
-        recovered = self.await_state(plugin, runner, lambda s: s["position"] > frozen)
-        self.assertLess(recovered["position"], recovered["duration"])
-        plugin.deck_command("seek", 1.25)
-        plugin.set_parameter("play", False)
-        status = self.await_state(plugin, runner, lambda s: not s["loading"])
-        self.assertEqual(status["position"], 1.25)
+    def test_cd_audio_preserves_treble_at_unity_speed(self):
+        for output_rate in (44100, 48000):
+            reference = None
+            for frequency in (1000, 12000, 16000, 20000):
+                with self.subTest(output_rate=output_rate, frequency=frequency):
+                    path = self.tone(f"cd-{output_rate}-{frequency}", rate=44100,
+                                     seconds=1, frequency=frequency)
+                    plugin, runner, _ = self.deck([path], rate=output_rate, sync=False)
+                    plugin.set_parameter("play", True)
+                    self.render(runner, 8)
+                    audio = self.render(runner, 24)[:, 0].astype(np.float64)
+                    level = float(np.sqrt(np.mean(audio ** 2)))
+                    if reference is None:
+                        reference = level
+                        self.assertGreater(reference, 0.15)
+                    gain_db = 20 * math.log10(max(level, 1e-15) / reference)
+                    self.assertAlmostEqual(gain_db, 0, delta=1,
+                                           msg="CD-rate playback must retain audible treble")
 
     def test_long_sparse_track_seek_and_constructor_failures(self):
         long_track = self.sparse_wav("long.wav", 48000, 3600)

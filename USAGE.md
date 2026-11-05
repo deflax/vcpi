@@ -514,7 +514,13 @@ Supported audio is mono (duplicated to stereo) or stereo AIFF (`.aif`, `.aiff`,
 MP3 and FLAC, at source rates from 8 kHz to 768 kHz. Other formats and multichannel
 layouts are rejected. Decoding uses native JUCE readers; FFmpeg is not a runtime
 dependency. Audio is streamed through bounded read-ahead storage and retained
-sinc resampling with an anti-alias prefilter, not loaded in full for playback.
+sinc interpolation, not loaded in full for playback. Decks do not apply an
+additional fixed low-pass prefilter: playback prioritizes preserving source
+bandwidth rather than cutting treble for the maximum possible speed. Speeding
+up audio or converting to a lower output sample rate can therefore introduce
+aliasing; the sinc interpolator is not a ratio-adaptive anti-alias filter.
+For original-speed playback, use `set <track> sync false`, `set <track> pitch 0`
+and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 
 | Command | Behaviour |
 |---|---|

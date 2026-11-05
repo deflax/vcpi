@@ -11,7 +11,6 @@
 namespace vcpi {
 namespace {
 constexpr double minimumSyncSpeed = 0.5, maximumSyncSpeed = 2.0;
-constexpr double maximumSpeed = maximumSyncSpeed * 1.08;
 double monotonicSeconds() noexcept {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -189,7 +188,7 @@ bool Deck::fill(Stream& stream) {
     if (available < decodeFrames) return false;
     // A short, zero-padded tail supplies the sinc look-ahead. EOF is determined
     // by the logical source cursor, never by read-ahead exhaustion.
-    if (stream.nextSource > stream.length + decodeFrames && stream.discard == 0) return false;
+    if (stream.nextSource > stream.length + decodeFrames) return false;
     decode.clear();
     const auto begin = std::max<juce::int64>(0, stream.nextSource);
     const auto end = std::min<juce::int64>(stream.length, stream.nextSource + decodeFrames);
@@ -203,16 +202,11 @@ bool Deck::fill(Stream& stream) {
     stream.nextSource += decodeFrames;
     auto next = written;
     for (int frame = 0; frame < decodeFrames; ++frame) {
-        float values[2];
-        for (int channel = 0; channel < 2; ++channel) {
-            values[channel] = decode.getSample(channel, frame);
-            for (auto& filter : stream.filters[channel]) values[channel] = filter.processSingleSampleRaw(values[channel]);
-        }
-        if (stream.discard > 0) { --stream.discard; continue; }
         const auto index = static_cast<std::size_t>(next) & (capacity - 1);
         for (int channel = 0; channel < 2; ++channel) {
-            stream.ring[channel][index] = values[channel];
-            if (index < mirror) stream.ring[channel][capacity + index] = values[channel];
+            const auto value = decode.getSample(channel, frame);
+            stream.ring[channel][index] = value;
+            if (index < mirror) stream.ring[channel][capacity + index] = value;
         }
         ++next;
     }
@@ -356,19 +350,7 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
     stream.grid = grid;
     stream.target = std::clamp(wanted.seconds * stream.rate, 0.0, static_cast<double>(stream.length));
     const auto targetFrame = static_cast<juce::int64>(std::floor(stream.target));
-    stream.nextSource = targetFrame - history / 2 - preRoll;
-    stream.discard = preRoll;
-    // WindowedSincInterpolator has a fixed source-rate cutoff. A retained
-    // Butterworth prefilter supplies anti-aliasing at every supported sync speed.
-    // It is deliberately conservative, independent of live speed, and runs on
-    // decoded source samples on the worker, not on the real-time thread.
-    const auto cutoff = std::min(stream.rate * 0.45, outputRate * 0.40 / maximumSpeed);
-    for (auto& channel : stream.filters)
-        for (int stage = 0; stage < filterStages; ++stage) {
-            const auto q = 1.0 / (2.0 * std::cos(juce::MathConstants<double>::pi * (2 * stage + 1) / (4 * filterStages)));
-            channel[stage].setCoefficients(juce::IIRCoefficients::makeLowPass(stream.rate, cutoff, q));
-            channel[stage].reset();
-        }
+    stream.nextSource = targetFrame - history / 2;
     const auto goal = static_cast<std::uint64_t>(std::clamp(stream.rate * 0.25, 8192.0, static_cast<double>(capacity / 2)));
     while (stream.written.load() < goal) {
         if (cancelled(wanted.id)) return false;
