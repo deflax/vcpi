@@ -550,14 +550,48 @@ to zero after nudging. Remaining controls are `play`, `pitch` and `sync`.
 for transport diagnostics and the indexed playlist. Empty `error` or `sync_error`
 fields in status are normal when no error is present.
 
-Automatic analysis scans at most the first 60 seconds of the selected file,
-off the render thread, and caches the result while the playlist is open. It targets
-steady 60–200 BPM material with at least eight usable transients. Status reports
-`bpm`, `beat_offset` (source seconds modulo a beat), `beat_confidence` (0–1),
-`sync`, `sync_active`, `sync_error`, `playback_speed` and `beat_phase_error`
-(signed beats, wrapped to ±0.5). A long beatless intro, ambiguous rhythm or
-variable-tempo recording may not yield a reliable constant grid. Unreliable
-analysis reports `No reliable beat grid` and leaves playback manual.
+Queen Mary DSP analyzes the entire selected file off the render thread, using
+complex-domain spectral onset detection and tempo tracking. vcpi fits a constant
+tempo and phase from supported stable beat regions; the old energy-envelope
+detectors are no longer used. Analysis normalizes its private input to 22.05 kHz
+with a 512-frame FFT and 256-frame hop; this never resamples or filters the
+playback signal. Source audio is decoded in chunks, not retained in full.
+
+An uncached load waits for analysis and read-ahead preparation before becoming
+ready. During selection, existing audio remains usable while the new file is
+analyzed. The fitted range is 60–200 BPM and requires at least 16 supported
+stable beats. A beatless intro can be followed by a usable region later in the
+file. Variable tempo, short clips or ambiguous rhythms may still lack a reliable
+constant grid; half/double-tempo ambiguity is not universally resolvable.
+
+Status reports `bpm`, `beat_offset` (source seconds modulo a beat),
+`beat_confidence` (0–1), `sync`, `sync_active`, `sync_error`, `playback_speed` and
+`beat_phase_error` (signed beats, wrapped to ±0.5). Confidence measures agreement
+and phase residual among accepted stable regions, not a probability or the
+fraction of the entire song with beats. Unreliable analysis reports
+`No reliable beat grid` and leaves playback manual.
+
+Analysis is cached persistently as small per-file JSON records:
+
+| Platform / setting | Cache directory |
+|---|---|
+| Absolute `XDG_CACHE_HOME` set | `$XDG_CACHE_HOME/vcpi/analysis/` |
+| Linux default | `~/.cache/vcpi/analysis/` |
+| macOS default | `~/Library/Caches/vcpi/analysis/` |
+
+The same audio file shares its result across decks, playlists, session restores
+and daemon restarts. Identity includes the canonical path, file size, device and
+inode, high-resolution modification/change times, and analyzer/grid version.
+Changed files or analyzer versions invalidate the entry; moving a file to a new
+canonical path requires fresh analysis. No-grid results are cached too.
+
+The cache is separate from sessions and music folders. Missing, malformed or
+stale records are recomputed; unavailable/unwritable storage does not prevent
+loading. Writes are atomic across concurrent deck processes. To force fresh
+analysis, stop the daemon, delete the applicable analysis cache directory, then
+restart and reload the session. Deleting the cache never deletes music or
+playlist data. Set `XDG_CACHE_HOME` before starting the daemon to choose a
+different cache root; relative values are ignored.
 
 Set the target with `tempo 128`; enable Link normally to follow its shared
 timeline instead. Local tempo changes preserve beat continuity. Sync matches

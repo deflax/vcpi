@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <future>
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
@@ -99,8 +100,12 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
     stopping.store(true, std::memory_order_release);
     if (worker.joinable()) worker.join();
     // The beat cache is worker-owned until the join, unlike immutable IDs/paths.
-    for (std::size_t i = 0; i < tracks.size(); ++i)
-        if (remap[i] != 0) replacement.tracks[static_cast<std::size_t>(remap[i] - 1)].grid = tracks[i].grid;
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        if (remap[i] == 0) continue;
+        auto& replacementTrack = replacement.tracks[static_cast<std::size_t>(remap[i] - 1)];
+        replacementTrack.grid = tracks[i].grid;
+        replacementTrack.gridSource = tracks[i].gridSource;
+    }
     int oldTrack, newTrack, prepared = -1;
     std::uint64_t id;
     {
@@ -213,26 +218,15 @@ bool Deck::fill(Stream& stream) {
     stream.written.store(next, std::memory_order_release);
     return true;
 }
-bool Deck::analyze(Stream& stream, BeatGrid& grid) {
-    // Bounded 60-second onset-envelope scan; only the preparation thread touches
-    // the per-catalog cache. Published streams carry an immutable grid copy.
-    constexpr double envelopeRate = 200.0;
-    const int hop = std::max(1, static_cast<int>(std::lround(stream.rate / envelopeRate)));
-    const double step = hop / stream.rate;
-    const auto length = std::min(stream.length, static_cast<juce::int64>(stream.rate * 60));
-    std::vector<double> envelope(static_cast<std::size_t>((length + hop - 1) / hop), 0);
-    juce::AudioBuffer<float> audio(2, decodeFrames);
-    for (juce::int64 start = 0; start < length; start += decodeFrames) {
-        if (cancelled(stream.request.id)) return false;
-        const auto count = static_cast<int>(std::min<juce::int64>(decodeFrames, length - start));
-        audio.clear();
-        if (!stream.reader->read(&audio, 0, count, start, true, true))
-            throw std::runtime_error("Failed reading deck beat analysis");
-        for (int frame = 0; frame < count; ++frame) {
-            const double a = audio.getSample(0, frame), b = audio.getSample(1, frame);
-            envelope[static_cast<std::size_t>((start + frame) / hop)] += a * a + b * b;
-        }
-        // Selection analysis must not starve the still-playing old stream.
+bool Deck::analyze(Stream& stream, BeatAnalysis& grid) {
+    // QM's dynamic programs do not accept callbacks. Keep them on a preparation
+    // task while this thread continues feeding the active stream. Bounded tracker
+    // windows check cancellation between expensive stages; no detached work can
+    // retain a reader or Deck after a selection change or destruction.
+    std::atomic<bool> cancel{false};
+    auto result = std::async(std::launch::async, [&] { return analyzeBeats(*stream.reader, cancel); });
+    while (result.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
+        if (cancelled(stream.request.id)) cancel.store(true, std::memory_order_relaxed);
         for (auto& other : streams) {
             if (&other == &stream || other.state.load(std::memory_order_acquire) != active) continue;
             try { fill(other); }
@@ -242,83 +236,8 @@ bool Deck::analyze(Stream& stream, BeatGrid& grid) {
             }
         }
     }
-    BeatGrid result;
-    result.analyzed = true;
-    double peak = 0, previous = 0;
-    for (auto& energy : envelope) {
-        const auto level = std::sqrt(energy / hop);
-        energy = std::max(0.0, level - previous);
-        previous = level;
-        peak = std::max(peak, energy);
-    }
-    if (peak < 0.0001) { grid = result; return true; }
-    // Pick the first transient edge, not the decaying waveform's individual
-    // cycles. Local contrast rejects sustained tones and unstructured noise.
-    std::vector<double> onsets;
-    for (std::size_t i = 0; i < envelope.size(); ++i) {
-        if ((i & 1023) == 0 && cancelled(stream.request.id)) return false;
-        double background = 0;
-        const auto begin = i > 40 ? i - 40 : 0;
-        for (auto j = begin; j < i; ++j) background += envelope[j];
-        background /= std::max<std::size_t>(1, i - begin);
-        if (envelope[i] < peak * 0.12 || envelope[i] < background * 3 ||
-            (i > 0 && envelope[i] < envelope[i - 1]) ||
-            (i + 1 < envelope.size() && envelope[i] < envelope[i + 1])) continue;
-        const double time = i * step;
-        if (onsets.empty() || time - onsets.back() >= 0.18) onsets.push_back(time);
-    }
-    if (onsets.size() < 8) { grid = result; return true; }
-    // Evaluate candidate periods against actual transient pairs, allowing a
-    // missed beat. Strongest fundamental wins over its half-tempo multiple.
-    double bestPeriod = 0, bestScore = 0;
-    for (double period = 60.0 / 200; period <= 60.0 / 60 + step * 0.25; period += step) {
-        if (cancelled(stream.request.id)) return false;
-        double score = 0;
-        for (std::size_t i = 1; i < onsets.size(); ++i) {
-            const auto distance = (onsets[i] - onsets[i - 1]) / period;
-            const auto beats = std::round(distance);
-            if (beats < 1 || beats > 4) continue;
-            const auto error = std::abs(distance - beats) * period;
-            score += std::max(0.0, 1.0 - error / (2.5 * step)) / beats;
-        }
-        score /= onsets.size() - 1;
-        if (score > bestScore) { bestScore = score; bestPeriod = period; }
-    }
-    if (bestScore < 0.65) { grid = result; return true; }
-    double intervalSum = 0, beatSum = 0;
-    for (std::size_t i = 1; i < onsets.size(); ++i) {
-        const auto interval = onsets[i] - onsets[i - 1];
-        const auto beats = std::round(interval / bestPeriod);
-        if (beats >= 1 && beats <= 4 && std::abs(interval - beats * bestPeriod) < 2.5 * step) {
-            intervalSum += interval;
-            beatSum += beats;
-        }
-    }
-    bestPeriod = intervalSum / beatSum;
-    // Fit the grid over the whole scan, eliminating hop-size tempo drift.
-    double sumX = 0, sumY = 0, sumXX = 0, sumXY = 0, count = 0;
-    for (const auto time : onsets) {
-        const auto beat = std::round((time - onsets.front()) / bestPeriod);
-        if (std::abs(time - onsets.front() - beat * bestPeriod) > bestPeriod * 0.12) continue;
-        sumX += beat; sumY += time; sumXX += beat * beat; sumXY += beat * time; ++count;
-    }
-    const auto denominator = count * sumXX - sumX * sumX;
-    if (count < 8 || count < onsets.size() * 0.65 || denominator <= 0) { grid = result; return true; }
-    const auto period = (count * sumXY - sumX * sumY) / denominator;
-    const auto offset = (sumY - period * sumX) / count;
-    if (period < 60.0 / 201 || period > 60.0 / 59) { grid = result; return true; }
-    std::size_t matched = 0;
-    for (const auto time : onsets)
-        if (std::abs(std::remainder(time - offset, period)) < std::max(0.015, period * 0.06)) ++matched;
-    const double confidence = static_cast<double>(matched) / onsets.size();
-    if (confidence >= 0.75) {
-        result.bpm = 60 / period;
-        result.offset = std::fmod(std::fmod(offset, period) + period, period);
-        result.confidence = confidence * bestScore;
-    }
-    if (cancelled(stream.request.id)) return false;
-    grid = result;
-    return true;
+    grid = result.get();
+    return !cancelled(stream.request.id);
 }
 void Deck::publishGrid(const Stream& stream) noexcept {
     detectedBpm.store(stream.grid.bpm, std::memory_order_relaxed);
@@ -337,6 +256,9 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
         throw std::invalid_argument("Deck supports AIFF, WAV, MP3 and FLAC files");
     if (!std::filesystem::is_regular_file(file.getFullPathName().toStdString()))
         throw std::invalid_argument("Deck audio must be a regular file");
+    // Capture identity for every preparation, even seeks. In-memory reuse is
+    // valid only for exactly the source revision that produced the cached grid.
+    auto source = std::make_shared<BeatAnalysisCache>(track.path);
     stream.reader.reset(formats.createReaderFor(file));
     if (!stream.reader) throw std::runtime_error("Unable to decode deck audio: " + file.getFullPathName().toStdString());
     if (stream.reader->numChannels < 1 || stream.reader->numChannels > 2)
@@ -345,9 +267,18 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
     stream.length = stream.reader->lengthInSamples;
     if (!std::isfinite(stream.rate) || stream.rate < 8000 || stream.rate > 768000 || stream.length <= 0)
         throw std::invalid_argument("Invalid deck audio rate or empty audio");
-    auto& grid = track.grid;
-    if (!grid.analyzed && !analyze(stream, grid)) return false;
-    stream.grid = grid;
+    if (!track.grid || !track.gridSource || !source->matches(*track.gridSource)) {
+        auto grid = source->load();
+        if (!grid) {
+            BeatAnalysis analyzed;
+            if (!analyze(stream, analyzed)) return false;
+            source->store(analyzed);
+            grid = analyzed;
+        }
+        track.grid = grid;
+        track.gridSource = std::move(source);
+    }
+    stream.grid = *track.grid;
     stream.target = std::clamp(wanted.seconds * stream.rate, 0.0, static_cast<double>(stream.length));
     const auto targetFrame = static_cast<juce::int64>(std::floor(stream.target));
     stream.nextSource = targetFrame - history / 2;

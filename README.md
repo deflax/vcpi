@@ -8,8 +8,8 @@ Arturia BeatStep Pro + Akai MIDI Mix).
 
 Linux and macOS are supported. Install the native build prerequisites before
 starting the daemon. The first build requires network access to download pinned
-JUCE, pybind11, and PortAudio sources, plus Git, CMake 3.22+, a C++17 compiler,
-and Python development headers.
+JUCE, pybind11, PortAudio and Queen Mary DSP sources, plus Git, CMake 3.22+, a
+C++17 compiler, and Python development headers.
 
 On Debian/Ubuntu:
 
@@ -114,14 +114,21 @@ for save/restore behavior and legacy session compatibility.
 
 Native decks stream mono/stereo AIFF, WAV, MP3 and FLAC tracks from session-owned
 playlists. Load an audio file with `track 1 deck song.wav`; repeat with another
-file to append, or use `track 1 deck remove <index>` to remove a song. Automatic
-beat detection supplies a tempo and beat grid; decks follow global tempo and
-beat phase by default, or Ableton Link when enabled. Each has play/pause,
+file to append, or use `track 1 deck remove <index>` to remove a song. Queen Mary
+DSP analyzes the whole selected file for tempo and a stable beat grid; decks
+follow global tempo and beat phase by default, or Ableton Link when enabled.
+Each has play/pause,
 vinyl-style speed/pitch, momentary nudge, seek and one cue point. The first three
 parameters—track selection, seek and nudge—map automatically to MIDI Mix knobs.
 Use `set 1 sync false` for manual beatmatching. See
 [deck commands and MIDI bindings](USAGE.md#deck-commands) for playlist editing,
 analysis limits and controls. There is no key lock, looping or crossfader.
+
+Beat analysis is cached across loads and daemon restarts. On Linux the default
+is `~/.cache/vcpi/analysis/`; an absolute `XDG_CACHE_HOME` overrides the cache root.
+macOS defaults to `~/Library/Caches/vcpi/analysis/`. File identity and analyzer
+version changes invalidate cached results. The cache contains analysis metadata,
+not audio or session playlists; see [deck commands](USAGE.md#deck-commands).
 
 ## Repository Layout
 
@@ -470,8 +477,9 @@ changing its selected song. Select playlist entries with `set 1 track_select 2`;
 selection is asynchronous and commits paused without
 replacing the worker or inserts. Inspect `track 1 deck status` for requested
 versus applied identity, detected BPM, confidence, sync state and errors.
-Automatic analysis targets steady 60–200 BPM material; uncertain grids remain
-manual rather than guessing. Hardware-free Linux rendering and daemon command
+Automatic Queen Mary analysis fits stable 60–200 BPM regions across the whole
+track and persists results; uncertain grids remain manual rather than guessing.
+Hardware-free Linux rendering and daemon command
 coverage do not replace audible Linux/macOS acceptance or intended-Pi
 read-ahead/deadline measurements before live use.
 
@@ -582,8 +590,10 @@ vcpi is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0),
 including the native JUCE 8 audio engine. See [LICENSE](LICENSE) for the full text.
 
 The native engine uses JUCE 8.0.6 under AGPL-3.0, pybind11 under BSD-3-Clause,
-and PortAudio under its permissive license. Third-party licenses and copyright
-notices remain unchanged; `aalink` retains its GPL-3.0 license. Separately installed
+PortAudio under its permissive license, and [Queen Mary DSP](https://github.com/c4dm/qm-dsp)
+under GPL-2.0-or-later (pinned to `e34a3cc188332ed7c33cd9257ef164de5b587191`).
+Queen Mary DSP's original notices and its bundled KissFFT license are retained in
+the fetched sources; `aalink` retains its GPL-3.0 license. Separately installed
 VST3 plugins retain their respective licenses. GPLv3 text is retained in
 [LICENSE.GPL-3.0](LICENSE.GPL-3.0).
 

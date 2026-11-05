@@ -54,12 +54,30 @@ FetchContent_Declare(portaudio GIT_REPOSITORY https://github.com/PortAudio/porta
 # Only consume JUCE module sources: no juceaide, application, editor, or plugin binaries.
 # JUCE 8 includes the ScreenCaptureKit fix for current macOS deployment targets.
 FetchContent_Declare(juce GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 8.0.6 GIT_SHALLOW TRUE GIT_SUBMODULES "" SOURCE_SUBDIR vcpi-unused)
+# Official Queen Mary DSP (GPL-2.0-or-later), pinned to an immutable revision.
+# Consume only the onset/tempo implementation and its bundled KissFFT backend.
+FetchContent_Declare(qm_dsp GIT_REPOSITORY https://github.com/c4dm/qm-dsp.git
+    GIT_TAG e34a3cc188332ed7c33cd9257ef164de5b587191 GIT_SUBMODULES "" SOURCE_SUBDIR vcpi-unused)
 set(PA_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(PA_BUILD_STATIC ON CACHE BOOL "" FORCE)
 set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(PA_USE_JACK OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(pybind11 portaudio juce)
+FetchContent_MakeAvailable(pybind11 portaudio juce qm_dsp)
+
+add_library(vcpi_qm_dsp STATIC
+    "${qm_dsp_SOURCE_DIR}/dsp/onsets/DetectionFunction.cpp"
+    "${qm_dsp_SOURCE_DIR}/dsp/phasevocoder/PhaseVocoder.cpp"
+    "${qm_dsp_SOURCE_DIR}/dsp/transforms/FFT.cpp"
+    "${qm_dsp_SOURCE_DIR}/dsp/tempotracking/TempoTrackV2.cpp"
+    "${qm_dsp_SOURCE_DIR}/maths/MathUtilities.cpp"
+    "${qm_dsp_SOURCE_DIR}/ext/kissfft/kiss_fft.c"
+    "${qm_dsp_SOURCE_DIR}/ext/kissfft/tools/kiss_fftr.c")
+target_include_directories(vcpi_qm_dsp PUBLIC "${qm_dsp_SOURCE_DIR}"
+    PRIVATE "${qm_dsp_SOURCE_DIR}/ext/kissfft" "${qm_dsp_SOURCE_DIR}/ext/kissfft/tools")
+target_compile_definitions(vcpi_qm_dsp PRIVATE kiss_fft_scalar=double)
+set_target_properties(vcpi_qm_dsp PROPERTIES C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 
 set(juce_sources)
 foreach(module IN ITEMS juce_core juce_events juce_data_structures juce_graphics juce_gui_basics juce_gui_extra juce_audio_basics juce_audio_formats juce_audio_processors)
@@ -99,8 +117,9 @@ else()
     pkg_check_modules(JUCE_SYSTEM REQUIRED IMPORTED_TARGET freetype2 fontconfig x11 xext)
     target_link_libraries(vcpi_juce PUBLIC PkgConfig::JUCE_SYSTEM)
 endif()
-pybind11_add_module(_vcpi_native NO_EXTRAS bindings.cpp plugin.cpp deck.cpp transport.cpp runtime.cpp)
-target_link_libraries(_vcpi_native PRIVATE vcpi_juce portaudio_static)
+pybind11_add_module(_vcpi_native NO_EXTRAS bindings.cpp plugin.cpp deck.cpp
+    beat_analysis.cpp analysis_cache.cpp transport.cpp runtime.cpp)
+target_link_libraries(_vcpi_native PRIVATE vcpi_juce vcpi_qm_dsp portaudio_static)
 target_include_directories(_vcpi_native PRIVATE "${portaudio_SOURCE_DIR}/include")
 set_target_properties(_vcpi_native PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../core")
 foreach(config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)

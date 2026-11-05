@@ -28,20 +28,21 @@ class NativeDeckSyncTests(unittest.TestCase):
         for runner in self.runners:
             runner.shutdown()
 
-    def percussion(self, name, bpm=120, offset=0.137, seconds=40):
-        audio = np.zeros(int(seconds * self.rate), dtype=np.float64)
+    def percussion(self, name, bpm=120, offset=0.137, seconds=40, rate=None, intro=0):
+        rate = rate or self.rate
+        audio = np.zeros(int(seconds * rate), dtype=np.float64)
         if bpm:
             # A short decaying broadband transient, not a metadata BPM tag.
-            t = np.arange(int(0.025 * self.rate)) / self.rate
+            t = np.arange(int(0.025 * rate)) / rate
             pulse = 0.7 * np.exp(-t * 180) * np.cos(2 * math.pi * 800 * t)
-            for beat in np.arange(offset, seconds - 0.025, 60 / bpm):
-                begin = round(beat * self.rate)
+            for beat in np.arange(intro + offset, seconds - 0.025, 60 / bpm):
+                begin = round(beat * rate)
                 audio[begin:begin + len(pulse)] += pulse
         path = self.root / f"{name}.wav"
         with wave.open(str(path), "wb") as output:
             output.setnchannels(1)
             output.setsampwidth(2)
-            output.setframerate(self.rate)
+            output.setframerate(rate)
             output.writeframes((audio * 32767).astype("<i2").tobytes())
         return path
 
@@ -93,12 +94,99 @@ class NativeDeckSyncTests(unittest.TestCase):
                 plugin, _ = self.deck([self.percussion(str(bpm), bpm, offset)])
                 status = plugin.deck_status()
                 self.assertAlmostEqual(status["bpm"], bpm, delta=0.15)
-                self.assertLess(abs(math.remainder(status["beat_offset"] - offset, 60 / bpm)), 0.008)
+                # QM novelty advances at 11.6 ms; the constant fit removes tempo
+                # drift, but instrument-dependent onset phase retains that scale.
+                self.assertLess(abs(math.remainder(status["beat_offset"] - offset, 60 / bpm)), 0.015)
                 self.assertGreater(status["beat_confidence"], 0.65)
                 self.assertTrue(status["sync"])
                 self.assertFalse(status["sync_active"])
                 self.assertFalse(status["play"])
                 self.assertEqual(plugin.parameter("sync")["kind"], "bool")
+
+    def test_whole_track_grid_after_seventy_five_second_beatless_intro(self):
+        plugin, _ = self.deck([self.percussion("long-intro", bpm=120, offset=0.137,
+                                               intro=75, seconds=115)])
+        status = plugin.deck_status()
+        self.assertAlmostEqual(status["bpm"], 120, delta=0.15)
+        self.assertLess(abs(math.remainder(status["beat_offset"] - 0.137, 0.5)), 0.015)
+        self.assertGreater(status["beat_confidence"], 0.65)
+        self.assertFalse(status["play"])
+
+    def test_grid_and_rendered_sync_are_independent_of_source_sample_rate(self):
+        decks = []
+        for rate in (16000, 44100, 48000, 96000):
+            deck = self.deck([self.percussion(f"source-{rate}", bpm=123, offset=0.193, rate=rate)])
+            status = deck[0].deck_status()
+            self.assertAlmostEqual(status["bpm"], 123, delta=0.15)
+            self.assertLess(abs(math.remainder(status["beat_offset"] - 0.193, 60 / 123)), 0.015)
+            self.assertGreater(status["beat_confidence"], 0.65)
+            decks.append(deck)
+        self.clock(decks, 120)
+        for plugin, _ in decks:
+            plugin.set_parameter("play", True)
+        self.render(decks, 8)
+        rendered = self.render(decks, 3)
+        reference = self.pulse_times(rendered[0])
+        for (plugin, _), audio in zip(decks[1:], rendered[1:]):
+            status = plugin.deck_status()
+            self.assertTrue(status["sync_active"], status)
+            self.assertAlmostEqual(status["bpm"] * status["playback_speed"], 120, delta=0.3)
+            pulses = self.pulse_times(audio)
+            np.testing.assert_allclose(np.diff(pulses), 0.5, atol=0.012)
+            for pulse in reference[1:-1]:
+                self.assertLess(float(np.min(np.abs(pulses - pulse))), 0.018)
+
+    def test_kick_grid_survives_eighth_note_hats_and_drives_sync(self):
+        for hat_level in (0.1, 0.3, 0.6):
+            with self.subTest(hat_level=hat_level):
+                seconds = 24
+                audio = np.zeros(seconds * self.rate)
+                kick_time = np.arange(int(0.12 * self.rate)) / self.rate
+                kick = 0.45 * np.exp(-kick_time * 35) * np.sin(2 * math.pi * 65 * kick_time)
+                hat_time = np.arange(int(0.04 * self.rate)) / self.rate
+                noise = np.random.default_rng(42).standard_normal(len(hat_time))
+                hat = hat_level * np.r_[noise[0], np.diff(noise)] * np.exp(-hat_time * 150)
+                for spacing, pulse in ((0.5, kick), (0.25, hat)):
+                    for beat in np.arange(0.137, seconds - 0.12, spacing):
+                        start = round(beat * self.rate)
+                        audio[start:start + len(pulse)] += pulse
+                path = self.root / f"kick-hats-{hat_level}.wav"
+                with wave.open(str(path), "wb") as output:
+                    output.setnchannels(1)
+                    output.setsampwidth(2)
+                    output.setframerate(self.rate)
+                    output.writeframes((np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes())
+                deck = self.deck([path])
+                plugin, _ = deck
+                status = plugin.deck_status()
+                self.assertAlmostEqual(status["bpm"], 120, delta=0.15)
+                self.assertGreater(status["beat_confidence"], 0.65)
+                self.assertLess(abs(math.remainder(status["beat_offset"] - 0.137, 0.5)), 0.03)
+                self.clock([deck], 126)
+                plugin.set_parameter("play", True)
+                self.render([deck], 8)
+                status = plugin.deck_status()
+                self.assertTrue(status["sync_active"], status)
+                self.assertEqual(status["sync_error"], "")
+                self.assertAlmostEqual(status["bpm"] * status["playback_speed"], 126, delta=0.3)
+                self.assertLess(abs(status["beat_phase_error"]), 0.015)
+
+    def test_sustained_bass_and_aperiodic_noise_do_not_invent_a_grid(self):
+        time_axis = np.arange(24 * self.rate) / self.rate
+        audio = (0.2 * np.sin(2 * math.pi * 65 * time_axis)
+                 + 0.02 * np.random.default_rng(17).standard_normal(len(time_axis)))
+        path = self.root / "bass-without-beats.wav"
+        with wave.open(str(path), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(self.rate)
+            output.writeframes((audio * 32767).astype("<i2").tobytes())
+        plugin, _ = self.deck([path])
+        status = plugin.deck_status()
+        self.assertEqual(status["bpm"], 0)
+        self.assertEqual(status["beat_confidence"], 0)
+        self.assertFalse(status["sync_active"])
+        self.assertIn("No reliable beat grid", status["sync_error"])
 
     def test_two_different_tempos_converge_in_audio_and_follow_tempo_change(self):
         decks = [self.deck([self.percussion("slow", 90, 0.281)]),

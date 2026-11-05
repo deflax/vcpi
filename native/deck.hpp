@@ -2,6 +2,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "ownership.hpp"
+#include "analysis_cache.hpp"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -49,8 +50,11 @@ private:
     static constexpr int decodeFrames = 4096, history = 200;
     enum State { free, preparing, ready, held, active, retired };
     enum Mode { selection, seek, recall, restore };
-    struct BeatGrid { double bpm = 0, offset = 0, confidence = 0; bool analyzed = false; };
-    struct Track { std::string id, path, title; BeatGrid grid; };
+    struct Track {
+        std::string id, path, title;
+        std::optional<BeatAnalysis> grid;
+        std::shared_ptr<BeatAnalysisCache> gridSource;
+    };
     struct Catalog { std::string bank, locator; std::vector<Track> tracks; };
     static Catalog parseCatalog(const juce::var& catalog);
     struct Request { std::uint64_t id = 0; int track = 1; double seconds = 0; Mode mode = selection; };
@@ -62,14 +66,14 @@ private:
         std::array<juce::WindowedSincInterpolator, 2> sinc;
         std::atomic<std::uint64_t> read{0}, written{0};
         double rate = 0, target = 0;
-        BeatGrid grid;
+        BeatAnalysis grid;
         juce::int64 length = 0, nextSource = 0;
         std::atomic<bool> failed{false};
     };
     void request(int track, double seconds, Mode mode);
     bool prepare(Stream& stream, const Request& request, Track& track);
     bool fill(Stream& stream);
-    bool analyze(Stream& stream, BeatGrid& grid);
+    bool analyze(Stream& stream, BeatAnalysis& grid);
     void publishGrid(const Stream& stream) noexcept;
     void work() noexcept;
     void commit(int index) noexcept;
