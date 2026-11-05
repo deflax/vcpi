@@ -101,9 +101,9 @@ class CompletionTests(unittest.TestCase):
         self.assertNotIn("info", self.matches("help "))
         self.assertEqual(self.matches("info "), [])
         self.assertIn("master", self.matches("  gain\t"))
-        for before in ("unknown ", "status ", "help audio ", "about ",
+        for before in ("unknown ", "status ", "about ",
                        "audio stop ", "audio devices ", "audio diagnose ",
-                       "debug on ", "mute 1 ", "solo 1 ", "note 1 ",
+                       "debug on ", "mute 1 on ", "solo 1 off ", "note 1 ",
                        "gain master ", "tempo ", "ableton cut ", "ableton link "):
             with self.subTest(before=before):
                 self.assertEqual(self.matches(before), [])
@@ -138,33 +138,31 @@ class CompletionTests(unittest.TestCase):
                        "track 1 clear ", "get 0 ", "set 9 ", "show 1 nonsense "):
             self.assertEqual(self.matches(before), [], before)
 
-    def test_audio_output_indexes_follow_current_snapshot(self):
-        self.assertEqual(self.matches("audio start "), ["3"])
+    def test_device_names_insert_as_single_arguments_and_follow_snapshot(self):
+        inserted = self.inserted('audio start "Output', "'Output With Spaces'")
+        self.assertEqual(shlex.split(inserted), ["audio", "start", "Output With Spaces"])
+        self.assertIn("3", self.matches("audio start "))
         self.engine.audio_devices[:] = [
             {"index": 7, "name": "New output", "max_output_channels": 4}]
-        self.assertEqual(self.matches("audio start "), ["7"])
         self.assertEqual(self.matches("audio start 3"), [])
         self.assertEqual(self.matches("audio start 7 "), [])
+        self.assertEqual(shlex.split(self.inserted("audio start New", "'New output'")),
+                         ["audio", "start", "New output"])
 
     def test_hardware_ports_and_open_input_indexes_are_distinct_and_current(self):
         with patch("core.midi.list_midi_input_ports", return_value=["Input A", "Input B"]) as inputs, \
-                patch("core.midi.list_midi_output_ports", return_value=["Output"]) as outputs:
-            self.assertEqual(set(self.matches("midi input ")), {"0", "1", "close"})
-            self.assertEqual(self.matches("midimix input "), ["0", "1"])
-            self.assertEqual(self.matches("midimix output "), ["0"])
-            inputs.return_value = ["Replacement"]
-            self.assertEqual(self.matches("midimix input "), ["0"])
+                patch("core.midi.list_midi_output_ports", return_value=["Output Device"]):
+            for before in ("midi input In", "midimix input 'In"):
+                inserted = self.inserted(before, "'Input A'")
+                self.assertEqual(shlex.split(inserted)[-1], "Input A")
+            inserted = self.inserted('midimix output "Out', "'Output Device'")
+            self.assertEqual(shlex.split(inserted)[-1], "Output Device")
+            self.assertIn("0", self.matches("midi input "))
             self.assertEqual(self.matches("midi input close "), ["1", "2"])
+            inputs.return_value = ["Replacement"]
+            self.assertEqual(self.matches("midi input In"), [])
             self.host.midi_inputs.pop()
             self.assertEqual(self.matches("midi input close "), ["1"])
-            inputs.reset_mock()
-            outputs.reset_mock()
-            for before in ("midi input c", "midi input close ", "midi input bogus",
-                           "midi input 0 ", "midimix bad ", "midimix output abc",
-                           "midi ports ", "midi ports input "):
-                self.matches(before)
-            inputs.assert_not_called()
-            outputs.assert_not_called()
 
     def test_unavailable_hardware_keeps_non_hardware_midi_choices(self):
         with patch("core.midi.list_midi_input_ports", side_effect=RuntimeError("no sequencer")), \
@@ -208,9 +206,11 @@ class CompletionTests(unittest.TestCase):
         self.assertIn("fx", self.matches("get 1 "))
         self.assertIn("mode", self.matches("set 1 "))
         self.assertNotIn("midi_cc_0_1", self.matches("get 1 "))
-        self.assertEqual(self.matches("get 1 fx 1 "), ["--group", "mix"])
+        self.assertEqual(self.matches("get 1 fx 1 "),
+                         ["--all", "--controls", "--midi", "--settings", "--unused", "mix"])
         self.assertIn("enabled", self.matches("get master "))
-        self.assertEqual(self.matches("get master 2 "), ["--group", "mix"])
+        self.assertEqual(self.matches("get master 2 "),
+                         ["--all", "--controls", "--midi", "--settings", "--unused", "mix"])
         self.assertEqual(self.matches("set 1 bypass "), ["false", "true"])
         self.assertEqual(self.matches("set master 1 enabled t"), ["true"])
         for before in ("set 1 cutoff ", "set 1 absent ", "set 1 midi_cc_0_1 ",
@@ -243,25 +243,23 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.matches("set 1 unused "), [])
         self.assertEqual(self.matches("set 1 bypass "), ["false", "true"])
         self.assertEqual(self.matches("set 1 program "), ["Alternate", "Default"])
-        self.assertIn("--group", self.matches("get 1 "))
-        self.assertEqual(self.matches("get 1 --group s"), ["settings"])
-        self.cli.onecmd("get 1 --group settings")
+        self.assertIn("--settings", self.matches("get 1 "))
+        self.assertEqual(self.matches("get 1 --s"), ["--settings"])
+        self.cli.onecmd("get 1 --settings")
         self.assertIn("  bypass = ", self.cli.stdout.getvalue())
         self.assertIn("  program = ", self.cli.stdout.getvalue())
         self.assertNotIn("  unused = ", self.cli.stdout.getvalue())
 
-    def test_group_completion_works_for_every_target_and_stops_after_group(self):
-        groups = ["all", "controls", "midi", "settings", "unused"]
+    def test_listing_flag_completion_works_for_every_target_and_stops_after_flag(self):
+        flags = ["--all", "--controls", "--midi", "--settings", "--unused"]
         for target in ("1", "1 fx 1", "master", "master 1"):
             with self.subTest(target=target):
-                self.assertIn("--group", self.matches(f"get {target} "))
-                self.assertEqual(self.matches(f"get {target} --group "), groups)
-                for group in groups:
-                    self.assertEqual(self.matches(f"get {target} --group {group} "), [])
-                self.assertEqual(self.matches(f"get {target} --group invalid "), [])
-                self.assertEqual(self.matches(f"get {target} cutoff --group "), [])
-        self.assertNotIn("--group", self.matches("set 1 "))
-        self.assertEqual(self.matches("set 1 --group "), [])
+                self.assertEqual(self.matches(f"get {target} --"), flags)
+                for flag in flags:
+                    self.assertEqual(self.matches(f"get {target} {flag} "), [])
+                self.assertEqual(self.matches(f"get {target} --group "), [])
+                self.assertEqual(self.matches(f"get {target} cutoff --"), [])
+        self.assertEqual(self.matches("set 1 --"), [])
 
     def test_explicit_midi_names_retain_finite_value_completion(self):
         self.instrument.parameters["midi_cc_0_1"].kind = "bool"
@@ -343,17 +341,36 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(self.cli.complete(before, 0), "track 1 vst 'Surge XT' ")
             self.assertIsNone(self.cli.complete(before, 1))
 
-    def test_raw_sessions_and_split_assets_preserve_execution_syntax(self):
+    def test_quoted_sessions_and_assets_insert_as_single_arguments(self):
         for command in ("save", "load"):
-            inserted = self.inserted(command + " Live S", "Live Set")
-            self.assertEqual(inserted, command + " Live Set")
-            self.assertEqual(self.cli._resolve_session_path(inserted.partition(" ")[2]),
+            inserted = self.inserted(command + ' "Live S', "'Live Set'")
+            self.assertEqual(shlex.split(inserted), [command, "Live Set"])
+            self.assertEqual(self.cli._resolve_session_path(shlex.split(inserted)[1]),
                              self.root / "sessions" / "Live Set.json")
-        self.assertEqual(self.matches("track 1 wav "), ["Drums"])
-        self.assertEqual(self.matches("track 1 wav Drums "), ["Kick"])
-        self.assertEqual(self.matches("track 1 vcv "), ["Bass"])
-        self.assertEqual(self.matches("track 1 wav Drums Kick "), [])
-        self.assertEqual(self.matches("track 1 vcv Bass "), [])
+        for before, name in (("track 1 wav Bad", "Bad Pack"),
+                             ('track 1 wav Drums "Closed', "Closed Hat"),
+                             ("track 1 vcv Bad", "Bad Patch")):
+            inserted = self.inserted(before, shlex.quote(name))
+            self.assertEqual(shlex.split(inserted)[-1], name)
+        for before in ("track 1 wav Drums Kick ", "track 1 vcv Bass ",
+                       'track 1 deck "/music/live set.json" '):
+            self.assertEqual(self.matches(before), ["--name"])
+
+    def test_nested_help_and_option_insertions_match_grammar(self):
+        for before, match, expected in (
+                ("help audio st", "start", "help audio start"),
+                ("help track wa", "wav", "help track wav"),
+                ("help midi input cl", "close", "help midi input close"),
+                ("mute 1 o", "on", "mute 1 on"),
+                ("solo 2 t", "toggle", "solo 2 toggle"),
+                ("note 1 60 --v", "--velocity", "note 1 60 --velocity"),
+                ("ps --a", "--all", "ps --all")):
+            self.assertEqual(self.inserted(before, match), expected)
+        self.assertEqual(self.matches("help audio start nonsense "), [])
+        self.assertEqual(self.matches("note 1 60 --velocity "), [])
+        self.assertEqual(self.matches("note 1 60 --velocity 80 "), ["--duration-ms"])
+        self.assertNotIn("--mem", self.matches("ps --cpu "))
+        self.assertEqual(self.matches("ps all "), [])
 
     def test_invalid_structural_prefixes_do_not_discover_assets(self):
         with patch.object(self.cli, "_vst_names") as vst, \
@@ -373,7 +390,7 @@ class CompletionTests(unittest.TestCase):
         with patch.object(self.cli, "_vst_names", return_value=["Good", *unsafe]), \
                 patch.object(self.cli, "_session_names", return_value=["Good Set", *unsafe]):
             self.assertEqual(self.matches("track 1 vst "), ["Good"])
-            self.assertEqual(self.matches("load "), ["Good Set"])
+            self.assertEqual(self.matches("load "), ["'Good Set'"])
         self.instrument.parameters["mode"].valid_values = ("Good Choice", *unsafe)
         self.assertEqual(self.matches("set 1 mode "), ["'Good Choice'"])
         for name in unsafe:

@@ -14,6 +14,11 @@ Source of truth:
 - MIDI channels are **1-16**.
 - `fx_index` values are **1-based** in CLI commands.
 - `master` means the global master effects bus.
+- Hardware audio/MIDI port indexes are **0-based**; use the indexes printed by discovery.
+- Closing a MIDI input uses its **1-based active-input number**, not its hardware port index.
+- Main targets and values are positional; optional labels and modifiers use `--flags`.
+- Quote paths, session names, labels, and device names containing spaces.
+- Fixed-arity commands reject unexpected arguments. Options cannot be silently ignored.
 
 ## Startup Modes
 
@@ -48,19 +53,31 @@ These flags apply when starting the host server (`python main.py serve`).
 
 | Flag | Default | Description |
 |---|---|---|
-| `--sr` | `44100` | Audio sample rate |
-| `--buf` | `512` | Audio buffer size |
-| `--bpm` | `120.0` | Initial tempo |
-| `--link` | off | Enable Ableton Link on startup |
-| `--midi-in` | unset | MIDI input port index(es) to open on startup (repeatable) |
-| `--mix-midi` | unset | MIDI Mix port index to open on startup |
-| `--mix-midi-out` | unset | MIDI Mix output port index (LED feedback) |
-| `--output` | unset | Preferred output audio device index or name (not auto-started) |
-| `--session` | `~/.config/vcpi/session.json` | Session file path |
-| `--no-restore` | off | Skip session restore at startup |
+| `--sample-rate <hz>` | `44100` | Positive integer audio sample rate in Hz; startup-only |
+| `--buffer-size <frames>` | `512` | Positive integer buffer size in frames; startup-only |
+| `--bpm <value>` | restored, otherwise `120.0` | Positive finite tempo in beats per minute |
+| `--link` / `--no-link` | restored, otherwise off | Explicitly enable or disable Ableton Link |
+| `--midi-input <port> [port ...]` | restored | MIDI input indexes or quoted names; repeatable, occurrences accumulate |
+| `--midimix-input <port>` | restored | MIDI Mix input index or quoted name |
+| `--midimix-output <port>` | restored | MIDI Mix output index or quoted name (LED feedback) |
+| `--output <device>` | restored, otherwise system default | Preferred output index or quoted name; does not start audio |
+| `--session <path>` | `~/.config/vcpi/session.json` | Automatic session file path |
+| `--no-restore` | off | Skip restoring the automatic session at startup |
 
-When running `serve`, vcpi does not start audio automatically. Start audio
-manually from the client with `audio start [device]`.
+When running `serve`, vcpi always starts with audio stopped, including after
+restoring a session. Start audio manually with `audio start [device]`; without
+a device it uses the explicit `--output` selection or restored output.
+
+Precedence for tempo, Link, and device connections is **defaults → restored
+session → explicit startup options**. Overridden saved connections are not
+opened first. Explicit `--midi-input` replaces the saved input selection; use
+multiple values or repeated occurrences to open several inputs. Sample rate and
+buffer size come from startup options/defaults, not the session.
+
+```bash
+./vcpid --sample-rate 48000 --buffer-size 512 --bpm 128 --no-link
+./vcpid --midi-input 0 --midi-input "Keyboard MIDI" --output "USB Audio"
+```
 
 Only one server instance per user is allowed. If a server is already running
 (e.g. via systemd `payload.service`), `./vcpid` will refuse to start and
@@ -78,6 +95,16 @@ The change applies to the daemon, live audio/track workers, and subsequently
 created workers. It lasts until the daemon exits and does not edit service or
 shell configuration. Logs remain in the daemon terminal or service journal,
 not in the client response. Use `help debug` for command help.
+
+### Setting lifetime
+
+| Settings | Lifetime and source |
+|---|---|
+| Sample rate, buffer size, socket, automatic session path | Startup options; restart the daemon to change |
+| Instruments/effects, mixer, routing, tempo, Link, sequences, device targets | Session state; explicit startup options override matching restored settings |
+| `debug on` / `debug off` | Current daemon and workers only; not saved in sessions |
+| `LOG_LEVEL`, `VST3_PATH`, `VST_PATH`, `VCPI_PATCHES_DIR`, `CARDINAL_VST3_PATH`, `PLUGDATA_VST3_PATH` | Environment inherited at startup; runtime commands do not edit shell/service configuration |
+
 
 Raw native/plugin stdout and stderr (including ALSA/JACK probing and plugin
 print statements) are discarded unless DEBUG is enabled. With `debug on`, they
@@ -171,7 +198,7 @@ plugdata/Pure Data helpers:
 track 1 pd sine
 midi link 1 1
 audio start
-note 1 60 100 500
+note 1 60 --velocity 100 --duration-ms 500
 ```
 
 Load the polyphonic pad and play it from MIDI channel 1:
@@ -180,7 +207,7 @@ Load the polyphonic pad and play it from MIDI channel 1:
 track 1 pd poly-pad
 midi link 1 1
 audio start
-note 1 60 100 3000
+note 1 60 --velocity 100 --duration-ms 3000
 ```
 
 `poly-pad` exposes three plugdata automation controls, shared by all eight voices:
@@ -211,7 +238,7 @@ than the pad's slow swell. For example:
 ```text
 track 1 pd classic-subtractive-synth
 audio start
-note 1 60 127 100
+note 1 60 --velocity 127 --duration-ms 100
 ```
 
 `classic-subtractive-synth` exposes these plugdata automation controls through
@@ -249,8 +276,8 @@ Server/client specific:
 
 | Mode | Flag | Default | Description |
 |---|---|---|---|
-| `serve` | `--sock` | auto (see above) | Unix socket to bind |
-| `cli` | `--sock` | auto (see above) | Unix socket to connect to |
+| `serve` | `--socket <path>` | auto (see above) | Unix socket to bind |
+| `cli` | `--socket <path>` | auto (see above) | Unix socket to connect to |
 
 ## Interactive Commands
 
@@ -265,11 +292,12 @@ Commands follow an explicit order within each group: `save`, `load`; `status`,
 `set`; `gain`, `solo`, `mute`; `audio`; `midi`, `midimix`, `note`; and `tempo`,
 `ableton`, `seq`. The `exit` alias appears in the description of `quit`, not as a
 separate row; it remains available as a command and completion.
-Use `help <command>` for detailed syntax and usage; `help get` and `help set`
-include parameter-targeting syntax and examples.
+Use `help <command>` for detailed syntax, defaults, and usage. Nested topics
+such as `help track wav`, `help audio start`, and `help midi input close`
+focus on one operation; Tab completes valid topics. Unknown topics are errors.
 The interactive overview uses one compact table, with a different colour for each
 category's heading and command names; descriptions remain neutral. Descriptions
-wrap to the terminal width; detailed `help <command>` output is unchanged.
+wrap to the terminal width; detailed help remains readable plain text.
 
 The interactive client uses `prompt_toolkit` for the `vcpi>` command line
 and Rich for terminal presentation. `help`, `get`, `status`, and
@@ -297,18 +325,19 @@ parameters.
 | `midi link` / `midi cut` | MIDI channels and routing tracks |
 | `seq` | Actions, sequence banks, and target tracks |
 | `ableton` / `debug` | Link actions and debug on/off |
-| `gain` / `mute` / `solo` / `note` | Valid track targets; `gain` also offers `master` |
+| `gain` / `mute` / `solo` / `note` | Track targets, mixer states, and note option flags; `gain` also offers `master` |
 | `track` | Track types, installed plugins, patch names, sample packs/samples, and loaded effect indexes for `fx clear` |
 | `show` / `get` / `set` | View or plugin targets and actual loaded effect indexes |
-| `get` parameter names | Cached musical controls and `--group` |
-| `get <target> --group` | `controls`, `settings`, `midi`, `unused`, `all`; no further arguments |
+| `get` parameter names | Cached musical controls and `--controls`, `--settings`, `--midi`, `--unused`, `--all` |
+| `get <target> <listing flag>` | No further arguments |
 | `set` parameter names | Cached controls and plugin settings; no MIDI or unused slots |
 | `set` value | Boolean literals and enum choices, quoted when necessary |
 | `save` / `load` | Saved session names from the daemon's sessions directory |
+| `ps` | `--all`, `--cpu`, and `--mem`; conflicting/used options are not offered |
 
 Incomplete quotes and multiword plugin/enum names are completed as a whole,
-without duplicating words already typed. Session names retain their raw-name
-syntax. Arbitrary gain, tempo, note, velocity, and duration values are not
+without duplicating words already typed. Session names containing spaces are
+quoted on insertion. Arbitrary gain, tempo, note, velocity, and duration values are not
 guessed. Commands without arguments have no additional suggestions; unavailable
 hardware or empty plugin/effect lists may also yield no choices.
 
@@ -317,16 +346,16 @@ hardware or empty plugin/effect lists may also yield no choices.
 | Command | Description |
 |---|---|
 | `track <track> vst <path\|vst_name> [--name <label>]` | Load VST instrument into track |
-| `track <track> wav <pack> <sample> [name]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into track |
-| `track <track> deck <bank.json> [name]` | Prepare a native streaming deck, initially paused |
-| `track <track> vcv <patch_name> [name]` | Load Cardinal into track from `patches/<patch_name>.vcv` |
+| `track <track> wav <pack> <sample> [--name <label>]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into track |
+| `track <track> deck <bank.json> [--name <label>]` | Prepare a native streaming deck, initially paused |
+| `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `patches/<patch_name>.vcv` |
 | `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `patches/` or an absolute path |
 | `track <track\|master> fx <path\|vst_name> [--name <label>]` | Load effect into track insert chain or master bus |
 | `track <track> clear` | Clear instrument from track |
 | `track <track\|master> fx clear <fx_index>` | Remove effect by index |
-| `get <track> [name \| --group <group>]` | Read instrument controls, a selected group, or one exact parameter |
-| `get <track> fx <fx_index> [name \| --group <group>]` | Read track-effect controls, a selected group, or one exact parameter |
-| `get master [fx_index] [name \| --group <group>]` | Read master-effect controls, a selected group, or one exact parameter; index defaults to 1 |
+| `get <track> [name \| <listing flag>]` | Read instrument controls, a selected group, or one exact parameter |
+| `get <track> fx <fx_index> [name \| <listing flag>]` | Read track-effect controls, a selected group, or one exact parameter |
+| `get master [fx_index] [name \| <listing flag>]` | Read master-effect controls, a selected group, or one exact parameter; index defaults to 1 |
 | `set <track> <name> <value>` | Set instrument parameter |
 | `set <track> fx <fx_index> <name> <value>` | Set track-effect parameter |
 | `set master <fx_index> <name> <value>` | Set master-effect parameter; explicit index required |
@@ -339,13 +368,24 @@ named `Acid V` and uses that name as the track label. Quotes are also supported.
 To override the display label, use `track 1 vst Acid V --name Bass`.
 The same syntax applies to `track <track|master> fx`; trailing words without
 `--name` are part of the plugin name, not a custom label.
+All source types use `--name <label>` for optional display labels. Quote VCV
+patch names, WAV pack/sample names, and deck paths containing spaces; positional
+labels are not accepted. For example:
+
+```text
+track 1 wav piano c4-soft --name "Soft Piano"
+track 2 deck "/music/live set.json" --name "Deck B"
+track 3 vcv "Warm Pad" --name Atmosphere
+```
+
 
 For `get`, omit `name` to list musical controls, or supply a single exact name
 to read any cached parameter, including MIDI helpers and unused slots.
-Alternatively, use `--group controls|settings|midi|unused|all` to choose a listing.
-The group option affects listing only and cannot be combined with a parameter
-name. Use parameter names from the listing; quote names or values containing
-spaces. An unknown name produces an error. Track-effect targets require
+Alternatively, use one listing flag: `--controls` (the default), `--settings`,
+`--midi`, `--unused`, or `--all`. Flags affect listing only; they cannot be
+combined with each other or with a parameter name. Use parameter names from the
+listing; quote names or values containing spaces. An unknown name produces an error.
+Track-effect targets require
 `fx <fx_index>`; an index alone is not a track-effect target.
 In `get master`, a numeric token immediately after `master` is always an
 effect index, not a parameter name. With no index, `get master` and
@@ -357,17 +397,17 @@ Examples (parameter names and choices depend on the loaded plugin):
 
 ```text
 get 1
-get 1 --group settings
-get 1 --group all
+get 1 --settings
+get 1 --all
 get 1 cutoff_hz
 get 1 fx 2
 get 1 fx 2 wet
-get 1 fx 2 --group midi
+get 1 fx 2 --midi
 get master
 get master 2
 get master 2 threshold_db
 get master threshold_db
-get master --group unused
+get master --unused
 set 1 cutoff_hz 880
 set 1 fx 2 wet 0.5
 set master 2 threshold_db -6
@@ -379,7 +419,7 @@ Each parameter prints a line `  name = value`, with units when available.
 When metadata is available, the same line ends with either
 `  (range low .. high)` or `  (choices choice1, choice2)`. There are no
 slider bars. An empty parameter list prints `  No parameters`.
-`--group all` emits `Controls:`, `Plugin settings:`, `MIDI parameters:`, and
+`--all` emits `Controls:`, `Plugin settings:`, `MIDI parameters:`, and
 `Unused parameters:` sections, preserving the same parameter rows within each.
 The interactive Rich table retains those section headings. Single-group
 listings use the normal ungrouped format, including `No parameters` if empty.
@@ -414,8 +454,8 @@ Cardinal's settings follow its
 [host parameter definitions](https://github.com/DISTRHO/Cardinal/blob/26.02/src/CardinalPlugin.cpp).
 These groups do not create patch connections: a Pure Data patch must export
 automation controls, and Cardinal's host parameters must be wired inside the patch.
-`get` name completion suggests controls and the group option; use
-`get <target> --group settings` to discover setting names. `set` name completion
+`get` name completion suggests controls and the listing flags; use
+`get <target> --settings` to discover setting names. `set` name completion
 includes controls and settings, excluding MIDI and unused slots. Explicit MIDI
 names remain readable and writable; setting an unused slot fails before any
 engine mutation. MIDI CC input, raw cached parameters, and native plugin state
@@ -430,8 +470,8 @@ Decks play continuous tracks independently of Link/global transport. They are
 not the MIDI-triggered `wav` sampler. Create up to eight ordinary mixer tracks:
 
 ```text
-track 1 deck /music/live-set.json Deck-A
-track 2 deck /music/live-set.json Deck-B
+track 1 deck /music/live-set.json --name Deck-A
+track 2 deck /music/live-set.json --name Deck-B
 audio start
 set 1 play true
 set 2 pitch -1.25
@@ -517,11 +557,13 @@ hardware-free rendering does not establish live hardware suitability.
 
 | Command | Description |
 |---|---|
-| `gain <track> <value>` | Set track gain (0.0-1.0) |
-| `gain master [value]` | Get or set master gain |
-| `mute <track>` | Toggle track mute |
-| `solo <track>` | Toggle track solo |
+| `gain <track\|master> [value]` | Read or set linear gain (0.0–1.0) |
+| `mute <track> [on\|off\|toggle]` | Set mute explicitly; omitted state toggles |
+| `solo <track> [on\|off\|toggle]` | Set solo explicitly; omitted state toggles |
 | `show [all\|midi\|controls\|audio\|1-8\|master]` | Open the tabbed explorer, or print a focused routing/plugin view; see visualization commands |
+
+`gain 1` reads without changing state. `mute 1 on` and `solo 1 off` are
+idempotent; bare `mute 1` and `solo 1` are convenient toggle shortcuts.
 
 ### Audio Commands
 
@@ -529,7 +571,7 @@ All audio operations are subcommands of `audio`:
 
 | Command | Description |
 |---|---|
-| `audio start [device]` | Start audio engine and print the opened device index, name, and backend; accepts an index or full name |
+| `audio start [device]` | Start audio using the preferred/restored output, or select an index or quoted full name; report opened device/backend |
 | `audio stop` | Stop audio engine |
 | `audio devices` | List audio devices, channel capacities, and backend; mark the active or last-opened entry |
 | `audio diagnose` | Show opened output, mixer controls, realtime scheduling, MIDI delivery counters, and lifetime signal peaks |
@@ -600,7 +642,7 @@ snapshots (replace `1` with its track number):
 
 ```text
 vcpi> audio diagnose
-vcpi> note 1 60 100 1000
+vcpi> note 1 60 --velocity 100 --duration-ms 1000
 # Wait at least a second for the note and note-off to reach the renderer.
 vcpi> audio diagnose
 ```
@@ -660,7 +702,7 @@ still pause the output stream. Restoration deliberately stays paused until
 complete. If reopening fails, audio remains stopped; failed native teardown is
 terminal when callback quiescence cannot be established.
 
-For persistent underruns, restart the daemon with `./vcpid --buf 1024` (or
+For persistent underruns, restart the daemon with `./vcpid --buffer-size 1024` (or
 `2048`), reconnect, and issue `audio start`. Larger buffers provide more
 scheduling headroom at the cost of note-to-sound latency.
 
@@ -728,13 +770,13 @@ All MIDI operations are subcommands of `midi`:
 |---|---|
 | `midi ports input` | List MIDI input ports |
 | `midi ports output` | List MIDI output ports |
-| `midi input <port>` | Open any MIDI input port |
-| `midi input close <index>` | Close a MIDI input by its position in the open list |
+| `midi input <port>` | Open a MIDI input by 0-based hardware index or quoted name |
+| `midi input close <active-input-number>` | Close an opened input by its 1-based position in the active list, not hardware index |
 | `midi link <ch> <track>` | Route MIDI channel to track |
 | `midi cut <ch>` | Remove MIDI channel route |
-| `midimix input <port>` | Open Akai MIDI Mix input |
-| `midimix output <port>` | Open Akai MIDI Mix output (LED feedback) |
-| `note <track> <note> [vel] [dur_ms]` | Send test note to track |
+| `midimix input <port>` | Open Akai MIDI Mix input by index or quoted name |
+| `midimix output <port>` | Open Akai MIDI Mix output by index or quoted name (LED feedback) |
+| `note <track> <note> [--velocity <value>] [--duration-ms <value>]` | Send a test MIDI note (0–127); velocity defaults to 100, duration to 300 ms |
 
 Index discovery:
 
@@ -751,6 +793,10 @@ vcpi> midi ports output
 Use the numeric value in `[]` from `midi ports input` with `midi input`
 and `midimix input`. Use indexes from `midi ports output` with `midimix output`.
 Indexes may change after reboot or replug.
+Quoted full port names are accepted too, for example `midi input "Keyboard MIDI"`.
+`midi input close 1` closes the first active input shown by `show midi`, not
+hardware port 1. Active-input numbers shift when an input is closed.
+Note velocity must be 0–127 and duration must be positive and finite.
 
 You can open multiple MIDI inputs simultaneously. All MIDI inputs share the
 same channel routing table (`midi link <ch> <track>`).
@@ -826,22 +872,28 @@ All Ableton Link operations are subcommands of `ableton`:
 | `ableton cut` | Disable Ableton Link |
 | `tempo [bpm]` | Get or set current BPM |
 
+Tempo must be positive and finite for startup, `tempo`, and `ableton link`.
+Omitting BPM reads the current tempo with `tempo`, or preserves it when enabling
+Link with `ableton link`.
+
 ### Session Commands
 
 | Command | Description |
 |---|---|
-| `save <name>` | Save current session to `sessions/<name>.json` |
+| `save [name]` | Save to `sessions/<name>.json`, or to the active loaded session when name is omitted |
 | `load <name>` | Load session from `sessions/<name>.json` |
 
-Sessions are saved to the `sessions/` directory in the repo root. Tab
-completion lists available session names.
+Named sessions are saved in the working directory's `sessions/` directory if
+present, otherwise the repository's `sessions/` directory. Tab completion lists
+available session names; quote names containing spaces.
 Loading a session replaces the current master-effects chain rather than
 appending another copy of the saved effects.
 
-`save` always requires a name. The automatic session at
-`~/.config/vcpi/session.json` is only written on shutdown (not by the
-`save` command). `load` restores the named session and also updates the
-auto-save session so that shutdown preserves the loaded state.
+Bare `save` requires a previously loaded named session; otherwise supply a name.
+The automatic session defaults to `~/.config/vcpi/session.json` (overridden by
+`--session`). Shutdown writes the automatic session. `load` also updates it so
+that shutdown preserves the loaded state; named session files are written only
+by explicit `save`.
 
 Saved/restored session state includes:
 
@@ -902,8 +954,10 @@ not repair its state.
 JSON is written in the control process. A failed native owner or state capture
 makes saving fail rather than overwrite the last good session.
 
-On startup restore, vcpi attempts to reconnect audio and MIDI targets
-automatically.
+Startup restores saved MIDI connections but leaves audio stopped, retaining the
+saved output selection for `audio start`. Explicit startup device flags override
+saved connections. Interactive `load` can reconnect/start the saved audio output
+after restoration completes.
 
 An interrupted startup retires native owners without saving partially restored
 state; the original session file remains unchanged. Native owners ignore
@@ -1030,7 +1084,7 @@ Choice parameters list available choices instead of a numeric range:
 |---|---|
 | `about` | Print the vcpi logo and basic project info |
 | `status` | Print combined system status |
-| `ps [all]` | Show daemon/child processes and threads with sampled CPU and resident memory |
+| `ps [--all] [--cpu\|--mem]` | Show daemon/child processes and threads; optionally sort by descending CPU or resident memory |
 | `deps` | Check optional dependency availability |
 | `debug [on\|off]` | Show current logging level; enable DEBUG or return to INFO |
 | `shutdown` | Shut down the vcpi daemon process |
@@ -1054,6 +1108,14 @@ A dash indicates a non-applicable field or a newly observed thread without
 a CPU baseline. Tasks that exit during collection are omitted; inaccessible
 details are reported explicitly. Run `ps` again to refresh.
 
+`ps --cpu` sorts processes by descending sampled CPU and sorts threads within
+each process by CPU (threads without a baseline come last). `ps --mem` sorts
+processes by descending RSS; thread rows stay in TID order because they share
+their process's memory. Threads remain grouped under their parent process.
+Without either flag, the daemon comes first, followed by children in PID order,
+with threads in TID order. Use only one sort flag; either can be combined with
+`--all`, for example `ps --all --cpu` or `ps --mem --all`.
+
 Collection uses `psutil` on the control side, without audio/plugin RPCs or
 render-callback changes. Other control commands wait during the short sample;
 native audio rendering continues independently. Linux thread names come from
@@ -1062,7 +1124,7 @@ thread names.
 
 By default, `ps` hides idle threads with generic names such as `python` when
 their sampled CPU rounds to 0.0%. Process main threads, named threads, and
-known output/track render threads remain visible. `ps all` shows every thread.
+known output/track render threads remain visible. `ps --all` shows every thread.
 The footer reports how many rows were hidden; process CPU, RSS, and thread
 counts always include hidden threads. This is only a display filter: NumPy,
 BLAS, plugin pools, and audio/control thread behavior are unchanged. Generic
@@ -1076,6 +1138,10 @@ running flags. `Render` distinguishes maximum track-process capacity from the
 eligible track count in the last callback. `Track buffering` states added latency.
 Each `Track N worker` row shows its PID, failure, and cumulative missing blocks;
 these cached worker-health fields refresh approximately every 100 ms.
+
+`Preferred output` shows the selected index/name that a bare `audio start` will
+use, or `(system default)`. This is distinct from the actual last-opened output
+device; selecting a preference does not open an audio stream.
 
 `Output realtime` and each `Track N realtime` row report the selective scheduling
 state and, for live threads, actual versus requested priority, policy, TID, and

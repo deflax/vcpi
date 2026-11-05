@@ -58,7 +58,7 @@ Audio does **not** start automatically. In the client, try a bundled sample:
 track 1 wav piano c4-soft
 audio devices
 audio start
-note 1 60 100 500
+note 1 60 --velocity 100 --duration-ms 500
 ```
 
 Mixer channels are called **tracks** (1–8). Use `track` in place of the former
@@ -175,6 +175,21 @@ python main.py cli
 LOG_LEVEL=INFO ./vcpid
 ```
 
+Startup options use descriptive names, for example:
+
+```bash
+./vcpid --sample-rate 48000 --buffer-size 512 --bpm 128 --no-link \
+  --output "USB Audio" --socket /tmp/my-vcpi.sock
+./vcpi --socket /tmp/my-vcpi.sock
+```
+
+Explicit tempo, Link, and device options override restored session settings.
+Omitted options preserve saved settings; sample rate and buffer size are
+startup-only. The server always starts with audio stopped. `audio start` uses
+the selected or restored output; supply a device to select a different output.
+Use `--midi-input` repeatedly to select multiple MIDI inputs and
+`--midimix-input` / `--midimix-output` for controller connections.
+
 Toggle logging without restarting from the connected client:
 `debug on` enables DEBUG, `debug off` returns to INFO, and `debug` shows the
 current level. The setting applies to the daemon and audio workers until the
@@ -191,11 +206,11 @@ Full CLI and startup flag reference: [USAGE.md](USAGE.md).
 Inside `./vcpi`, press `Tab` for command and argument suggestions. Completion
 comes from the daemon: audio/MIDI subcommands, routing channels and tracks,
 sequencer banks, mixer targets, help topics, and debug modes are supported.
-`get` suggests cached controls and `--group`; `set` suggests controls, plugin
+`get` suggests cached controls and listing flags; `set` suggests controls, plugin
 settings, and boolean/enum choices. Effect indexes reflect loaded chains.
 Plugin, patch, sample, and session names are
 discovered on the daemon, including names containing spaces where the command
-supports them. Free-form numeric values are left for you to enter.
+supports them. Quote names containing spaces. Free-form numeric values are left for you to enter.
 
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
@@ -205,7 +220,8 @@ with a highlighted tab bar, track/master/effect views, scrolling, and manual
 refresh. `get` includes
 parameter values, units, ranges, and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
-table; use `help <command>` for detailed syntax.
+table; use `help <command>` or a focused topic such as `help track wav`,
+`help audio start`, or `help midi input close` for syntax, defaults, and examples.
 Piped input/output remains plain text. `./vcpi` and `./vcpid` install dependencies
 on first launch and when `requirements.txt` changes, including for existing
 environments. For direct Python startup, install them manually with
@@ -227,6 +243,13 @@ show
 
 Replace `<index>` with a port index and `<ch>` with the hardware's MIDI channel
 (1–16). `midi link` changes internal routing only; `midi input` opens the port.
+
+Optional labels consistently use `--name`, including WAV, Cardinal, and deck
+tracks. For example: `track 1 wav piano c4-soft --name "Soft Piano"`.
+`gain 1` reads the track gain; `gain 1 0.7` sets it. Use `mute 1 on`,
+`mute 1 off`, or `mute 1 toggle` for explicit state control; `solo` works the
+same way. Bare `mute 1` and `solo 1` remain toggle shortcuts.
+Commands reject unexpected arguments rather than silently ignoring them.
 For VST instruments, install a compatible plugin first, then use
 `track 1 vst <plugin-name>`. MIDI Mix control and LED ports are optional; see
 [Controller Setup](#controller-setup).
@@ -234,9 +257,9 @@ For VST instruments, install a compatible plugin first, then use
 Read or change instrument, track-effect, and master-effect parameters:
 
 ```text
-get <track> [name | --group <group>]
-get <track> fx <index> [name | --group <group>]
-get master [index] [name | --group <group>]
+get <track> [name | <listing flag>]
+get <track> fx <index> [name | <listing flag>]
+get master [index] [name | <listing flag>]
 set <track> <name> <value>
 set <track> fx <index> <name> <value>
 set master <index> <name> <value>
@@ -244,8 +267,9 @@ set master <index> <name> <value>
 
 Tracks are 1–8 and effect indexes are 1-based. Omit `name` to list musical
 controls, or supply one exact name to inspect any cached parameter, including
-MIDI and unused slots. Instead of a name, use `--group controls|settings|midi|unused|all`
-to select a listing; a group and name cannot be combined. For `get master`,
+MIDI and unused slots. Instead of a name, use one listing flag: `--controls`
+(the default), `--settings`, `--midi`, `--unused`, or `--all`. Flags cannot be
+combined with each other or with a name. For `get master`,
 the effect index defaults to 1; a numeric token immediately after `master`
 is always an index. `set master` requires an explicit index. Track effects
 require the `fx <index>` tokens. Use `help get` and `help set` for detailed
@@ -254,13 +278,13 @@ syntax and examples.
 Plain-text `get` output prints `  name = value`, including units when available,
 with `  (range low .. high)` or `  (choices choice1, choice2)` on the same line.
 An empty parameter list prints `  No parameters`; an unknown name is an error.
-`--group all` separates Controls, Plugin settings, MIDI parameters, and Unused
+`--all` separates Controls, Plugin settings, MIDI parameters, and Unused
 parameters, with section headings in both plain text and the interactive table.
 JUCE MIDI helpers and Cardinal's MIDI CC bank belong to `midi`; plugdata's
 disabled slots belong to `unused`. Known plugdata/Cardinal host and window
 settings belong to `settings`. Ordinary controls remain visible even when zero
 or non-automatable; Cardinal's 24 CV parameters remain controls.
-The group option affects listing only: raw parameter snapshots, native plugin
+The listing flags affect listing only: raw parameter snapshots, native plugin
 state chunks, and MIDI input are unchanged. Explicit MIDI parameters can still
 be set; unused slots are rejected before mutation.
 `get` and `show` read cached metadata rather than calling live plugin getters;
@@ -377,7 +401,7 @@ path. On macOS, use `~/Library/Audio/Plug-Ins/VST3` or
 vcpi> track 1 pd sine
 vcpi> midi link 1 1
 vcpi> audio start
-vcpi> note 1 60 100 500
+vcpi> note 1 60 --velocity 100 --duration-ms 500
 ```
 
 `track <n> pd <patch_name[.pd]> [--name <label>]` shares the `patches/` directory
@@ -400,7 +424,7 @@ Load an installed plugin by name:
 ```text
 vcpi> track 1 vst Dexed         # Tab completes installed VST names
 vcpi> audio start
-vcpi> note 1 60 100 500
+vcpi> note 1 60 --velocity 100 --duration-ms 500
 ```
 
 Full paths also work:
@@ -424,8 +448,8 @@ You can include or omit the `.wav` extension in `<sample>`.
 For continuous deck playback instead of MIDI-triggered sample voices:
 
 ```text
-vcpi> track 1 deck /music/live-set.json Deck-A
-vcpi> track 2 deck /music/live-set.json Deck-B
+vcpi> track 1 deck /music/live-set.json --name Deck-A
+vcpi> track 2 deck /music/live-set.json --name Deck-B
 vcpi> audio start
 vcpi> set 1 play true
 vcpi> set 2 pitch -1.25
@@ -496,7 +520,7 @@ vcpi> show 1            # track state and full cached instrument metadata
 vcpi> show 1 fx 1       # full metadata for track 1's first effect
 vcpi> show master fx 1  # full metadata for the first master effect
 vcpi> get 1             # instrument controls
-vcpi> get 1 --group all # controls, settings, MIDI, and unused slots, grouped
+vcpi> get 1 --all       # controls, settings, MIDI, and unused slots, grouped
 vcpi> get 1 fx 1        # controls for track 1's first effect
 vcpi> get master 1     # controls for the first master effect
 ```

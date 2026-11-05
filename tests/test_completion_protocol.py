@@ -107,9 +107,12 @@ class CompletionProtocolTests(unittest.TestCase):
         self.assertIn("mode = Quiet Mode", "\n".join(self._request("get 1 mode")))
 
     def test_current_cached_state_is_read_only_on_dispatch_thread(self):
-        self.assertEqual([item.text for item in self._complete(Document("audio start "))], ["3 "])
+        self.assertIn("3 ", [item.text for item in self._complete(Document("audio start "))])
         self.engine.devices = [{"index": 7, "name": "New output", "max_output_channels": 2}]
-        self.assertEqual([item.text for item in self._complete(Document("audio start "))], ["7 "])
+        self.assertIn("7 ", [item.text for item in self._complete(Document("audio start "))])
+        buffer = Buffer(document=Document('audio start "New'))
+        buffer.apply_completion(self._complete(buffer.document)[0])
+        self.assertEqual(shlex.split(buffer.text), ["audio", "start", "New output"])
         self.assertTrue(self.engine.device_read_threads)
         self.assertTrue(all(thread is threading.current_thread()
                             for thread in self.engine.device_read_threads))

@@ -94,7 +94,7 @@ class VcpiServer:
             fallback = Path("/tmp") / f"vcpi-{os.getuid()}" / "vcpi.sock"
             raise PermissionError(
                 f"cannot create socket directory '{self.sock_path.parent}'. "
-                f"Use --sock with a writable path (for example: {fallback})"
+                f"Use --socket with a writable path (for example: {fallback})"
             ) from exc
 
         self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

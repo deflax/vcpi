@@ -129,12 +129,12 @@ class ParameterDisplayTests(unittest.TestCase):
         self.assertEqual(self.parameter_names(self.execute("get 1")), expected["controls"])
         for group, names in expected.items():
             with self.subTest(group=group):
-                text = self.execute(f"get 1 --group {group}")
+                text = self.execute(f"get 1 --{group}")
                 self.assertEqual(self.parameter_names(text), names)
                 self.assertFalse(any(line.endswith(":") for line in text.splitlines()))
                 for name in names:
                     self.assertEqual(self.parameter_names(self.execute(f"get 1 {name}")), [name])
-        text = self.execute("get 1 --group all")
+        text = self.execute("get 1 --all")
         sections = {}
         for line in text.splitlines():
             if not line.startswith("  "):
@@ -156,9 +156,9 @@ class ParameterDisplayTests(unittest.TestCase):
             with self.subTest(target=target):
                 self.assertEqual(self.parameter_names(self.execute(f"get {target}")), ["mix"])
                 self.assertEqual(self.parameter_names(
-                    self.execute(f"get {target} --group midi")), ["midi"])
+                    self.execute(f"get {target} --midi")), ["midi"])
                 self.assertEqual(self.parameter_names(self.execute(f"get {target} midi")), ["midi"])
-        self.assertEqual(self.parameter_names(self.execute("get master --group controls")), ["gain"])
+        self.assertEqual(self.parameter_names(self.execute("get master --controls")), ["gain"])
 
     def test_cardinal_listing_separates_midi_and_window_settings_from_cv_controls(self):
         self.effect.name = "Cardinal"
@@ -174,18 +174,18 @@ class ParameterDisplayTests(unittest.TestCase):
         self.effect.values = {name: 0.0 for name in self.effect.parameters}
         self.assertEqual(self.parameter_names(self.execute("get 1 fx 1")),
                          ["parameter_1", "parameter_24", "midi_ch_17_cc_0"])
-        self.assertEqual(self.parameter_names(self.execute("get 1 fx 1 --group settings")),
+        self.assertEqual(self.parameter_names(self.execute("get 1 fx 1 --settings")),
                          ["show_tooltips"])
-        self.assertEqual(self.parameter_names(self.execute("get 1 fx 1 --group midi")),
+        self.assertEqual(self.parameter_names(self.execute("get 1 fx 1 --midi")),
                          ["midi_ch_1_cc_0", "midi_ch_16_cc_129"])
         self.assertEqual(self.parameter_names(self.execute("get 1 fx 1 midi_ch_1_cc_0")),
                          ["midi_ch_1_cc_0"])
 
-    def test_group_option_cannot_be_combined_with_a_name_or_extra_arguments(self):
+    def test_listing_flags_reject_combinations_names_and_unknown_options(self):
         for target in ("1", "1 fx 1", "master", "master 1"):
-            for arguments in ("--group", "--group unknown", "--group settings extra",
-                              "--group controls cutoff", "cutoff --group controls",
-                              "--group all --group midi"):
+            for arguments in ("--group", "--group settings", "--unknown",
+                              "--settings extra", "--controls cutoff", "cutoff --controls",
+                              "--all --midi", "--settings --settings"):
                 with self.subTest(target=target, arguments=arguments):
                     text = self.execute(f"get {target} {arguments}")
                     self.assertTrue(text.startswith("Error:"), text)
@@ -214,17 +214,17 @@ class ParameterDisplayTests(unittest.TestCase):
 
     def test_grouped_response_remains_a_rich_table_including_empty_groups(self):
         self.group_instrument()
-        lines = self.execute("get 1 --group all").splitlines()
+        lines = self.execute("get 1 --all").splitlines()
         table = _get_table(lines)
         self.assertIsNotNone(table)
         self.assertEqual(table.row_count, len(self.instrument.parameters) + 4)
         rendered = io.StringIO()
         display_response(Console(file=rendered, width=140, color_system=None),
-                         "get 1 --group all", lines)
+                         "get 1 --all", lines)
         for heading in ("Controls:", "Plugin settings:", "MIDI parameters:", "Unused parameters:"):
             self.assertIn(heading, rendered.getvalue())
         self.assertIn("Range / choices", rendered.getvalue())
-        lines = self.execute("get master --group all").splitlines()
+        lines = self.execute("get master --all").splitlines()
         table = _get_table(lines)
         self.assertIsNotNone(table)
         self.assertEqual(table.row_count, 8)

@@ -2,7 +2,7 @@
 
 Usage::
 
-    python main.py cli [--sock PATH]
+    python main.py cli [--socket PATH]
 
 Default PATH is auto-selected:
   $XDG_RUNTIME_DIR/vcpi/vcpi.sock

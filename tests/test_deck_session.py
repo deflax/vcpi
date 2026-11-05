@@ -183,7 +183,7 @@ class DeckSessionTests(unittest.TestCase):
                 server._drain_commands()
                 return "\n".join(_read_response_lines(reader))
 
-            self.assertIn("track 1 = A", command(f'track 1 deck "{self.bank}" A'))
+            self.assertIn("track 1 = A", command(f'track 1 deck "{self.bank}" --name A'))
             self.assertIn("pitch =", command("set 1 pitch -1.25"))
             self.assertIn("seek accepted", command("track 1 deck seek 0.5"))
             self.assertIn("cue_set accepted", command("track 1 deck cue set"))

@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+from core.link import validate_bpm
 from core.models import NUM_TRACKS
 from core.state_transport import NATIVE_STATE_LIMIT, validate_native_state
 
@@ -167,7 +168,10 @@ def _snapshot_cached(host: VcpiCore) -> dict:
     routing = {str(ch + 1): idx + 1 for ch, idx in host.channel_map.items()}
 
     connections = {
-        "audio_output": host.audio_output_name,
+        "audio_output": (
+            host.preferred_output_device
+            if host.preferred_output_device is not None else host.audio_output_name
+        ),
         "midi_inputs": host.midi_input_names,
         "midi_mix_in": host.mixer_midi_name,
         "midi_mix_out": host.mixer_midi_out_name,
@@ -198,11 +202,15 @@ def save(host: VcpiCore, path: Optional[Path] = None):
     logger.info("[Session] Saved to %s", path)
 
 
-def restore(host: VcpiCore, path: Optional[Path] = None):
+def restore(host: VcpiCore, path: Optional[Path] = None, *,
+            start_audio: bool = True, skip_settings=()):
     """Restore a session from a JSON file.
 
     Loads instruments, effects, native plugin state, routing, gains, tempo,
     and previously connected audio/MIDI device targets.
+    Set start_audio=False to restore setup without opening an audio device.
+    skip_settings contains startup option destinations explicitly overridden by
+    the caller, so saved connections and Link are not opened transiently.
     """
     path = Path(path) if path else DEFAULT_SESSION_PATH
     if not path.exists():
@@ -215,6 +223,11 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
         logger.warning("[Session] Unknown session version %s, skipping", version)
         return
 
+    # Validate before changing live state, including pausing a running output.
+    bpm = None
+    if "bpm" in data and "bpm" not in skip_settings:
+        bpm = validate_bpm(data["bpm"])
+
     # Native loading and every restored control happen while audio is paused.
     was_running = host.engine.running
     previous_output = host.audio_output_name
@@ -224,16 +237,17 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
     errors = []
 
     # -- BPM / Link ----------------------------------------------------------
-    bpm = data.get("bpm")
     if bpm is not None:
-        host.link._bpm = bpm
+        host.link.bpm = bpm
 
-    link_enabled = data.get("link_enabled", False)
-    if link_enabled:
+    if "link" not in skip_settings:
         try:
-            host.start_link(bpm)
+            if data.get("link_enabled", False):
+                host.start_link()
+            else:
+                host.stop_link()
         except Exception as exc:
-            errors.append(f"link enable: {exc}")
+            errors.append(f"link state: {exc}")
 
     # -- Master gain ---------------------------------------------------------
     mg = data.get("master_gain")
@@ -367,7 +381,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                     time.sleep(retry_delay)
         errors.append(f"{label} '{value}': {last_exc}")
 
-    def _restore_audio(name: str | None, retries: int = max_retries):
+    def _restore_audio(name: int | str | None, retries: int = max_retries):
         last_exc = None
         for attempt in range(retries):
             try:
@@ -390,12 +404,14 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                     time.sleep(retry_delay)
         errors.append(f"audio output '{name}': {last_exc}")
 
-    audio_output = connections.get("audio_output")
+    audio_output = connections.get("audio_output") if "output" not in skip_settings else None
     audio_selected = audio_output is not None
     if isinstance(audio_output, str) and not audio_output.strip():
         audio_selected = False
+    if audio_selected:
+        host.preferred_output_device = audio_output
 
-    midi_inputs = connections.get("midi_inputs")
+    midi_inputs = connections.get("midi_inputs") if "midi_input" not in skip_settings else None
     if isinstance(midi_inputs, list):
         already_open = set(host.midi_input_names)
         for port_name in midi_inputs:
@@ -404,12 +420,15 @@ def restore(host: VcpiCore, path: Optional[Path] = None):
                 continue
             _restore_port(f"MIDI in '{port_name}'", port_name, host.open_midi_input)
 
-    _restore_port("MIDI mix in", connections.get("midi_mix_in"), host.open_mixer_midi)
-    _restore_port("MIDI mix out", connections.get("midi_mix_out"), host.open_mixer_midi_out)
-    if audio_selected and isinstance(audio_output, str):
-        _restore_audio(audio_output)
-    elif was_running:
-        _restore_audio(previous_output)
+    if "midimix_input" not in skip_settings:
+        _restore_port("MIDI mix in", connections.get("midi_mix_in"), host.open_mixer_midi)
+    if "midimix_output" not in skip_settings:
+        _restore_port("MIDI mix out", connections.get("midi_mix_out"), host.open_mixer_midi_out)
+    if start_audio:
+        if audio_selected:
+            _restore_audio(audio_output)
+        elif was_running:
+            _restore_audio(previous_output)
 
     # -- Report --------------------------------------------------------------
     if errors:

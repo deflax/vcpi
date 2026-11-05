@@ -67,6 +67,8 @@ def render_status(host: VcpiCore) -> str:
     if engine.audio_output_name and audio_state == "STOPPED":
         device += " (last opened; stopped)"
     rows.append(("Output device", device))
+    preferred = getattr(host, "preferred_output_device", None)
+    rows.append(("Preferred output", str(preferred) if preferred is not None else "(system default)"))
     rows.append(("Backend", engine.backend_label))
     rows.append(("Output realtime", format_realtime(engine.output_realtime)))
 

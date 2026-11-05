@@ -136,7 +136,7 @@ are enabled for local access. The builder does not configure a firewall.
 `payload.service` runs as `pi`, sets `LOG_LEVEL=INFO`, and starts:
 
 ```text
-/home/pi/vcpi/.venv/bin/python /home/pi/vcpi/main.py serve --sock /run/vcpi/vcpi.sock
+/home/pi/vcpi/.venv/bin/python /home/pi/vcpi/main.py serve --socket /run/vcpi/vcpi.sock
 ```
 
 Connect with `/home/pi/vcpi/vcpi`. Audio is still started explicitly from the CLI:
@@ -153,7 +153,7 @@ Or use the included plugdata patch; no plugin-path environment setting is needed
 track 1 pd sine
 midi link 1 1
 audio start
-note 1 60 100 500
+note 1 60 --velocity 100 --duration-ms 500
 ```
 
 Check the VCV command's `result` output: loading Cardinal does not alone prove

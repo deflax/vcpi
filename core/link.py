@@ -14,11 +14,23 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import math
 import threading
 
 from core.deps import HAS_LINK, aalink
 
 logger = logging.getLogger(__name__)
+
+
+def validate_bpm(value) -> float:
+    """Return a positive, finite tempo in beats per minute."""
+    try:
+        bpm = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("BPM must be a positive finite number") from exc
+    if not math.isfinite(bpm) or bpm <= 0:
+        raise ValueError("BPM must be a positive finite number")
+    return bpm
 
 
 class LinkSync:
@@ -32,7 +44,7 @@ class LinkSync:
 
     def __init__(self, bpm: float = 120.0):
         self._link = None
-        self._bpm = bpm
+        self._bpm = validate_bpm(bpm)
         self._enabled = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
@@ -82,6 +94,7 @@ class LinkSync:
         return asyncio.run_coroutine_threadsafe(construct(), loop).result(timeout=2.0)
 
     def enable(self):
+        self._bpm = validate_bpm(self.bpm)
         if not HAS_LINK:
             raise RuntimeError("aalink not installed")
         if self._enabled:
@@ -114,6 +127,7 @@ class LinkSync:
 
     @bpm.setter
     def bpm(self, value: float):
+        value = validate_bpm(value)
         self._bpm = value
         if self._link:
             self._link.tempo = value

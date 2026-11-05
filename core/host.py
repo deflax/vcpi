@@ -30,6 +30,7 @@ class VcpiCore:
                  session_path: Optional[str] = None):
         self.sample_rate = sample_rate
         self.buffer_size = buffer_size
+        self.preferred_output_device: int | str | None = None
         session_module = importlib.import_module("core.session")
         self.session_path = Path(session_path) if session_path else session_module.DEFAULT_SESSION_PATH
         self.loaded_session_name: Optional[str] = None
@@ -350,7 +351,11 @@ class VcpiCore:
     # -- audio / link --------------------------------------------------------
 
     def start_audio(self, output_device=None):
-        self.engine.request("start_audio", output_device=output_device)
+        selected = self.preferred_output_device if output_device is None else output_device
+        if isinstance(selected, str) and selected.strip().isdigit():
+            selected = int(selected.strip())
+        self.engine.request("start_audio", output_device=selected)
+        self.preferred_output_device = self.engine.audio_output_name or selected
 
     def stop_audio(self):
         self.engine.request("stop_audio")
@@ -373,11 +378,12 @@ class VcpiCore:
         p = Path(path) if path else self.session_path
         session_module.save(self, p)
 
-    def restore_session(self, path: Optional[str] = None):
-        """Restore state from a JSON session file."""
+    def restore_session(self, path: Optional[str] = None, *,
+                        start_audio: bool = True, skip_settings=()):
+        """Restore a session; startup may defer audio and override saved settings."""
         session_module = importlib.import_module("core.session")
         p = Path(path) if path else self.session_path
-        session_module.restore(self, p)
+        session_module.restore(self, p, start_audio=start_audio, skip_settings=skip_settings)
 
     # -- shutdown ------------------------------------------------------------
 

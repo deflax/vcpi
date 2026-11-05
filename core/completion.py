@@ -30,45 +30,41 @@ class _Word:
     start: int
 
 
-def _words(text: str, *, shell: bool) -> list[_Word] | None:
+def _words(text: str) -> list[_Word] | None:
     """Keep raw replacement offsets while tolerating an unfinished last quote."""
-    if not shell:
-        words = [_Word(m.group(), m.start()) for m in re.finditer(r"\S+", text)]
-    else:
-        words = []
-        start = None
-        quote = None
-        escaped = False
-        for i, char in enumerate(text):
-            if start is None:
-                if char.isspace():
-                    continue
-                start = i
-            if escaped:
-                escaped = False
-            elif char == "\\" and quote != "'":
-                escaped = True
-            elif quote:
-                if char == quote:
-                    quote = None
-            elif char in ("'", '"'):
-                quote = char
-            elif char.isspace():
-                try:
-                    words.append(_Word(shlex.split(text[start:i])[0], start))
-                except (ValueError, IndexError):
-                    return None
-                start = None
-        if start is not None:
-            if escaped:
-                return None
+    words = []
+    start = None
+    quote = None
+    escaped = False
+    for i, char in enumerate(text):
+        if start is None:
+            if char.isspace():
+                continue
+            start = i
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+        elif char.isspace():
             try:
-                words.append(_Word(shlex.split(text[start:] + (quote or ""))[0], start))
+                words.append(_Word(shlex.split(text[start:i])[0], start))
             except (ValueError, IndexError):
                 return None
+            start = None
+    if start is not None:
+        if escaped:
+            return None
+        try:
+            words.append(_Word(shlex.split(text[start:] + (quote or ""))[0], start))
+        except (ValueError, IndexError):
+            return None
         # Whitespace inside an open quote belongs to that word.
-        if start is not None:
-            return words
+        return words
     if not words or text[-1:].isspace():
         words.append(_Word("", len(text)))
     return words
@@ -89,10 +85,7 @@ def _indexes(items) -> list[str]:
     return [str(i) for i in range(1, len(items) + 1)]
 
 
-def _port_indexes(direction: str, prefix: str) -> list[str]:
-    # A mistyped/non-numeric port cannot match an index; do not probe hardware.
-    if prefix and not prefix.isdecimal():
-        return []
+def _port_choices(direction: str, prefix: str) -> list[str]:
     try:
         ports = (midi.list_midi_input_ports() if direction == "input"
                  else midi.list_midi_output_ports())
@@ -100,7 +93,8 @@ def _port_indexes(direction: str, prefix: str) -> list[str]:
         # Hardware backends can be unavailable even when rtmidi is installed.
         # Keep unrelated grammar choices usable without opening any ports.
         return []
-    return [str(i) for i in range(len(ports))]
+    indexes = [str(i) for i in range(len(ports))]
+    return indexes if prefix.isdecimal() else [*indexes, *ports]
 
 
 def complete_line(cli: HostCLI, before: str) -> dict:
@@ -122,8 +116,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
 
     rest_start = head.end()
     rest = before[rest_start:]
-    shell = command in ("get", "set")
-    words = _words(rest, shell=shell)
+    words = _words(rest)
     if words is None:
         return empty
     args = [word.value for word in words[:-1]]
@@ -136,29 +129,43 @@ def complete_line(cli: HostCLI, before: str) -> dict:
     if command == "midi" and len(args) > 1 and args[0] == "input":
         args[1] = args[1].lower()
 
-    def choices(values, *, quoted=shell, wanted=prefix, replace=start):
+    def choices(values, *, quoted=True, wanted=prefix, replace=start):
         values = [str(value) for value in values
                   if not any(ord(c) < 32 or ord(c) == 127 for c in str(value))]
         matches = cli._filter_prefix(sorted(set(values)), wanted)
         return {"start_position": replace - len(before),
                 "matches": [shlex.quote(value) if quoted else value for value in matches]}
 
-    def asset_tokens(values):
-        return [value for value in values if value and not any(c.isspace() for c in value)]
 
     if command in ("save", "load"):
-        # These parsers consume the entire raw argument, not shell tokens.
-        return choices(cli._session_names(), quoted=False, wanted=rest, replace=rest_start)
+        return choices(cli._session_names()) if not args else empty
     if command == "help":
-        return choices(commands) if not args else empty
+        topics = [topic.split() for topic in cli._help_topics]
+        return choices(parts[len(args)] for parts in topics
+                       if len(parts) > len(args) and parts[:len(args)] == args)
     if command in ("mute", "solo", "note", "gain"):
         if not args:
             return choices((*_TRACKS, "master") if command == "gain" else _TRACKS)
+        if command in ("mute", "solo") and len(args) == 1 and args[0] in _TRACKS:
+            return choices(("on", "off", "toggle"))
+        if command == "note" and len(args) >= 2 and args[0] in _TRACKS:
+            flags = ("--velocity", "--duration-ms")
+            options = args[2:]
+            if len(options) % 2 or any(flag not in flags for flag in options[::2]):
+                return empty
+            if len(options[::2]) != len(set(options[::2])):
+                return empty
+            return choices(flag for flag in flags if flag not in options[::2])
         return empty
     if command == "debug":
         return choices(("on", "off")) if not args else empty
     if command == "ps":
-        return choices(("all",)) if not args else empty
+        valid = ("--all", "--cpu", "--mem")
+        if (any(arg not in valid for arg in args) or len(args) != len(set(args))
+                or ("--cpu" in args and "--mem" in args)):
+            return empty
+        return choices(flag for flag in valid if flag not in args
+                       and not (flag in ("--cpu", "--mem") and any(sort in args for sort in ("--cpu", "--mem"))))
     if command == "ableton":
         return choices(("link", "cut")) if not args else empty
     if command == "show":
@@ -176,9 +183,13 @@ def complete_line(cli: HostCLI, before: str) -> dict:
     if command == "audio":
         if not args:
             return choices(("start", "stop", "devices", "diagnose"))
-        if args == ["start"] and (not prefix or prefix.isdecimal()):
-            return choices(str(device["index"]) for device in cli.host.engine.audio_devices
-                           if device["max_output_channels"] > 0)
+        if args == ["start"]:
+            devices = [device for device in cli.host.engine.audio_devices
+                       if device["max_output_channels"] > 0]
+            values = [str(device["index"]) for device in devices]
+            if not prefix.isdecimal():
+                values.extend(device["name"] for device in devices)
+            return choices(values)
         return empty
     if command == "midi":
         if not args:
@@ -186,7 +197,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         if args == ["ports"]:
             return choices(("input", "output"))
         if args == ["input"]:
-            return choices(["close", *_port_indexes("input", prefix)])
+            return choices(["close", *_port_choices("input", prefix)])
         if args == ["input", "close"]:
             return choices(_indexes(cli.host.midi_inputs))
         if len(args) == 1 and args[0] in ("link", "cut"):
@@ -198,7 +209,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
         if not args:
             return choices(("input", "output"))
         if len(args) == 1 and args[0] in ("input", "output"):
-            return choices(_port_indexes(args[0], prefix))
+            return choices(_port_choices(args[0], prefix))
         return empty
     if command == "seq":
         if not args:
@@ -226,7 +237,7 @@ def complete_line(cli: HostCLI, before: str) -> dict:
             # complete name fragment, including already typed words.
             plugin_start = words[2].start if len(words) > 2 else len(rest)
             fragment = rest[plugin_start:]
-            plugin_words = _words(fragment, shell=True)
+            plugin_words = _words(fragment)
             if plugin_words is None:
                 return empty
             tokens = [word.value for word in plugin_words]
@@ -251,14 +262,21 @@ def complete_line(cli: HostCLI, before: str) -> dict:
                 return choices(("status", "seek", "cue"))
             if args[2:] == ["cue"]:
                 return choices(("set",))
+            if len(args) == 3 and args[2] not in ("status", "seek", "cue"):
+                return choices(("--name",))
             return empty
-        if mode == "vcv" and len(args) == 2:
-            return choices(asset_tokens(cli._vcv_patch_names()))
+        if mode == "vcv":
+            if len(args) == 2:
+                return choices(cli._vcv_patch_names())
+            if len(args) == 3:
+                return choices(("--name",))
         if mode == "wav":
             if len(args) == 2:
-                return choices(asset_tokens(cli._sample_pack_names()))
+                return choices(cli._sample_pack_names())
             if len(args) == 3:
-                return choices(asset_tokens(cli._sample_names(args[2])))
+                return choices(cli._sample_names(args[2]))
+            if len(args) == 4:
+                return choices(("--name",))
         return empty
     if command in ("get", "set"):
         if not args:
@@ -283,8 +301,6 @@ def complete_line(cli: HostCLI, before: str) -> dict:
                 args, require_master_index=command == "set")
         except (ValueError, IndexError):
             return choices(target_choices)
-        if command == "get" and remaining == ["--group"]:
-            return choices(("controls", "settings", "midi", "unused", "all"))
         if not remaining:
             names = [name for name, _ in plugin.parameter_items()]
             if command == "set":
@@ -297,8 +313,9 @@ def complete_line(cli: HostCLI, before: str) -> dict:
                     # Quoting cannot escape the instrument-target fx keyword.
                     names = [name for name in names if name != "fx"]
             if command == "get":
-                names = [name for name in names if name != "--group"]
-                names.append("--group")
+                flags = ("--controls", "--settings", "--midi", "--unused", "--all")
+                names = [name for name in names if name not in flags]
+                names.extend(flags)
             return choices([*target_choices, *names])
         if command == "set" and len(remaining) == 1:
             parameter = plugin.parameters.get(remaining[0])

@@ -218,9 +218,9 @@ class HostShutdownTests(unittest.TestCase):
                             self.engine.cleanup_error = cleanup_error
 
                     args = SimpleNamespace(
-                        sr=44100, buf=512, session=str(path), bpm=120.0,
-                        no_restore=False, link=False, midi_in=None,
-                        mix_midi=None, mix_midi_out=None,
+                        sample_rate=44100, buffer_size=512, session=str(path), bpm=None,
+                        no_restore=False, link=None, midi_input=None,
+                        midimix_input=None, midimix_output=None, output=None,
                     )
                     with patch("core.host.RemoteAudioEngine", _ControlEngine), \
                             patch("core.host.VcpiCore", StartupHost):

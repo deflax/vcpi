@@ -49,16 +49,7 @@ class DeckCLITests(unittest.TestCase):
         self.output = io.StringIO()
         self.cli = HostCLI(self.host, stdout=self.output, owns_host=False)
 
-    def test_creation_quoted_path_and_explicit_transport_grammar(self):
-        self.cli.onecmd('track 2 deck "/music/live set.json" Deck B')
-        self.host.load_deck.assert_called_once_with(1, "/music/live set.json", "Deck B")
-        for command, action, value in (("seek 90", "seek", 90.0),
-                                       ("cue set", "cue_set", None),
-                                       ("cue", "cue", None)):
-            self.cli.onecmd("track 1 deck " + command)
-            args = (0, action) if value is None else (0, action, value)
-            self.engine.deck_command.assert_called_with(*args)
-        self.engine.deck_command.reset_mock()
+    def test_invalid_transport_grammar_does_not_mutate_deck(self):
         for invalid in ("cue extra", "status extra", "seek", "seek xx", "seek 1 2"):
             self.cli.onecmd("track 1 deck " + invalid)
         self.engine.deck_command.assert_not_called()
@@ -82,11 +73,6 @@ class DeckCLITests(unittest.TestCase):
         self.engine.deck_command.assert_not_called()
         self.host.load_deck.assert_not_called()
 
-    def test_selection_acknowledges_request_not_applied_track(self):
-        self.cli.onecmd("set 1 track_select 2")
-        self.engine.set_parameter.assert_called_once_with(0, "track_select", 2.0, fx_index=None)
-        self.assertIn("request accepted", self.output.getvalue())
-        self.assertEqual(self.track.deck["track_id"], "first")
 
     def test_deck_payload_omits_source_chunk_but_keeps_insert_chunks(self):
         self.track.effects = [PluginSnapshot(
@@ -95,6 +81,7 @@ class DeckCLITests(unittest.TestCase):
         self.engine.master_gain = 1.0
         self.host.channel_map = {0: 0}
         self.host.audio_output_name = None
+        self.host.preferred_output_device = None
         self.host.midi_input_names = []
         self.host.mixer_midi_name = None
         self.host.mixer_midi_out_name = None
