@@ -137,19 +137,20 @@ not audio or session playlists; see [deck commands](USAGE.md#deck-commands).
 
 ```text
 .
-  src/                  # Python package, installed under the vcpi namespace
-    host.py             # Control-process orchestration
-    commands/           # CLI handlers, help, completion and discovery
-    audio/              # Process clients, owners, protocol and control.py facade
-    controllers/        # Generic MIDI input and hardware integrations
-    presentation/       # Status, signal-flow and terminal rendering
-    sessions/           # Persistence, snapshots and restore phases
-    plugin_host.py      # Native lifecycle helpers for audio children
-    audio_state.py      # Cached plugin/parameter snapshots
-    client.py           # Unix-socket CLI client
-    server.py           # Headless Unix-socket server
-    link.py             # Ableton Link wrapper
-    sequencer.py        # Internal step sequencer
+  src/
+    vcpi/               # Importable Python application package
+      host.py           # Control-process orchestration
+      commands/         # CLI handlers, help, completion and discovery
+      audio/            # Process clients, owners, protocol and control.py facade
+      controllers/      # Generic MIDI input and hardware integrations
+      presentation/     # Status, signal-flow and terminal rendering
+      sessions/         # Persistence, snapshots and restore phases
+      plugin_host.py    # Native lifecycle helpers for audio children
+      audio_state.py    # Cached plugin/parameter snapshots
+      client.py         # Unix-socket CLI client
+      server.py         # Headless Unix-socket server
+      link.py           # Ableton Link wrapper
+      sequencer.py      # Internal step sequencer
     engine/             # C++ hosting, sampler, decks, transport and mixer
       CMakeLists.txt    # Native extension build
       pd_state.cpp      # Control-thread plugdata/Pd state conversion
@@ -160,7 +161,7 @@ not audio or session playlists; see [deck commands](USAGE.md#deck-commands).
     patches/            # Cardinal .vcv and plugdata .pd patches
   sessions/             # User-saved session files, not Python source
   tests/                # Automated Python regression tests
-  pyproject.toml        # Python package metadata and explicit src package mapping
+  pyproject.toml        # Python package metadata and src discovery
   requirements.txt      # Python dependency set
   build_native.py       # Native build entrypoint
   main.py               # Direct-script entrypoint (after package installation)
@@ -170,9 +171,7 @@ not audio or session playlists; see [deck commands](USAGE.md#deck-commands).
   rpi-build/            # Raspberry Pi image build/provisioning tools
 ```
 
-`src/` is mapped to the installed `vcpi` Python package in `pyproject.toml`;
-its Python subpackages are listed explicitly there. `src/engine` is C++ source,
-not a Python package. The `vcpi` import namespace and `python -m vcpi` stay unchanged.
+`src/vcpi` is the Python package; `src/engine` is C++ source, not a Python package.
 Import command entrypoints from `vcpi.commands.cli` and `vcpi.commands.completion`;
 audio facades from `vcpi.audio.client`, `vcpi.audio.track_client`, and
 `vcpi.audio.control`; and session file operations from `vcpi.sessions.persistence`.
@@ -184,7 +183,7 @@ checkout ID is derived from the resolved checkout path. Moving or copying a
 checkout selects a fresh cache rather than reusing CMake's incompatible absolute
 paths. Existing caches are left untouched; the first build at a new location may
 download the pinned build dependencies again. CMake places the compiled
-`_vcpi_native` extension directly inside `src/`.
+`_vcpi_native` extension inside `src/vcpi`.
 
 The native `PluginOwnership` guard is shared by track rendering and master effects.
 Pd-state conversion stays on the control thread, while deck streaming and callback

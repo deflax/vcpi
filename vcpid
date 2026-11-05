@@ -26,7 +26,7 @@ import importlib.util
 from pathlib import Path
 import sys
 spec = importlib.util.find_spec("vcpi")
-expected = Path(sys.argv[1]).resolve() / "src" / "__init__.py"
+expected = Path(sys.argv[1]).resolve() / "src" / "vcpi" / "__init__.py"
 raise SystemExit(spec is None or spec.origin is None or Path(spec.origin).resolve() != expected)
 ' "$ROOT_DIR"; then
   "$PYTHON_BIN" -m pip install -e "$ROOT_DIR"
