@@ -5,10 +5,10 @@ commands.
 
 Source of truth:
 
-- `src/vcpi/main.py`
-- `src/vcpi/commands/cli.py` and the command-domain handlers beside it
-- `src/vcpi/commands/help.py` (help topics)
-- `src/vcpi/commands/completion.py` (shared interactive/socket completion)
+- `src/main.py`
+- `src/commands/cli.py` and the command-domain handlers beside it
+- `src/commands/help.py` (help topics)
+- `src/commands/completion.py` (shared interactive/socket completion)
 
 ## Conventions
 

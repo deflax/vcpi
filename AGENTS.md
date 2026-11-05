@@ -18,7 +18,7 @@ Read this file first in new sessions. It is a durable map of the repo, not a ful
 
 ```text
 .
-├── src/vcpi/      Python application package
+├── src/           Python application package (installed as vcpi)
 ├── src/engine/    C++ audio engine and Python bindings
 ├── assets/        Bundled samples and Cardinal/Pure Data patches
 ├── sessions/      Saved session files
@@ -44,19 +44,19 @@ Hidden directories present in the workspace:
 |---|---|
 | Startup flow and repo overview | `README.md` |
 | CLI flags and command syntax | `USAGE.md` |
-| Main orchestration | `src/vcpi/host.py` |
+| Main orchestration | `src/host.py` |
 | Real-time audio engine | `src/engine/runtime.cpp`, `src/engine/track_runner.cpp` |
-| Python audio control | `src/vcpi/audio/control.py` |
-| Audio process ownership and IPC | `src/vcpi/audio/` |
-| CLI implementation | `src/vcpi/commands/` |
-| Server/client split | `src/vcpi/server.py`, `src/vcpi/client.py` |
-| Ableton Link integration | `src/vcpi/link.py` |
-| Session save/restore | `src/vcpi/sessions/` |
-| Generic MIDI input | `src/vcpi/controllers/midi_input.py` |
-| Akai MIDI Mix mapping | `src/vcpi/controllers/akai_midimix.py` |
+| Python audio control | `src/audio/control.py` |
+| Audio process ownership and IPC | `src/audio/` |
+| CLI implementation | `src/commands/` |
+| Server/client split | `src/server.py`, `src/client.py` |
+| Ableton Link integration | `src/link.py` |
+| Session save/restore | `src/sessions/` |
+| Generic MIDI input | `src/controllers/midi_input.py` |
+| Akai MIDI Mix mapping | `src/controllers/akai_midimix.py` |
 | WAV sampler | `src/engine/plugin.cpp`, `assets/samples/` |
-| Signal/status/terminal rendering | `src/vcpi/presentation/` |
-| Plugin installation and discovery | `USAGE.md`, `src/vcpi/commands/assets.py`, `src/vcpi/plugin_host.py` |
+| Signal/status/terminal rendering | `src/presentation/` |
+| Plugin installation and discovery | `USAGE.md`, `src/commands/assets.py`, `src/plugin_host.py` |
 | Raspberry Pi deployment | `rpi-build/README.md`, `rpi-build/services/` |
 
 ## Runtime model
@@ -127,14 +127,14 @@ python -m vcpi cli
 1. This file
 2. `README.md`
 3. `USAGE.md`
-4. The specific module you plan to change under `src/vcpi/`, `src/engine/`, or `rpi-build/`
+4. The specific module you plan to change under `src/` or `rpi-build/`
 
 ## Recent findings / current priorities
 
 This section is intentionally short and may go stale. Prefer the sections above for durable repo facts.
 
-- The application uses an installed `vcpi` namespace; no root-level Python package or `sys.path` adjustment is needed.
+- The application maps `src/` to the installed `vcpi` namespace; Python subpackages are listed explicitly in `pyproject.toml`. No root-level Python package or `sys.path` adjustment is needed.
 - Existing regressions run with `.venv/bin/python -m unittest discover -s tests`.
-- The native extension builds into `src/vcpi`; per-platform build caches live under `build/engine/`.
+- The native extension builds directly into `src/`; per-platform build caches live under `build/engine/`.
 - Separate transient session state lives in `HANDOFF.md` if that file exists.
 - No active implementation task was in progress when this note was written.

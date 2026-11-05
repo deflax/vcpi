@@ -22,12 +22,12 @@ and the remaining physical-hardware acceptance limits.
 - `src/engine/track_runner.cpp`: `TrackRunner` renders a native `Plugin`, then its inserts,
   into shared-memory transport. Output mixes those blocks with one block of
   buffering. Neither track DSP nor the output callback enters Python.
-- `src/vcpi/plugin_host.py`, `src/vcpi/audio/track_client.py`, `src/vcpi/audio/owner.py`: new track
+- `src/plugin_host.py`, `src/audio/track_client.py`, `src/audio/owner.py`: new track
   sources are prepared in staged workers before publication. Existing track
   controls operate through bounded IPC and generation-aware updates.
-- `src/vcpi/audio_state.py`, `src/vcpi/models.py`: daemon-side snapshots currently have
+- `src/audio_state.py`, `src/models.py`: daemon-side snapshots currently have
   no deck transport/status fields. Completion and read-only commands use caches.
-- `src/vcpi/sessions/persistence.py`: session format 3 saves native VST3 chunks and path-based WAV
+- `src/sessions/persistence.py`: session format 3 saves native VST3 chunks and path-based WAV
   tracks; versions 1, 2 and 3 are readable.
 - `src/engine/CMakeLists.txt`: JUCE 8.0.6 audio basics/formats/processors are available;
   audio-utils is not currently compiled. FLAC, Ogg and MP3 decoding are disabled.
@@ -250,12 +250,12 @@ for this audible and hardware-specific check.
 - Native: new deck files; `src/engine/plugin.hpp`, `src/engine/plugin.cpp`,
   `src/engine/bindings.cpp`, `src/engine/CMakeLists.txt`; runtime only if needed for
   bounded status/control handoff, not a new mixer or output path.
-- Ownership/control: `src/vcpi/plugin_host.py`, `src/vcpi/host.py`, `src/vcpi/audio/control.py`,
-  `src/vcpi/audio/` client, owner and protocol modules.
-- Snapshots/interface: `src/vcpi/models.py`, `src/vcpi/audio_state.py`, `src/vcpi/commands/`,
+- Ownership/control: `src/plugin_host.py`, `src/host.py`, `src/audio/control.py`,
+  `src/audio/` client, owner and protocol modules.
+- Snapshots/interface: `src/models.py`, `src/audio_state.py`, `src/commands/`,
   affected presentation/status renderers and controller handlers.
-- Bank parsing: a focused control-side module such as `src/vcpi/deck_bank.py`.
-- Persistence/tests/docs: `src/vcpi/sessions/`, focused behavioural tests alongside
+- Bank parsing: a focused control-side module such as `src/deck_bank.py`.
+- Persistence/tests/docs: `src/sessions/`, focused behavioural tests alongside
   the existing native/process tests, README.md and USAGE.md.
 
 ## Research verification
