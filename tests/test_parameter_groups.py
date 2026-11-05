@@ -2,7 +2,7 @@
 
 import unittest
 
-from core.audio_state import PARAMETER_GROUPS, ParameterSnapshot, PluginSnapshot
+from vcpi.audio_state import PARAMETER_GROUPS, ParameterSnapshot, PluginSnapshot
 
 
 class ParameterGroupTests(unittest.TestCase):

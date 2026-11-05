@@ -8,10 +8,10 @@ from unittest.mock import Mock
 
 from rich.console import Console
 
-from core.audio_state import ParameterSnapshot, PluginSnapshot
-from core.cli import HostCLI
-from core.client_display import _get_table, display_response
-from core.host import VcpiCore
+from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
+from vcpi.commands.cli import HostCLI
+from vcpi.presentation.client_display import _get_table, display_response
+from vcpi.host import VcpiCore
 
 
 class ParameterDisplayTests(unittest.TestCase):

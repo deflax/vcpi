@@ -5,8 +5,10 @@ commands.
 
 Source of truth:
 
-- `core/main.py`
-- `core/cli.py`
+- `src/vcpi/main.py`
+- `src/vcpi/commands/cli.py` and the command-domain handlers beside it
+- `src/vcpi/commands/help.py` (help topics)
+- `src/vcpi/commands/completion.py` (shared interactive/socket completion)
 
 ## Conventions
 
@@ -26,18 +28,19 @@ Source of truth:
 |---|---|
 | `./vcpid` | Starts headless server mode; creates `.venv` and synchronizes dependencies |
 | `./vcpi` | Connects interactive client mode; creates `.venv` and synchronizes dependencies |
-| `python main.py serve` | Starts headless server with Unix socket control |
-| `python main.py cli` | Connects to a running headless server |
+| `python -m vcpi serve` | Starts headless server with Unix socket control |
+| `python -m vcpi cli` | Connects to a running headless server |
 
 Server startup displays the vcpi logo regardless of `LOG_LEVEL`, before
 initializing the host.
 
-Both launchers install `requirements.txt` when the environment is new, when
-upgrading an older environment without a dependency snapshot, or when the
-requirements file changes. Successful installs are recorded in
-`$VENV_DIR/.vcpi-requirements.txt` (`VENV_DIR` defaults to the repo `.venv`).
-Unchanged requirements skip installation; failed installs stop startup and
-are retried on the next launch. Direct Python startup does not install dependencies.
+Both launchers install the application in editable mode when the environment is
+new, `requirements.txt` or `pyproject.toml` changes, or imports point to another
+checkout. Successful installs are recorded in `$VENV_DIR/.vcpi-requirements.txt`
+and `$VENV_DIR/.vcpi-pyproject.toml` (`VENV_DIR` defaults to the repo `.venv`).
+Unchanged metadata and a matching import location skip installation; failed
+installs stop startup and are retried on the next launch. Direct Python startup
+requires `.venv/bin/python -m pip install -e .` first; it does not install anything.
 
 Default socket path (server and client):
 
@@ -59,7 +62,7 @@ To clear it, close your clients and delete `~/.config/vcpi/history`.
 
 ## Host Startup Flags
 
-These flags apply when starting the host server (`python main.py serve`).
+These flags apply when starting the host server (`python -m vcpi serve`).
 
 | Flag | Default | Description |
 |---|---|---|
@@ -151,9 +154,10 @@ VST3 plugin search and name resolution:
 
 Cardinal/VCV helpers:
 
-- `track <n> vcv` looks for patch files in `patches/` by default.
+- `track <n> vcv` looks for patch files in `assets/patches/` by default.
 - `track <n> vcv` does not auto-route channels; use `midi link <ch> <track>` explicitly.
-- Override patch directory with `VCPI_PATCHES_DIR`.
+- Override the patch directory with `VCPI_PATCHES_DIR`. Without an override, use
+  the working directory's `assets/patches` if present, otherwise the checkout's.
 - Override Cardinal plugin path with `CARDINAL_VST3_PATH`.
 - Author patches in Cardinal with Host MIDI and Host Audio modules wired to the
   instrument. Both JSON and compressed `.vcv` projects are imported through
@@ -180,7 +184,7 @@ plugdata/Pure Data helpers:
   `PLUGDATA_VST3_PATH` to the bundle's full path before starting the daemon.
   Repository-local and working-directory plugin folders are not searched
   automatically.
-- `track <n> pd <patch_name[.pd]> [--name <label>]` loads from `patches/`,
+- `track <n> pd <patch_name[.pd]> [--name <label>]` loads from `assets/patches/`,
   sharing `VCPI_PATCHES_DIR` with Cardinal. Absolute paths and nested patch names
   are accepted. Quote names containing spaces, or use the same multiword-name
   syntax as `track <n> vst`; labels require `--name`.
@@ -236,7 +240,7 @@ For example, `set 1 cutoff 950` changes the pad's filter and
 release applies to subsequent note-offs. Long envelopes still need time to play.
 The MIDI Mix fader remains the track gain, not one of these patch controls.
 Automation values are preserved in native plugin session state.
-To edit oscillator detuning or output gain, open `patches/poly-pad.pd` in
+To edit oscillator detuning or output gain, open `assets/patches/poly-pad.pd` in
 Pure Data or plugdata and keep those settings matched across the eight voices.
 The pad's output is 6 dB louder than the original example while retaining
 headroom for chords. Reload it with `track 1 pd poly-pad` after updating
@@ -282,7 +286,7 @@ Examples:
 
 ```bash
 LOG_LEVEL=INFO ./vcpid
-LOG_LEVEL=WARNING python main.py serve
+LOG_LEVEL=WARNING python -m vcpi serve
 ```
 
 Server/client specific:
@@ -322,9 +326,9 @@ Other responses, including `help <command>`, retain their text.
 - `Ctrl-C` cancels the current input without disconnecting.
 - `Ctrl-D` on an empty prompt disconnects; `quit` and `exit` also disconnect.
 - Redirected input or output uses the plain-text client, without Rich formatting.
-- For direct Python startup, install dependencies with `.venv/bin/pip install -r requirements.txt`.
+- For direct Python startup, install the package with `.venv/bin/python -m pip install -e .`.
 
-When connected with `./vcpi` (or `python main.py cli`), press `Tab` after a
+When connected with `./vcpi` (or `python -m vcpi cli`), press `Tab` after a
 command or partial argument to show matching choices. Suggestions come from the
 daemon's shared command grammar and cached state, not a separate client-side
 command list. Tab does not execute commands, start audio, or read live plugin
@@ -359,10 +363,10 @@ hardware or empty plugin/effect lists may also yield no choices.
 | Command | Description |
 |---|---|
 | `track <track> vst <path\|vst_name> [--name <label>]` | Load VST instrument into track |
-| `track <track> wav <pack> <sample> [--name <label>]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into track |
+| `track <track> wav <pack> <sample> [--name <label>]` | Load `assets/samples/<pack>/<sample>.wav` as one-shot sampler into track |
 | `track <track> deck <audio-file\|directory> [--name <label>]` | Create a paused streaming deck, or append a file or directory's audio files to its session-owned playlist |
-| `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `patches/<patch_name>.vcv` |
-| `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `patches/` or an absolute path |
+| `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `assets/patches/<patch_name>.vcv` |
+| `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `assets/patches/` or an absolute path |
 | `track <track\|master> fx <path\|vst_name> [--name <label>]` | Load effect into track insert chain or master bus |
 | `track <track> clear` | Clear instrument from track |
 | `track <track\|master> fx clear <fx_index>` | Remove effect by index |
@@ -922,7 +926,9 @@ not open hardware ports; `midi input` and `midimix input` do.
 WAV sampler behavior:
 
 - `track <n> wav` plays the file when MIDI `note_on` events reach that track.
-- `track 2 wav 909 bassdrum` resolves to `sampler/samples/909/bassdrum.wav`.
+- `track 2 wav 909 bassdrum` resolves to `assets/samples/909/bassdrum.wav`.
+  A working-directory `assets/samples` directory takes precedence over bundled
+  checkout samples, consistently for loading and completion.
 - Built-in packs: `808`, `909`, `piano`, `organ`, `strings`, `synth-pads`, `synth-leads`.
 - The `.wav` extension is optional in `<sample>`.
 - Notes are pitch-shifted around middle C (MIDI note 60).

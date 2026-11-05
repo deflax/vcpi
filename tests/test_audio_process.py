@@ -18,10 +18,10 @@ from unittest.mock import patch
 
 import numpy as np
 
-from core.audio_deps import require_native
-from core.audio_process import AudioProcessError
-from core.host import VcpiCore
-from core.plugin_host import NativePlugin
+from vcpi.audio_deps import require_native
+from vcpi.audio.protocol import AudioProcessError
+from vcpi.host import VcpiCore
+from vcpi.plugin_host import NativePlugin
 
 
 class AudioProcessTests(unittest.TestCase):
@@ -261,7 +261,7 @@ class AudioProcessTests(unittest.TestCase):
             host.engine.set_master_gain(0.9)
         with self.assertRaises(AudioProcessError):
             host.save_session()
-        with self.assertLogs("core.host", level="WARNING"):
+        with self.assertLogs("vcpi.host", level="WARNING"):
             host.shutdown()
         self.assertEqual(host.session_path.read_bytes(), previous)
         self.assertFalse(process.is_alive())

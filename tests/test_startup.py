@@ -9,10 +9,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.engine import AudioEngine
-from core.host import VcpiCore
-from core.link import LinkSync, validate_bpm
-from core.main import _boot_host, _build_parser
+from vcpi.audio.control import AudioEngine
+from vcpi.host import VcpiCore
+from vcpi.link import LinkSync, validate_bpm
+from vcpi.main import _boot_host, _build_parser
 
 
 class DeviceEngine(AudioEngine):
@@ -97,11 +97,11 @@ class StartupTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.path = Path(directory.name) / "session.json"
         self.parser = _build_parser()
-        self.enterContext(patch("core.host.RemoteAudioEngine", DeviceEngine))
-        self.enterContext(patch("core.link.HAS_LINK", True))
-        self.enterContext(patch("core.link.aalink", SimpleNamespace(Link=LinkHardware)))
-        self.enterContext(patch("core.midi.HAS_RTMIDI", True))
-        self.enterContext(patch("core.midi.rtmidi", SimpleNamespace(
+        self.enterContext(patch("vcpi.host.RemoteAudioEngine", DeviceEngine))
+        self.enterContext(patch("vcpi.link.HAS_LINK", True))
+        self.enterContext(patch("vcpi.link.aalink", SimpleNamespace(Link=LinkHardware)))
+        self.enterContext(patch("vcpi.midi.HAS_RTMIDI", True))
+        self.enterContext(patch("vcpi.midi.rtmidi", SimpleNamespace(
             MidiIn=MidiHardware, MidiOut=MidiHardware)))
         LinkHardware.created_tempos = []
         MidiHardware.opened = []

@@ -10,13 +10,13 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
-from core import deps
-from core.audio_process import AudioProcessError
-from core.engine import AudioEngine
-from core.models import InstrumentTrack
-from core.host import VcpiCore
-from core.main import _boot_host
-from core.sequencer import Sequencer
+from vcpi import deps
+from vcpi.audio.protocol import AudioProcessError
+from vcpi.audio.control import AudioEngine
+from vcpi.models import InstrumentTrack
+from vcpi.host import VcpiCore
+from vcpi.main import _boot_host
+from vcpi.sequencer import Sequencer
 
 
 class _ControlEngine(AudioEngine):
@@ -86,7 +86,7 @@ class HostShutdownTests(unittest.TestCase):
         host.link._start_loop_thread()
         self.link_thread = host.link._loop_thread
 
-        from controllers.midi_input import MidiInputController
+        from vcpi.controllers.midi_input import MidiInputController
 
         self.midi_input = MidiInputController(host.engine)
         host.midi_inputs.append(self.midi_input)
@@ -128,7 +128,7 @@ class HostShutdownTests(unittest.TestCase):
         self.assertEqual(host.engine.owner_control.fileno(), -1)
 
     def _host(self, session_path):
-        with patch("core.host.RemoteAudioEngine", _ControlEngine):
+        with patch("vcpi.host.RemoteAudioEngine", _ControlEngine):
             host = VcpiCore(session_path=str(session_path))
         self._activate_resources(host)
         return host
@@ -223,14 +223,14 @@ class HostShutdownTests(unittest.TestCase):
                         no_restore=False, link=None, midi_input=None,
                         midimix_input=None, midimix_output=None, output=None,
                     )
-                    with patch("core.host.RemoteAudioEngine", _ControlEngine), \
-                            patch("core.host.VcpiCore", StartupHost):
+                    with patch("vcpi.host.RemoteAudioEngine", _ControlEngine), \
+                            patch("vcpi.host.VcpiCore", StartupHost):
                         if cleanup_error is None:
-                            with self.assertNoLogs("core.main", level="ERROR"), \
+                            with self.assertNoLogs("vcpi.main", level="ERROR"), \
                                     self.assertRaises(type(cancellation)) as raised:
                                 _boot_host(args)
                         else:
-                            with self.assertLogs("core.main", level="ERROR") as logged, \
+                            with self.assertLogs("vcpi.main", level="ERROR") as logged, \
                                     self.assertRaises(type(cancellation)) as raised:
                                 _boot_host(args)
                             self.assertIn("startup cleanup failed", logged.output[0])
@@ -249,7 +249,7 @@ class HostShutdownTests(unittest.TestCase):
             host = self._host(path)
             failure = RuntimeError("control close failed")
             host.engine.cleanup_error = failure
-            with self.assertLogs("core.host", level="ERROR"), \
+            with self.assertLogs("vcpi.host", level="ERROR"), \
                     self.assertRaises(RuntimeError) as raised:
                 host.shutdown(save=False)
             self.assertIs(raised.exception, failure)

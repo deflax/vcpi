@@ -14,7 +14,7 @@ import wave
 
 import numpy as np
 
-from core.audio_deps import require_native
+from vcpi.audio_deps import require_native
 
 
 class NativeDeckCacheTests(unittest.TestCase):
@@ -56,7 +56,7 @@ class NativeDeckCacheTests(unittest.TestCase):
     def subprocess_status(self, song=None, environment=None):
         script = """
 import json, sys
-from core.audio_deps import require_native
+from vcpi.audio_deps import require_native
 plugin = require_native().Plugin(sys.argv[1], 48000, 512, "deck")
 print(json.dumps(plugin.deck_status()))
 """
@@ -256,7 +256,7 @@ print(json.dumps(plugin.deck_status()))
     def test_concurrent_processes_publish_complete_entries(self):
         script = """
 import json, sys
-from core.audio_deps import require_native
+from vcpi.audio_deps import require_native
 plugin = require_native().Plugin(sys.argv[1], 48000, 512, "deck")
 print(json.dumps(plugin.deck_status()))
 """

@@ -26,7 +26,7 @@ if [ "$EUID" -ne 0 ] || [ "$(dpkg --print-architecture)" != arm64 ]; then
   echo "ERROR: target provisioning requires root inside an ARM64 Raspberry Pi OS image" >&2
   exit 1
 fi
-if [ ! -f "$PROJECT_DIR/requirements.txt" ] || [ ! -f "$PROJECT_DIR/build_native.py" ]; then
+if [ ! -f "$PROJECT_DIR/pyproject.toml" ] || [ ! -f "$PROJECT_DIR/requirements.txt" ] || [ ! -f "$PROJECT_DIR/build_native.py" ]; then
   echo "ERROR: prepare-image.sh must copy the current checkout to $PROJECT_DIR" >&2
   exit 1
 fi
@@ -147,8 +147,9 @@ cd "$PROJECT_DIR"
 python3 -m venv "$PROJECT_DIR/.venv"
 PYTHON="$PROJECT_DIR/.venv/bin/python"
 "$PYTHON" -m pip install --no-cache-dir --upgrade pip
-"$PYTHON" -m pip install --no-cache-dir -r "$PROJECT_DIR/requirements.txt"
+"$PYTHON" -m pip install --no-cache-dir -e "$PROJECT_DIR"
 cp "$PROJECT_DIR/requirements.txt" "$PROJECT_DIR/.venv/.vcpi-requirements.txt"
+cp "$PROJECT_DIR/pyproject.toml" "$PROJECT_DIR/.venv/.vcpi-pyproject.toml"
 "$PYTHON" "$PROJECT_DIR/build_native.py"
 
 # Keep the build cache and fetched sources for offline incremental ./vcpid runs.
@@ -162,7 +163,7 @@ import sys
 root = Path.cwd()
 target = f"{sys.platform}-{platform.machine()}-{sys.implementation.cache_tag}"
 subprocess.run([
-    "cmake", "-S", str(root / "native"), "-B", str(root / "build" / target),
+    "cmake", "-S", str(root / "src" / "engine"), "-B", str(root / "build" / "engine" / target),
     "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
 ], check=True)
 PY
@@ -183,8 +184,8 @@ import numpy as np
 import prompt_toolkit
 import rich
 import rtmidi
-from core.audio_deps import require_native
-from core.plugin_host import NativePlugin
+from vcpi.audio_deps import require_native
+from vcpi.plugin_host import NativePlugin
 
 native = require_native()
 with tempfile.TemporaryDirectory(prefix="vcpi-image-smoke-") as directory:
@@ -222,7 +223,7 @@ with tempfile.TemporaryDirectory(prefix="vcpi-image-smoke-") as directory:
 with tempfile.TemporaryDirectory(prefix="vcpi-plugdata-image-smoke-") as directory:
     root = Path(directory)
     plugin = NativePlugin("/usr/local/lib/vst3/plugdata.vst3", 44100, 512, "instrument")
-    plugin.load_preset(str(Path("patches/sine.pd").resolve()))
+    plugin.load_preset(str(Path("assets/patches/sine.pd").resolve()))
     transport = native.Transport(str(root / "audio.mmap"), 512, True)
     runner = native.TrackRunner(transport, plugin.native, 44100, 512)
     try:

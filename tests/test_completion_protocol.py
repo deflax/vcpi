@@ -14,10 +14,10 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 
-from core.audio_state import ParameterSnapshot, PluginSnapshot
-from core.client import CommandCompleter, _read_response_lines
-from core.host import VcpiCore
-from core.server import VcpiServer
+from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
+from vcpi.client import CommandCompleter, _read_response_lines
+from vcpi.host import VcpiCore
+from vcpi.server import VcpiServer
 
 
 class _CachedEngine:

@@ -113,7 +113,7 @@ sudo PLUGDATA_URL=https://mirror.example/plugdata-Debian-aarch64.tar.xz \
   importer supports the 0.9.3 state layout reported by v0.9.3-2.
 - The native C++ extension is built, then WAV/MIDI/mixer and installed-plugdata
   smoke checks run as `pi` without a display or audio device. The plugdata check
-  imports `patches/sine.pd`, verifies a MIDI-selected tone, and
+  imports `assets/patches/sine.pd`, verifies a MIDI-selected tone, and
   checks silence after note-off. Native build dependencies are retained for
   offline incremental builds.
 - Temporary build-host DNS, service-start suppression and the copied QEMU
@@ -136,7 +136,7 @@ are enabled for local access. The builder does not configure a firewall.
 `payload.service` runs as `pi`, sets `LOG_LEVEL=INFO`, and starts:
 
 ```text
-/home/pi/vcpi/.venv/bin/python /home/pi/vcpi/main.py serve --socket /run/vcpi/vcpi.sock
+/home/pi/vcpi/.venv/bin/python -m vcpi serve --socket /run/vcpi/vcpi.sock
 ```
 
 Connect with `/home/pi/vcpi/vcpi`. Audio is still started explicitly from the CLI:

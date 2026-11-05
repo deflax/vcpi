@@ -48,8 +48,9 @@ Then rerun `./vcpid`; deleting downloaded build dependencies is not required.
 ./vcpi
 ```
 
-Both launchers create `.venv` if needed and install Python dependencies on first
-launch or when `requirements.txt` changes. `./vcpid` also builds the native
+Both launchers create `.venv` if needed and install the application in editable
+mode on first launch, when `requirements.txt` or `pyproject.toml` changes, or when
+the environment points to another checkout. `./vcpid` also builds the native
 extension incrementally before starting the daemon.
 
 On a fresh session, start audio manually. Later server launches automatically
@@ -77,14 +78,14 @@ Direct Python startup does not install dependencies or build the extension:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -e .
 python build_native.py
 
 # Terminal 1
-.venv/bin/python main.py serve
+.venv/bin/python -m vcpi serve
 
 # Terminal 2
-.venv/bin/python main.py cli
+.venv/bin/python -m vcpi cli
 ```
 
 Build on each target machine using its own virtual environment. Linux uses
@@ -136,40 +137,52 @@ not audio or session playlists; see [deck commands](USAGE.md#deck-commands).
 
 ```text
 .
-  core/               # Main package
-    host.py           # Control-process orchestration
-    audio_process.py  # Output owner, control IPC, staged track publication
-    track_process.py   # Persistent track owners and shared-memory audio/MIDI
-    plugin_host.py    # Native lifecycle helpers for output and track children
-    audio_state.py    # Plain plugin/parameter snapshots for control and display
-    audio_deps.py     # Native extension availability for audio owners
-    engine.py         # Control-only facade for native audio
-    cli.py            # Command dispatch and plain-text responses
-    completion.py     # Daemon-side command and argument completion
-    server.py         # Unix socket server for headless mode
-    client.py         # CLI client (connects to server)
-    client_display.py # Rich terminal presentation of command responses
-    flow_display.py   # Full-screen routing explorer
-    processes.py      # Daemon/child process and thread resource diagnostics
-    link.py           # Ableton Link wrapper
-    sequencer.py      # Internal step sequencer
-    session.py        # Session save/restore
-  native/             # C++ VST3 hosting, sampler, transport, mixer and callback
-  build_native.py     # Per-platform/Python-ABI native build entrypoint
-  sampler/            # WAV sample assets
-    samples/          # Built-in WAV sample packs (808, 909, piano, etc.)
-  controllers/        # Hardware controller modules (generic MIDI input, MIDI Mix)
-  graph/              # Flow/status/plugin snapshots and plain-text renderers
-  patches/            # Cardinal .vcv and plugdata .pd patches
-  sessions/           # User-saved session files (save/load commands)
-  tests/              # Automated Python regression tests
-  main.py             # Top-level Python entry point
-  vcpid               # Server launcher (venv setup and incremental native build)
-  vcpi                # Client launcher (venv setup and dependency synchronization)
-  requirements.txt    # Python dependencies
-  USAGE.md            # Full CLI and startup flag reference
-  rpi-build/          # Raspberry Pi image build/provisioning tools only
+  src/
+    vcpi/               # Importable Python application package
+      host.py           # Control-process orchestration
+      commands/         # CLI handlers, help, completion and discovery
+      audio/            # Process clients, owners, protocol and control.py facade
+      controllers/      # Generic MIDI input and hardware integrations
+      presentation/     # Status, signal-flow and terminal rendering
+      sessions/         # Persistence, snapshots and restore phases
+      plugin_host.py    # Native lifecycle helpers for audio children
+      audio_state.py    # Cached plugin/parameter snapshots
+      client.py         # Unix-socket CLI client
+      server.py         # Headless Unix-socket server
+      link.py           # Ableton Link wrapper
+      sequencer.py      # Internal step sequencer
+    engine/             # C++ hosting, sampler, decks, transport and mixer
+      CMakeLists.txt    # Native extension build
+      pd_state.cpp      # Control-thread plugdata/Pd state conversion
+      track_runner.cpp  # Per-track rendering and MIDI consumption
+      runtime.cpp       # Output device, mixing and master-effects callback
+  assets/
+    samples/            # Built-in WAV sample packs
+    patches/            # Cardinal .vcv and plugdata .pd patches
+  sessions/             # User-saved session files, not Python source
+  tests/                # Automated Python regression tests
+  pyproject.toml        # Python package metadata and src discovery
+  requirements.txt      # Python dependency set
+  build_native.py       # Native build entrypoint
+  main.py               # Direct-script entrypoint (after package installation)
+  vcpi                  # Client launcher
+  vcpid                 # Daemon launcher
+  USAGE.md              # Command and flag reference
+  rpi-build/            # Raspberry Pi image build/provisioning tools
 ```
+
+`src/vcpi` is the Python package; `src/engine` is C++ source, not a Python package.
+Import command entrypoints from `vcpi.commands.cli` and `vcpi.commands.completion`;
+audio facades from `vcpi.audio.client`, `vcpi.audio.track_client`, and
+`vcpi.audio.control`; and session file operations from `vcpi.sessions.persistence`.
+Command execution and completion share `vcpi.commands.assets` for discovery.
+Native backend imports remain deferred to the processes that own audio resources.
+The build cache lives under `build/engine/<platform-architecture-python-abi>/`,
+and CMake places the compiled `_vcpi_native` extension inside `src/vcpi`.
+
+The native `PluginOwnership` guard is shared by track rendering and master effects.
+Pd-state conversion stays on the control thread, while deck streaming and callback
+resource-lifetime rules remain within their existing ownership boundaries.
 
 ## Common Commands
 
@@ -181,11 +194,11 @@ not audio or session playlists; see [deck commands](USAGE.md#deck-commands).
 ./vcpi
 
 # Direct python equivalents
-python main.py serve
-python main.py cli
+python -m vcpi serve
+python -m vcpi cli
 
 # Logging defaults:
-# - python main.py serve -> INFO
+# - python -m vcpi serve -> INFO
 # - ./vcpid -> INFO
 LOG_LEVEL=INFO ./vcpid
 ```
@@ -238,10 +251,10 @@ parameter values, units, ranges, and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
 table; use `help <command>` or a focused topic such as `help track wav`,
 `help audio start`, or `help midi input close` for syntax, defaults, and examples.
-Piped input/output remains plain text. `./vcpi` and `./vcpid` install dependencies
-on first launch and when `requirements.txt` changes, including for existing
-environments. For direct Python startup, install them manually with
-`.venv/bin/pip install -r requirements.txt`.
+Piped input/output remains plain text. The launchers synchronize editable package
+installation using `.vcpi-requirements.txt` and `.vcpi-pyproject.toml` snapshots
+inside the virtual environment, plus a check that imports resolve to this checkout.
+For direct Python startup, install with `.venv/bin/python -m pip install -e .`.
 
 To route a hardware MIDI input to a bundled sample:
 
@@ -397,7 +410,7 @@ SOLO (REC ARM):       Notes 3,6,9,12,15,18,21,24
 Cardinal + VCV patch quick load:
 
 ```text
-# place patch files under ./patches, e.g. ./patches/ambient.vcv
+# place patch files under ./assets/patches, e.g. ./assets/patches/ambient.vcv
 vcpi> track 1 vcv ambient
 vcpi> midi link 1 1
 ```
@@ -420,7 +433,7 @@ vcpi> audio start
 vcpi> note 1 60 --velocity 100 --duration-ms 500
 ```
 
-`track <n> pd <patch_name[.pd]> [--name <label>]` shares the `patches/` directory
+`track <n> pd <patch_name[.pd]> [--name <label>]` shares the `assets/patches/` directory
 and `VCPI_PATCHES_DIR` setting with Cardinal. Names can contain spaces and nested
 paths; Tab completion quotes them as needed. Import supports plugdata's 0.9.3
 state layout and rejects other layouts. Sessions embed the main patch, but its
@@ -457,9 +470,12 @@ vcpi> midi link 10 2
 vcpi> midi input 0
 ```
 
-`track <n> wav` resolves to `sampler/samples/<pack>/<sample>.wav` (for example,
-`sampler/samples/909/bassdrum.wav`) and plays one-shot sample voices on note-on.
-You can include or omit the `.wav` extension in `<sample>`.
+`track <n> wav` resolves to `assets/samples/<pack>/<sample>.wav` (for example,
+`assets/samples/909/bassdrum.wav`) and plays one-shot sample voices on note-on.
+You can include or omit the `.wav` extension in `<sample>`. Asset discovery checks
+the working directory's `assets/samples` first, then this checkout's bundled assets.
+Patches use the same working-directory/checkout rule for `assets/patches`, unless
+`VCPI_PATCHES_DIR` explicitly selects a directory.
 
 For continuous deck playback instead of MIDI-triggered sample voices:
 

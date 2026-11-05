@@ -11,9 +11,9 @@ import wave
 
 import numpy as np
 
-from core.audio_deps import require_native
-from core.audio_state import capture_plugin
-from core.plugin_host import NativePlugin
+from vcpi.audio_deps import require_native
+from vcpi.audio_state import capture_plugin
+from vcpi.plugin_host import NativePlugin
 
 
 class NativeParameterRestorationTests(unittest.TestCase):

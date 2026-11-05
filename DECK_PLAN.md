@@ -16,20 +16,20 @@ and the remaining physical-hardware acceptance limits.
 
 ## Verified repository foundation
 
-- `native/plugin.hpp` and `native/plugin.cpp`: `Plugin` already wraps VST3 and a
+- `src/engine/plugin.hpp` and `src/engine/plugin.cpp`: `Plugin` already wraps VST3 and a
   native WAV sampler. The sampler reads the entire file, resamples it into memory
   and plays MIDI-triggered one-shot voices. It is not a deck transport.
-- `native/runtime.cpp`: `TrackRunner` renders a native `Plugin`, then its inserts,
+- `src/engine/track_runner.cpp`: `TrackRunner` renders a native `Plugin`, then its inserts,
   into shared-memory transport. Output mixes those blocks with one block of
   buffering. Neither track DSP nor the output callback enters Python.
-- `core/plugin_host.py`, `core/track_process.py`, `core/audio_process.py`: new track
+- `src/vcpi/plugin_host.py`, `src/vcpi/audio/track_client.py`, `src/vcpi/audio/owner.py`: new track
   sources are prepared in staged workers before publication. Existing track
   controls operate through bounded IPC and generation-aware updates.
-- `core/audio_state.py`, `core/models.py`: daemon-side snapshots currently have
+- `src/vcpi/audio_state.py`, `src/vcpi/models.py`: daemon-side snapshots currently have
   no deck transport/status fields. Completion and read-only commands use caches.
-- `core/session.py`: session format 3 saves native VST3 chunks and path-based WAV
+- `src/vcpi/sessions/persistence.py`: session format 3 saves native VST3 chunks and path-based WAV
   tracks; versions 1, 2 and 3 are readable.
-- `native/CMakeLists.txt`: JUCE 8.0.6 audio basics/formats/processors are available;
+- `src/engine/CMakeLists.txt`: JUCE 8.0.6 audio basics/formats/processors are available;
   audio-utils is not currently compiled. FLAC, Ogg and MP3 decoding are disabled.
   Do not assume AudioTransportSource is available without build changes.
 
@@ -99,7 +99,7 @@ Use a small JSON manifest, not directory enumeration or numbered filenames:
 
 ## Native architecture and real-time rules
 
-Introduce `native/deck.hpp` and `native/deck.cpp` for a focused `Deck` component.
+Introduce `src/engine/deck.hpp` and `src/engine/deck.cpp` for a focused `Deck` component.
 Integrate it as a `deck` branch of the existing `Plugin` source wrapper rather
 than refactoring all sources into a new inheritance hierarchy. Keep the WAV
 sampler unchanged. Branch deck metadata, parameters, processing and persistence
@@ -247,15 +247,15 @@ for this audible and hardware-specific check.
 
 ## Expected change surface
 
-- Native: new deck files; `native/plugin.hpp`, `native/plugin.cpp`,
-  `native/bindings.cpp`, `native/CMakeLists.txt`; runtime only if needed for
+- Native: new deck files; `src/engine/plugin.hpp`, `src/engine/plugin.cpp`,
+  `src/engine/bindings.cpp`, `src/engine/CMakeLists.txt`; runtime only if needed for
   bounded status/control handoff, not a new mixer or output path.
-- Ownership/control: `core/plugin_host.py`, `core/host.py`, `core/engine.py`,
-  `core/audio_process.py`, `core/track_process.py`.
-- Snapshots/interface: `core/models.py`, `core/audio_state.py`, `core/cli.py`,
-  `core/completion.py`, affected graph/status renderers and controller handlers.
-- Bank parsing: a focused control-side module such as `core/deck_bank.py`.
-- Persistence/tests/docs: `core/session.py`, focused behavioural tests alongside
+- Ownership/control: `src/vcpi/plugin_host.py`, `src/vcpi/host.py`, `src/vcpi/audio/control.py`,
+  `src/vcpi/audio/` client, owner and protocol modules.
+- Snapshots/interface: `src/vcpi/models.py`, `src/vcpi/audio_state.py`, `src/vcpi/commands/`,
+  affected presentation/status renderers and controller handlers.
+- Bank parsing: a focused control-side module such as `src/vcpi/deck_bank.py`.
+- Persistence/tests/docs: `src/vcpi/sessions/`, focused behavioural tests alongside
   the existing native/process tests, README.md and USAGE.md.
 
 ## Research verification

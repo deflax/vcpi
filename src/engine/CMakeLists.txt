@@ -1,0 +1,127 @@
+cmake_minimum_required(VERSION 3.22)
+# Resolve the SDK before project() initializes C, C++, and Objective-C compilers.
+# CMake 4 no longer chooses a default sysroot, and non-Apple Clang may need one.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    if(EXISTS "${CMAKE_OSX_SYSROOT}/usr/include/assert.h"
+            AND EXISTS "${CMAKE_OSX_SYSROOT}/usr/include/TargetConditionals.h")
+        set(vcpi_macos_sdk "${CMAKE_OSX_SYSROOT}")
+    elseif(NOT "$ENV{SDKROOT}" STREQUAL "")
+        set(vcpi_macos_sdk "$ENV{SDKROOT}")
+    else()
+        set(vcpi_macos_sdk_name macosx)
+        if(CMAKE_OSX_SYSROOT AND NOT IS_ABSOLUTE "${CMAKE_OSX_SYSROOT}")
+            set(vcpi_macos_sdk_name "${CMAKE_OSX_SYSROOT}")
+        endif()
+        execute_process(
+            COMMAND xcrun --sdk "${vcpi_macos_sdk_name}" --show-sdk-path
+            OUTPUT_VARIABLE vcpi_macos_sdk
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_VARIABLE vcpi_macos_sdk_error
+            RESULT_VARIABLE vcpi_macos_sdk_result)
+        if(NOT vcpi_macos_sdk_result STREQUAL "0" OR vcpi_macos_sdk STREQUAL "")
+            message(FATAL_ERROR
+                "Cannot locate the macOS SDK: ${vcpi_macos_sdk_error}\n"
+                "Install Apple's command-line tools with xcode-select --install "
+                "and check xcrun --sdk macosx --show-sdk-path.")
+        endif()
+    endif()
+    if(NOT EXISTS "${vcpi_macos_sdk}/usr/include/assert.h"
+            OR NOT EXISTS "${vcpi_macos_sdk}/usr/include/TargetConditionals.h")
+        message(FATAL_ERROR
+            "macOS SDK '${vcpi_macos_sdk}' is missing assert.h or TargetConditionals.h. "
+            "Check SDKROOT and xcode-select, and install or repair Apple's command-line tools.")
+    endif()
+    # Refresh obsolete cached SDK paths without discarding fetched dependencies.
+    set(CMAKE_OSX_SYSROOT "${vcpi_macos_sdk}" CACHE PATH "macOS SDK" FORCE)
+endif()
+project(vcpi_native LANGUAGES C CXX)
+if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "vcpi native audio supports Linux and macOS")
+endif()
+if(APPLE)
+    enable_language(OBJC OBJCXX)
+endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# PortAudio 19.7 retains an older minimum; permit it under CMake 4 as well.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+include(FetchContent)
+set(PYBIND11_FINDPYTHON ON)
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+FetchContent_Declare(pybind11 GIT_REPOSITORY https://github.com/pybind/pybind11.git GIT_TAG v2.13.6 GIT_SHALLOW TRUE GIT_SUBMODULES "")
+FetchContent_Declare(portaudio GIT_REPOSITORY https://github.com/PortAudio/portaudio.git GIT_TAG v19.7.0 GIT_SHALLOW TRUE GIT_SUBMODULES "")
+# Only consume JUCE module sources: no juceaide, application, editor, or plugin binaries.
+# JUCE 8 includes the ScreenCaptureKit fix for current macOS deployment targets.
+FetchContent_Declare(juce GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 8.0.6 GIT_SHALLOW TRUE GIT_SUBMODULES "" SOURCE_SUBDIR vcpi-unused)
+# Official Queen Mary DSP (GPL-2.0-or-later), pinned to an immutable revision.
+# Consume only the onset/tempo implementation and its bundled KissFFT backend.
+FetchContent_Declare(qm_dsp GIT_REPOSITORY https://github.com/c4dm/qm-dsp.git
+    GIT_TAG e34a3cc188332ed7c33cd9257ef164de5b587191 GIT_SUBMODULES "" SOURCE_SUBDIR vcpi-unused)
+set(PA_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(PA_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(PA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(PA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(PA_USE_JACK OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(pybind11 portaudio juce qm_dsp)
+
+add_library(vcpi_qm_dsp STATIC
+    "${qm_dsp_SOURCE_DIR}/dsp/onsets/DetectionFunction.cpp"
+    "${qm_dsp_SOURCE_DIR}/dsp/phasevocoder/PhaseVocoder.cpp"
+    "${qm_dsp_SOURCE_DIR}/dsp/transforms/FFT.cpp"
+    "${qm_dsp_SOURCE_DIR}/dsp/tempotracking/TempoTrackV2.cpp"
+    "${qm_dsp_SOURCE_DIR}/maths/MathUtilities.cpp"
+    "${qm_dsp_SOURCE_DIR}/ext/kissfft/kiss_fft.c"
+    "${qm_dsp_SOURCE_DIR}/ext/kissfft/tools/kiss_fftr.c")
+target_include_directories(vcpi_qm_dsp PUBLIC "${qm_dsp_SOURCE_DIR}"
+    PRIVATE "${qm_dsp_SOURCE_DIR}/ext/kissfft" "${qm_dsp_SOURCE_DIR}/ext/kissfft/tools")
+target_compile_definitions(vcpi_qm_dsp PRIVATE kiss_fft_scalar=double)
+set_target_properties(vcpi_qm_dsp PROPERTIES C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+
+set(juce_sources)
+foreach(module IN ITEMS juce_core juce_events juce_data_structures juce_graphics juce_gui_basics juce_gui_extra juce_audio_basics juce_audio_formats juce_audio_processors)
+    file(GLOB sources CONFIGURE_DEPENDS "${juce_SOURCE_DIR}/modules/${module}/${module}*.cpp" "${juce_SOURCE_DIR}/modules/${module}/${module}*.c")
+    if(APPLE)
+        file(GLOB objc_sources CONFIGURE_DEPENDS "${juce_SOURCE_DIR}/modules/${module}/${module}*.mm")
+        foreach(objc IN LISTS objc_sources)
+            string(REGEX REPLACE "\\.mm$" ".cpp" replaced "${objc}")
+            list(REMOVE_ITEM sources "${replaced}")
+        endforeach()
+        list(APPEND sources ${objc_sources})
+    endif()
+    list(APPEND juce_sources ${sources})
+endforeach()
+add_library(vcpi_juce STATIC ${juce_sources})
+set_target_properties(vcpi_juce PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+target_include_directories(vcpi_juce PUBLIC
+    "${juce_SOURCE_DIR}/modules"
+    "${juce_SOURCE_DIR}/modules/juce_audio_processors/format_types/VST3_SDK")
+target_compile_definitions(vcpi_juce PUBLIC
+    JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_STANDALONE_APPLICATION=0
+    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_VST=0 JUCE_PLUGINHOST_AU=0
+    JUCE_PLUGINHOST_LADSPA=0 JUCE_PLUGINHOST_LV2=0 JUCE_PLUGINHOST_ARA=0
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_USE_FLAC=1 JUCE_USE_OGGVORBIS=0 JUCE_USE_MP3AUDIOFORMAT=1
+    JUCE_USE_XRANDR=0 JUCE_USE_XINERAMA=0 JUCE_USE_XCURSOR=0
+    JUCE_REPORT_APP_USAGE=0)
+find_package(Threads REQUIRED)
+target_link_libraries(vcpi_juce PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+if(APPLE)
+    foreach(framework IN ITEMS Cocoa Foundation CoreAudio CoreMIDI AudioToolbox QuartzCore CoreGraphics CoreText IOKit Metal MetalKit Accelerate Security)
+        find_library(framework_path_${framework} ${framework} REQUIRED)
+        target_link_libraries(vcpi_juce PUBLIC "${framework_path_${framework}}")
+    endforeach()
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(JUCE_SYSTEM REQUIRED IMPORTED_TARGET freetype2 fontconfig x11 xext)
+    target_link_libraries(vcpi_juce PUBLIC PkgConfig::JUCE_SYSTEM)
+endif()
+pybind11_add_module(_vcpi_native NO_EXTRAS bindings.cpp plugin.cpp pd_state.cpp deck.cpp
+    beat_analysis.cpp analysis_cache.cpp transport.cpp runtime.cpp track_runner.cpp)
+target_link_libraries(_vcpi_native PRIVATE vcpi_juce vcpi_qm_dsp portaudio_static)
+target_include_directories(_vcpi_native PRIVATE "${portaudio_SOURCE_DIR}/include")
+set_target_properties(_vcpi_native PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../vcpi")
+foreach(config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_target_properties(_vcpi_native PROPERTIES LIBRARY_OUTPUT_DIRECTORY_${config} "${CMAKE_CURRENT_SOURCE_DIR}/../vcpi")
+endforeach()

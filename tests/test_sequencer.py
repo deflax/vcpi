@@ -4,10 +4,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import deps
+from vcpi import deps
 
-from core.engine import AudioEngine
-from core.sequencer import Sequencer
+from vcpi.audio.control import AudioEngine
+from vcpi.sequencer import Sequencer
 
 
 class FreewheelTimingTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class FreewheelTimingTests(unittest.TestCase):
 
         seq._running = True
         try:
-            with patch("core.sequencer.time", SimpleNamespace(monotonic=lambda: clock.now)), \
+            with patch("vcpi.sequencer.time", SimpleNamespace(monotonic=lambda: clock.now)), \
                     patch.object(host.engine, "enqueue_midi", side_effect=enqueue), \
                     patch.object(seq, "_stop_event", SimpleNamespace(wait=wait)), \
                     patch.object(seq, "_schedule_note_offs"):

@@ -17,12 +17,12 @@ from unittest.mock import patch
 import mido
 import numpy as np
 
-from core.audio_state import PluginSnapshot
-from core.audio_deps import require_native
-from core.engine import AudioEngine
-from core.track_process import (
-    MIDI_CAPACITY, TrackProcessError, TrackWorker, _watch_parent,
-)
+from vcpi.audio_state import PluginSnapshot
+from vcpi.audio_deps import require_native
+from vcpi.audio.control import AudioEngine
+from vcpi.audio.track_client import TrackWorker
+from vcpi.audio.track_protocol import MIDI_CAPACITY, TrackProcessError
+from vcpi.audio.track_owner import _watch_parent
 
 
 def _own_track_for_orphan_test(connection, sample):
@@ -307,7 +307,7 @@ class SpawnedTrackTests(unittest.TestCase):
     def test_rpc_timeout_remains_track_local_and_cleanup_is_bounded(self):
         worker = self.worker()
         os.kill(worker.pid, signal.SIGSTOP)
-        with patch("core.track_process.PARAMETER_TIMEOUT", 0.02):
+        with patch("vcpi.audio.track_client.PARAMETER_TIMEOUT", 0.02):
             with self.assertRaises(TrackProcessError):
                 worker.request("sync_state")
         self.assertIsNotNone(worker.failure)

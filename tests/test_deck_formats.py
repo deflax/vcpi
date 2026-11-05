@@ -10,7 +10,7 @@ import wave
 
 import numpy as np
 
-from core.audio_deps import require_native
+from vcpi.audio_deps import require_native
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required to generate codec fixtures")

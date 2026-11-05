@@ -7,7 +7,7 @@ import unittest
 import wave
 from pathlib import Path
 
-from core.host import VcpiCore
+from vcpi.host import VcpiCore
 
 
 class TrackSessionTests(unittest.TestCase):

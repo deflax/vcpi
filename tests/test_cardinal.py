@@ -8,8 +8,8 @@ import unittest
 
 import numpy as np
 
-from core.audio_deps import require_native
-from core.plugin_host import NativePlugin
+from vcpi.audio_deps import require_native
+from vcpi.plugin_host import NativePlugin
 
 
 class CardinalPatchTests(unittest.TestCase):

@@ -3,11 +3,11 @@
 from dataclasses import replace
 import unittest
 
-from controllers.akai_midimix import KNOB_CCS, MidiMixController
-from core.audio_state import ParameterSnapshot, PluginSnapshot
-from core.models import InstrumentTrack
-from graph.plugin_info import plugin_metadata_rows
-from graph.signal_flow import _control_rows
+from vcpi.controllers.akai_midimix import KNOB_CCS, MidiMixController
+from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
+from vcpi.models import InstrumentTrack
+from vcpi.presentation.plugin_info import plugin_metadata_rows
+from vcpi.presentation.signal_flow import _control_rows
 
 
 class RecordingEngine:

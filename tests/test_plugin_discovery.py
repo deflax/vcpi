@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.cli import HostCLI
-from core.plugin_host import PluginHost
+from vcpi.commands import assets
+from vcpi.plugin_host import PluginHost
 
 
 class PluginDiscoveryTests(unittest.TestCase):
@@ -23,25 +23,24 @@ class PluginDiscoveryTests(unittest.TestCase):
             for bundle in (checkout / "vst3" / "Repo.vst3", checkout / "Root.vst3",
                            working / "Working.vst3", local, installed, configured):
                 bundle.mkdir(parents=True)
-            cli = HostCLI.__new__(HostCLI)
             previous = Path.cwd()
             try:
                 os.chdir(working)
                 with patch.dict(os.environ, {"HOME": str(home), "VST3_PATH": "",
                                              "VST_PATH": ""}), \
-                        patch.object(cli, "_repo_root", return_value=checkout):
-                    discovered = cli._iter_vst_plugin_paths()
+                        patch.object(assets, "repo_root", return_value=checkout):
+                    discovered = assets.iter_vst_plugin_paths()
                     self.assertIn(installed, discovered)
                     self.assertNotIn(checkout / "vst3" / "Repo.vst3", discovered)
                     self.assertNotIn(local, discovered)
-                    self.assertEqual(cli._resolve_vst_token("Installed"), str(installed))
-                    self.assertEqual(cli._resolve_vst_token("Local"), "Local")
-                    self.assertEqual(cli._resolve_vst_token(str(local)), str(local))
+                    self.assertEqual(assets.resolve_vst_token("Installed"), str(installed))
+                    self.assertEqual(assets.resolve_vst_token("Local"), "Local")
+                    self.assertEqual(assets.resolve_vst_token(str(local)), str(local))
                     for variable in ("VST3_PATH", "VST_PATH"):
                         with patch.dict(os.environ, {variable: str(configured.parent)}):
-                            self.assertEqual(cli._resolve_vst_token("Configured"), str(configured))
+                            self.assertEqual(assets.resolve_vst_token("Configured"), str(configured))
                     with patch.dict(os.environ, {"VST3_PATH": str(local.parent)}):
-                        self.assertEqual(cli._resolve_vst_token("Local"), str(local))
+                        self.assertEqual(assets.resolve_vst_token("Local"), str(local))
             finally:
                 os.chdir(previous)
 
@@ -57,7 +56,7 @@ class PluginDiscoveryTests(unittest.TestCase):
             try:
                 os.chdir(root)
                 with patch.dict(os.environ, {"PLUGDATA_VST3_PATH": ""}), \
-                        patch("core.plugin_host.PLUGDATA_VST3_CANDIDATES", (str(installed),)):
+                        patch("vcpi.plugin_host.PLUGDATA_VST3_CANDIDATES", (str(installed),)):
                     self.assertEqual(owner._resolve_plugdata_path(None), installed)
                     installed.rmdir()
                     with self.assertRaises(FileNotFoundError):

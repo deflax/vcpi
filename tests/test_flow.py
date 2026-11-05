@@ -5,10 +5,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from core.audio_state import ParameterSnapshot, PluginSnapshot
-from core.models import InstrumentTrack
-from core.sequencer import SequenceBank
-from graph.signal_flow import build_flow_snapshot, render_flow_snapshot, show_view
+from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
+from vcpi.models import InstrumentTrack
+from vcpi.sequencer import SequenceBank
+from vcpi.presentation.signal_flow import build_flow_snapshot, render_flow_snapshot, show_view
 
 
 class FlowTests(unittest.TestCase):
@@ -173,8 +173,8 @@ class FlowTests(unittest.TestCase):
         self.engine.request = forbidden
         self.engine.set_parameter = forbidden
         original = copy.deepcopy((self.track, self.engine.master_effects))
-        with patch("core.midi.list_midi_input_ports", forbidden), \
-                patch("core.midi.list_midi_output_ports", forbidden):
+        with patch("vcpi.midi.list_midi_input_ports", forbidden), \
+                patch("vcpi.midi.list_midi_output_ports", forbidden):
             snapshot = build_flow_snapshot(self.host)
             for section_id in ("track1", "track1fx1", "masterfx1"):
                 render_flow_snapshot(snapshot, section_id)

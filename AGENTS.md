@@ -4,27 +4,28 @@ Read this file first in new sessions. It is a durable map of the repo, not a ful
 
 ## Overview
 
-`vcpi` is a Python VST3 host with Ableton Link tempo sync for hardware-centric live setups. The normal workflow is a split daemon/client model: start the server with `./vcpid` (or `python main.py serve`) and connect with `./vcpi` (or `python main.py cli`).
+`vcpi` has a Python control plane and C++ audio engine with Ableton Link tempo sync for hardware-centric live setups. Start the daemon with `./vcpid` (or `python -m vcpi serve`) and connect with `./vcpi` (or `python -m vcpi cli`). Direct Python startup requires an editable package installation.
 
 ## Source of truth
 
 - `README.md` — top-level repo map, quick start, and typical workflows
 - `USAGE.md` — startup flags, CLI command reference, and important runtime conventions
 - `requirements.txt` — Python dependency set
+- `pyproject.toml` — Python package metadata and `src` package discovery
 - `rpi-build/README.md` — Raspberry Pi image build and first-boot provisioning
 
 ## Top-level structure
 
 ```text
 .
-├── core/          Main application package
-├── controllers/   MIDI device integrations
-├── graph/         Renderers for show routing/plugin metadata and status
-├── sampler/       WAV sampler package and built-in sample packs
-├── patches/       Cardinal/VCV `.vcv` patch files
+├── src/vcpi/      Python application package
+├── src/engine/    C++ audio engine and Python bindings
+├── assets/        Bundled samples and Cardinal/Pure Data patches
 ├── sessions/      Saved session files
 ├── rpi-build/     Raspberry Pi image build/provisioning tools
 ├── main.py        Top-level Python entry point
+├── pyproject.toml Python package installation metadata
+├── build_native.py Native engine build entry point
 ├── vcpid          Server launcher
 ├── vcpi           Client launcher
 ├── README.md      Project overview
@@ -43,17 +44,19 @@ Hidden directories present in the workspace:
 |---|---|
 | Startup flow and repo overview | `README.md` |
 | CLI flags and command syntax | `USAGE.md` |
-| Main orchestration | `core/host.py` |
-| Real-time audio engine | `core/engine.py` |
-| CLI implementation | `core/cli.py` |
-| Server/client split | `core/server.py`, `core/client.py` |
-| Ableton Link integration | `core/link.py` |
-| Session save/restore | `core/session.py` |
-| Generic MIDI input | `controllers/midi_input.py` |
-| Akai MIDI Mix mapping | `controllers/akai_midimix.py` |
-| WAV sampler | `sampler/plugin.py`, `sampler/wav.py` |
-| Signal/status renderers | `graph/` |
-| Plugin installation and discovery | `USAGE.md`, `core/cli.py`, `core/plugin_host.py` |
+| Main orchestration | `src/vcpi/host.py` |
+| Real-time audio engine | `src/engine/runtime.cpp`, `src/engine/track_runner.cpp` |
+| Python audio control | `src/vcpi/audio/control.py` |
+| Audio process ownership and IPC | `src/vcpi/audio/` |
+| CLI implementation | `src/vcpi/commands/` |
+| Server/client split | `src/vcpi/server.py`, `src/vcpi/client.py` |
+| Ableton Link integration | `src/vcpi/link.py` |
+| Session save/restore | `src/vcpi/sessions/` |
+| Generic MIDI input | `src/vcpi/controllers/midi_input.py` |
+| Akai MIDI Mix mapping | `src/vcpi/controllers/akai_midimix.py` |
+| WAV sampler | `src/engine/plugin.cpp`, `assets/samples/` |
+| Signal/status/terminal rendering | `src/vcpi/presentation/` |
+| Plugin installation and discovery | `USAGE.md`, `src/vcpi/commands/assets.py`, `src/vcpi/plugin_host.py` |
 | Raspberry Pi deployment | `rpi-build/README.md`, `rpi-build/services/` |
 
 ## Runtime model
@@ -78,20 +81,21 @@ Hidden directories present in the workspace:
 
 - `track <n> vst` and `track <n> fx` accept either a plugin name or a full path.
 - VST3 name search checks `VST3_PATH` and `VST_PATH` directories, then the working directory, repository root, `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`, and documented macOS paths. The former `vst3/` subdirectory is not searched automatically.
-- `track <n> vcv` loads a Cardinal patch from `patches/` by default and does not auto-route channels.
-- `track <n> wav <pack> <sample>` resolves to `sampler/samples/<pack>/<sample>.wav`.
+- `track <n> vcv` and `track <n> pd` load from `assets/patches/` by default; `VCPI_PATCHES_DIR` overrides that directory. Loading does not auto-route MIDI channels.
+- `track <n> wav <pack> <sample>` resolves to `assets/samples/<pack>/<sample>.wav`. Asset discovery checks working-directory assets first, then bundled checkout assets.
 - Built-in sample packs documented in `USAGE.md` are: `808`, `909`, `piano`, `organ`, `strings`, `synth-pads`, `synth-leads`.
 
 ## Dependency stack
 
 From `requirements.txt`:
 
-- `pedalboard`
 - `aalink`
 - `python-rtmidi`
 - `mido`
 - `numpy`
-- `sounddevice`
+- `prompt_toolkit`
+- `rich`
+- `psutil`
 
 ## Common commands
 
@@ -99,22 +103,23 @@ From `requirements.txt`:
 # First-time local setup
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -e .
+python build_native.py
 
 # Run server / client
 ./vcpid
 ./vcpi
 
 # Direct Python equivalents
-python main.py serve
-python main.py cli
+python -m vcpi serve
+python -m vcpi cli
 ```
 
 ## Raspberry Pi notes
 
 - `rpi-build/` is a deployment subtree, not part of the normal desktop runtime loop.
 - The Pi image flow is documented in `rpi-build/README.md`.
-- `payload.service` starts `main.py serve` on boot.
+- `payload.service` starts `python -m vcpi serve` on boot.
 - Local Pi credential and Wi-Fi files are meant to stay inside `rpi-build/` and are gitignored.
 
 ## Good first reads for a fresh session
@@ -122,15 +127,14 @@ python main.py cli
 1. This file
 2. `README.md`
 3. `USAGE.md`
-4. The specific module you plan to change under `core/`, `controllers/`, `sampler/`, `graph/`, or `rpi-build/`
+4. The specific module you plan to change under `src/vcpi/`, `src/engine/`, or `rpi-build/`
 
 ## Recent findings / current priorities
 
 This section is intentionally short and may go stale. Prefer the sections above for durable repo facts.
 
-- Exploration completed on `2026-04-07`.
-- This is a Python audio/MIDI host repo, not a web or JS app.
-- No repo-local automated tests, CI workflows, lint/format config, Docker setup, or Python packaging config (`pyproject.toml`, `setup.py`) were found during exploration.
-- The most useful code entrypoints for follow-up exploration are `core/host.py`, `core/engine.py`, `core/cli.py`, `core/server.py`, `core/client.py`, `core/link.py`, and `core/session.py`.
+- The application uses an installed `vcpi` namespace; no root-level Python package or `sys.path` adjustment is needed.
+- Existing regressions run with `.venv/bin/python -m unittest discover -s tests`.
+- The native extension builds into `src/vcpi`; per-platform build caches live under `build/engine/`.
 - Separate transient session state lives in `HANDOFF.md` if that file exists.
 - No active implementation task was in progress when this note was written.

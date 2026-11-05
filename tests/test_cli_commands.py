@@ -6,8 +6,11 @@ import shlex
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
-from core.cli import HostCLI
+from vcpi.commands.cli import HostCLI
+from vcpi.commands.context import parse_named_source, source_args
+from vcpi.commands.help import HELP_TOPICS
 
 
 class MixerState:
@@ -122,20 +125,20 @@ class CLICommandTests(unittest.TestCase):
     def test_source_labels_are_explicit_single_shell_arguments(self):
         for source, count in (("pack 'sample name'", 2), ("'/bank path.json'", 1),
                               ("'VCV patch'", 1)):
-            tokens, label = self.cli._source_args(shlex.split(source + ' --name "Live Voice"'), count)
+            tokens, label = source_args(shlex.split(source + ' --name "Live Voice"'), count)
             self.assertEqual(tokens, shlex.split(source))
             self.assertEqual(label, "Live Voice")
             for suffix in (' "Legacy Label"', " --name", " --name a b", " --other x",
                            " --name a --name b"):
                 with self.assertRaises(ValueError):
-                    self.cli._source_args(shlex.split(source + suffix), count)
+                    source_args(shlex.split(source + suffix), count)
         for text in ("Surge XT", '"Surge XT"'):
-            self.assertEqual(self.cli._parse_vst_args(text + ' --name "Live Voice"'),
+            self.assertEqual(parse_named_source(text + ' --name "Live Voice"'),
                              ("Surge XT", "Live Voice"))
 
     def test_quoted_session_name_is_saved_without_quote_characters(self):
-        with tempfile.TemporaryDirectory() as directory:
-            self.cli._sessions_root = lambda: Path(directory)
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "vcpi.commands.assets.sessions_root", side_effect=lambda: Path(directory)):
             self.host.loaded_session_path = None
             self.host.save_session = lambda path: Path(path).write_text("session payload")
             self.execute('save "Live Set"')
@@ -146,11 +149,11 @@ class CLICommandTests(unittest.TestCase):
     def test_nested_help_selects_exact_topics_and_rejects_unknown_suffixes(self):
         for topic in ("audio start", "track wav", "midi input close"):
             _, text = self.execute("help " + topic)
-            self.assertIn(self.cli._help_topics[topic][1], text)
+            self.assertIn(HELP_TOPICS[topic][1], text)
             _, invalid = self.execute("help " + topic + " nonsense")
             self.assertNotIn("Usage:", invalid)
             self.assertIn(topic + " nonsense", invalid)
-        for topic in self.cli._help_topics:
+        for topic in HELP_TOPICS:
             _, text = self.execute("help " + topic)
             self.assertIn("\nUsage:\n", text)
             self.assertIn("\nArguments / Options:\n", text)

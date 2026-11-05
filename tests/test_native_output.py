@@ -14,8 +14,6 @@ import unittest
 
 # Direct script execution is also the isolation harness used by the tests below.
 _ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
 
 
 def _c_output(stdout, stderr):
@@ -38,7 +36,7 @@ def _identity(descriptor):
 
 
 def _scenario_toggle():
-    from core.native_output import native_output, set_debug_output
+    from vcpi.native_output import native_output, set_debug_output
 
     with native_output("daemon"):
         os.write(1, b"hidden-os-stdout\n")
@@ -57,7 +55,7 @@ def _scenario_toggle():
 
 
 def _scenario_live():
-    from core.native_output import native_output, set_debug_output
+    from vcpi.native_output import native_output, set_debug_output
 
     with native_output("audio"):
         set_debug_output(True)
@@ -71,7 +69,7 @@ def _scenario_live():
 
 
 def _scenario_fragments():
-    from core.native_output import native_output, set_debug_output
+    from vcpi.native_output import native_output, set_debug_output
 
     with native_output("track 3"):
         set_debug_output(True)
@@ -83,7 +81,7 @@ def _scenario_fragments():
 
 
 def _spawn_output(destination, source, nested):
-    from core.native_output import native_output, output_destination, set_debug_output
+    from vcpi.native_output import native_output, output_destination, set_debug_output
 
     with native_output(source, destination):
         set_debug_output(True)
@@ -103,7 +101,7 @@ def _spawn_output(destination, source, nested):
 
 
 def _scenario_spawn(debug=True):
-    from core.native_output import native_output, output_destination
+    from vcpi.native_output import native_output, output_destination
 
     os.environ["LOG_LEVEL"] = "DEBUG" if debug else "WARNING"
     with native_output("daemon"):
@@ -126,7 +124,7 @@ def _scenario_spawn_off():
 
 def _scenario_logging():
     import logging
-    from core.native_output import logging_stream, native_output, set_debug_output
+    from vcpi.native_output import logging_stream, native_output, set_debug_output
 
     before = (_identity(1), _identity(2))
     try:
@@ -149,7 +147,7 @@ def _scenario_logging():
 
 
 def _scenario_nested_context():
-    from core.native_output import native_output, set_debug_output
+    from vcpi.native_output import native_output, set_debug_output
 
     with native_output("daemon"):
         set_debug_output(True)
@@ -161,7 +159,7 @@ def _scenario_nested_context():
 
 def _scenario_failed_setup():
     from unittest.mock import patch
-    from core.native_output import native_output, set_debug_output
+    from vcpi.native_output import native_output, set_debug_output
 
     before = (_identity(1), _identity(2))
     original = os.dup2
@@ -175,7 +173,7 @@ def _scenario_failed_setup():
         return original(source, target)
 
     # Fault injection only: all capture I/O and restoration still use real fds.
-    with patch("core.native_output.os.dup2", side_effect=failing_dup2):
+    with patch("vcpi.native_output.os.dup2", side_effect=failing_dup2):
         try:
             with native_output("daemon"):
                 raise AssertionError("setup unexpectedly succeeded")
@@ -190,7 +188,7 @@ def _scenario_failed_setup():
 
 
 def _scenario_closed_terminal():
-    from core.native_output import native_output, set_debug_output
+    from vcpi.native_output import native_output, set_debug_output
 
     reader, writer = os.pipe()
     os.close(reader)
@@ -206,7 +204,7 @@ def _scenario_closed_terminal():
 
 
 def _scenario_bounded_cleanup():
-    from core.native_output import native_output, set_debug_output
+    from vcpi.native_output import native_output, set_debug_output
 
     reader, writer = os.pipe()
     os.set_blocking(writer, False)
@@ -240,7 +238,7 @@ def _scenario_bounded_cleanup():
 
 
 def _scenario_no_leaks():
-    from core.native_output import native_output, set_debug_output
+    from vcpi.native_output import native_output, set_debug_output
 
     before = len(os.listdir("/proc/self/fd")) if sys.platform == "linux" else None
     identities = (_identity(1), _identity(2))

@@ -9,9 +9,9 @@ import unittest
 
 import numpy as np
 
-from core.audio_deps import require_native
-from core.audio_state import capture_plugin
-from core.plugin_host import NativePlugin
+from vcpi.audio_deps import require_native
+from vcpi.audio_state import capture_plugin
+from vcpi.plugin_host import NativePlugin
 
 
 MIDI_VOICE = """#N canvas 0 0 450 300 12;
@@ -138,7 +138,7 @@ class PlugdataPatchTests(unittest.TestCase):
         bundle = self.plugdata_bundle()
         directory = self.temporary_directory()
         patch = directory / "classic-subtractive-synth.pd"
-        source = Path(__file__).resolve().parents[1] / "patches" / patch.name
+        source = Path(__file__).resolve().parents[1] / "assets" / "patches" / patch.name
         patch.write_bytes(source.read_bytes())
         plugin = NativePlugin(str(bundle), 44100, 512, "instrument")
         volume = next(name for name, descriptor in plugin.parameters.items()
@@ -236,7 +236,7 @@ class PlugdataPatchTests(unittest.TestCase):
     def test_poly_pad_controls_change_every_voice_and_survive_native_restore(self):
         bundle = self.plugdata_bundle()
         directory = self.temporary_directory()
-        source = Path(__file__).resolve().parents[1] / "patches" / "poly-pad.pd"
+        source = Path(__file__).resolve().parents[1] / "assets" / "patches" / "poly-pad.pd"
         patch = directory / source.name
         patch.write_bytes(source.read_bytes())
         plugin = NativePlugin(str(bundle), 44100, 512, "instrument")

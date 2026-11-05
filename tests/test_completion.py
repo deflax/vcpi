@@ -9,11 +9,14 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from core.audio_state import ParameterSnapshot, PluginSnapshot
-from core.cli import HostCLI
-from core.completion import complete_line
-from core.models import NUM_TRACKS
-from core.sequencer import NUM_SEQ_BANKS
+from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
+from vcpi.commands import assets
+from vcpi.commands.cli import HostCLI
+from vcpi.commands.completion import complete_line
+from vcpi.commands.context import parse_named_source
+from vcpi.commands.parameters import parameter_target
+from vcpi.models import NUM_TRACKS
+from vcpi.sequencer import NUM_SEQ_BANKS
 
 
 class CompletionTests(unittest.TestCase):
@@ -67,11 +70,11 @@ class CompletionTests(unittest.TestCase):
             (root / "sessions" / f"{name}.json").write_text("{}")
         self.root = root
         for method, value in (
-                ("_vst_search_dirs", [root / "vst"]),
-                ("_samples_root", root / "samples"),
-                ("_patches_root", root / "patches"),
-                ("_sessions_root", root / "sessions")):
-            patcher = patch.object(self.cli, method, return_value=value)
+                ("vst_search_dirs", [root / "vst"]),
+                ("samples_root", root / "samples"),
+                ("patches_root", root / "patches"),
+                ("sessions_root", root / "sessions")):
+            patcher = patch.object(assets, method, return_value=value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -150,8 +153,8 @@ class CompletionTests(unittest.TestCase):
                          ["audio", "start", "New output"])
 
     def test_hardware_ports_and_open_input_indexes_are_distinct_and_current(self):
-        with patch("core.midi.list_midi_input_ports", return_value=["Input A", "Input B"]) as inputs, \
-                patch("core.midi.list_midi_output_ports", return_value=["Output Device"]):
+        with patch("vcpi.midi.list_midi_input_ports", return_value=["Input A", "Input B"]) as inputs, \
+                patch("vcpi.midi.list_midi_output_ports", return_value=["Output Device"]):
             for before in ("midi input In", "midimix input 'In"):
                 inserted = self.inserted(before, "'Input A'")
                 self.assertEqual(shlex.split(inserted)[-1], "Input A")
@@ -165,8 +168,8 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(self.matches("midi input close "), ["1"])
 
     def test_unavailable_hardware_keeps_non_hardware_midi_choices(self):
-        with patch("core.midi.list_midi_input_ports", side_effect=RuntimeError("no sequencer")), \
-                patch("core.midi.list_midi_output_ports", side_effect=RuntimeError("no sequencer")):
+        with patch("vcpi.midi.list_midi_input_ports", side_effect=RuntimeError("no sequencer")), \
+                patch("vcpi.midi.list_midi_output_ports", side_effect=RuntimeError("no sequencer")):
             self.assertEqual(self.matches("midi input "), ["close"])
             self.assertEqual(self.matches("midi input c"), ["close"])
             self.assertEqual(self.matches("midi input 0"), [])
@@ -271,7 +274,7 @@ class CompletionTests(unittest.TestCase):
             self.master.parameters[name] = ParameterSnapshot(kind="bool")
             self.assertNotIn(name, self.matches("get master "))
             inserted = self.inserted("get master 1 ", name)
-            _, _, plugin, remaining = self.cli._parameter_target(shlex.split(inserted)[1:])
+            _, _, plugin, remaining = parameter_target(self.host, shlex.split(inserted)[1:])
             self.assertIs(plugin, self.master)
             self.assertEqual(remaining, [name])
             self.assertIn(name, self.matches("set master 1 "))
@@ -284,7 +287,7 @@ class CompletionTests(unittest.TestCase):
         self.effect.parameters["fx"] = ParameterSnapshot(kind="bool")
         self.track.effects.append(self.effect)
         inserted = self.inserted("get 1 fx 1 ", "fx")
-        _, _, plugin, remaining = self.cli._parameter_target(shlex.split(inserted)[1:])
+        _, _, plugin, remaining = parameter_target(self.host, shlex.split(inserted)[1:])
         self.assertIs(plugin, self.effect)
         self.assertEqual(remaining, ["fx"])
 
@@ -309,7 +312,7 @@ class CompletionTests(unittest.TestCase):
                        "track master fx Surge X", "track 1 fx Surge X"):
             inserted = self.inserted(before, "'Surge XT'")
             plugin_arg = inserted.split(maxsplit=3)[3]
-            self.assertEqual(self.cli._parse_vst_args(plugin_arg), ("Surge XT", None))
+            self.assertEqual(parse_named_source(plugin_arg), ("Surge XT", None))
         self.assertEqual(self.matches("track 1 vst Basic "), ["--name"])
         self.assertEqual(self.matches("track 1 vst Basic --n"), ["--name"])
         self.assertEqual(self.matches("track 1 vst Basic --name "), [])
@@ -324,7 +327,7 @@ class CompletionTests(unittest.TestCase):
                 ("track 1 pd Player", "Player's Lead"),
                 ("track 1 pd nested/B", "nested/Bass")):
             inserted = self.inserted(before, shlex.quote(name))
-            patch_name, label = self.cli._parse_vst_args(inserted.split(maxsplit=3)[3])
+            patch_name, label = parse_named_source(inserted.split(maxsplit=3)[3])
             self.assertEqual(patch_name, name)
             self.assertIsNone(label)
             self.assertTrue((self.root / "patches" / f"{patch_name}.pd").is_file())
@@ -345,7 +348,7 @@ class CompletionTests(unittest.TestCase):
         for command in ("save", "load"):
             inserted = self.inserted(command + ' "Live S', "'Live Set'")
             self.assertEqual(shlex.split(inserted), [command, "Live Set"])
-            self.assertEqual(self.cli._resolve_session_path(shlex.split(inserted)[1]),
+            self.assertEqual(assets.resolve_session_path(shlex.split(inserted)[1]),
                              self.root / "sessions" / "Live Set.json")
         for before, name in (("track 1 wav Bad", "Bad Pack"),
                              ('track 1 wav Drums "Closed', "Closed Hat"),
@@ -373,11 +376,11 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.matches("ps all "), [])
 
     def test_invalid_structural_prefixes_do_not_discover_assets(self):
-        with patch.object(self.cli, "_vst_names") as vst, \
-                patch.object(self.cli, "_sample_pack_names") as packs, \
-                patch.object(self.cli, "_sample_names") as samples, \
-                patch.object(self.cli, "_vcv_patch_names") as patches, \
-                patch.object(self.cli, "_session_names") as sessions:
+        with patch.object(assets, "vst_names") as vst, \
+                patch.object(assets, "sample_pack_names") as packs, \
+                patch.object(assets, "sample_names") as samples, \
+                patch.object(assets, "vcv_patch_names") as patches, \
+                patch.object(assets, "session_names") as sessions:
             for before in ("unknown ", "track 99 vst ", "track master vst ",
                            "track 1 unknown ", "track 1 clear ", "track 1 fx clear ",
                            "track 1 wav Drums Kick Label ", "loadx "):
@@ -387,8 +390,8 @@ class CompletionTests(unittest.TestCase):
 
     def test_control_characters_from_assets_and_metadata_are_never_inserted(self):
         unsafe = ["bad\nstatus", "bad\rstatus", "bad\x00value", "bad\x01value", "bad\x1b[31m", "bad\x7f"]
-        with patch.object(self.cli, "_vst_names", return_value=["Good", *unsafe]), \
-                patch.object(self.cli, "_session_names", return_value=["Good Set", *unsafe]):
+        with patch.object(assets, "vst_names", return_value=["Good", *unsafe]), \
+                patch.object(assets, "session_names", return_value=["Good Set", *unsafe]):
             self.assertEqual(self.matches("track 1 vst "), ["Good"])
             self.assertEqual(self.matches("load "), ["'Good Set'"])
         self.instrument.parameters["mode"].valid_values = ("Good Choice", *unsafe)
@@ -401,8 +404,8 @@ class CompletionTests(unittest.TestCase):
         parameters = copy.deepcopy(self.instrument.parameters)
         values = copy.deepcopy(self.instrument.values)
         effects = list(self.track.effects)
-        with patch("core.midi.list_midi_input_ports", return_value=[]), \
-                patch("core.midi.list_midi_output_ports", return_value=[]):
+        with patch("vcpi.midi.list_midi_input_ports", return_value=[]), \
+                patch("vcpi.midi.list_midi_output_ports", return_value=[]):
             for before in ("", "audio start ", "audio diagnose ", "midi input ",
                            "midi input close ", "midimix output ", "track 1 vst ",
                            "track 1 fx clear ", "get 1 ", "set 1 mode ",

@@ -5,20 +5,31 @@ set -euo pipefail
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 VENV_DIR="${VENV_DIR:-$ROOT_DIR/.venv}"
 PYTHON_BIN="$VENV_DIR/bin/python"
-PIP_BIN="$VENV_DIR/bin/pip"
 REQUIREMENTS="$ROOT_DIR/requirements.txt"
 INSTALLED_REQUIREMENTS="$VENV_DIR/.vcpi-requirements.txt"
+PACKAGE_CONFIG="$ROOT_DIR/pyproject.toml"
+INSTALLED_PACKAGE_CONFIG="$VENV_DIR/.vcpi-pyproject.toml"
 
 if [ ! -x "$PYTHON_BIN" ]; then
   python3 -m venv "$VENV_DIR"
-  "$PIP_BIN" install --upgrade pip
+  "$PYTHON_BIN" -m pip install --upgrade pip
 fi
 
-# Older environments have no snapshot; synchronize once and after each change.
+# Synchronize changed metadata/dependencies or an environment from another checkout.
 # Record success only after pip completes so a failed install is retried.
-if ! cmp -s "$REQUIREMENTS" "$INSTALLED_REQUIREMENTS"; then
-  "$PIP_BIN" install -r "$REQUIREMENTS"
+if ! cmp -s "$REQUIREMENTS" "$INSTALLED_REQUIREMENTS" \
+  || ! cmp -s "$PACKAGE_CONFIG" "$INSTALLED_PACKAGE_CONFIG" \
+  || ! "$PYTHON_BIN" -c '
+import importlib.util
+from pathlib import Path
+import sys
+spec = importlib.util.find_spec("vcpi")
+expected = Path(sys.argv[1]).resolve() / "src" / "vcpi" / "__init__.py"
+raise SystemExit(spec is None or spec.origin is None or Path(spec.origin).resolve() != expected)
+' "$ROOT_DIR"; then
+  "$PYTHON_BIN" -m pip install -e "$ROOT_DIR"
   cp "$REQUIREMENTS" "$INSTALLED_REQUIREMENTS"
+  cp "$PACKAGE_CONFIG" "$INSTALLED_PACKAGE_CONFIG"
 fi
 
-exec "$PYTHON_BIN" "$ROOT_DIR/main.py" cli "$@"
+exec "$PYTHON_BIN" -m vcpi cli "$@"

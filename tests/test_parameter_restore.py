@@ -10,16 +10,17 @@ import unittest
 from types import SimpleNamespace
 
 
-from core.audio_process import RemoteAudioEngine, _OwnerRuntime
-from core.engine import AudioEngine
-from core.models import InstrumentTrack
-from core.cli import HostCLI
-from core.session import _apply_plugin_params, _restore_plugin_state, _saved_plugin_state
-from core.track_process import (
-    PARAMETER_BATCH_LIMIT, TrackProcessError, TrackWorker, _execute, _track_state,
-)
-from core.audio_state import PluginSnapshot, capture_plugin
-from core.state_transport import (
+from vcpi.audio.client import RemoteAudioEngine
+from vcpi.audio.owner import _OwnerRuntime
+from vcpi.audio.control import AudioEngine
+from vcpi.models import InstrumentTrack
+from vcpi.commands.cli import HostCLI
+from vcpi.sessions.plugin_state import _apply_plugin_params, _restore_plugin_state, _saved_plugin_state
+from vcpi.audio.track_client import TrackWorker
+from vcpi.audio.track_protocol import PARAMETER_BATCH_LIMIT, TrackProcessError
+from vcpi.audio.track_owner import _execute, _track_state
+from vcpi.audio_state import PluginSnapshot, capture_plugin
+from vcpi.state_transport import (
     NATIVE_MESSAGE_LIMIT, encode_native_message, receive_frame,
     validate_native_state,
 )
@@ -251,7 +252,7 @@ class ParameterRestoreTests(unittest.TestCase):
 
     def test_session_batch_applies_compatible_values_and_logs_skipped_unknown(self):
         host = SimpleNamespace(engine=self.remote)
-        with self.assertLogs("core.session", level="WARNING") as messages:
+        with self.assertLogs("vcpi.sessions", level="WARNING") as messages:
             _apply_plugin_params(host, 2, {
                 "bypass": False, "removed_parameter": True,
                 "mode": "Quiet Mode", "amplitude": 0.6,
@@ -265,7 +266,7 @@ class ParameterRestoreTests(unittest.TestCase):
     def test_session_filters_unknown_controls_before_ordered_legacy_batch(self):
         params = {f"removed_{index}": index for index in range(PARAMETER_BATCH_LIMIT - 1)}
         params.update({"bypass": False, "mode": "Quiet Mode", "amplitude": 0.6})
-        with self.assertLogs("core.session", level="WARNING") as messages:
+        with self.assertLogs("vcpi.sessions", level="WARNING") as messages:
             _apply_plugin_params(SimpleNamespace(engine=self.remote), 2, params)
         for index, message in enumerate(messages.output):
             self.assertIn(f"'removed_{index}'", message)
@@ -278,7 +279,7 @@ class ParameterRestoreTests(unittest.TestCase):
         self.instrument.bypass = False
         self.worker._accept({"ok": True, "state": _track_state(self.owner, 2)})
         self.worker.track.plugin.parameters["bypass"].is_automatable = False
-        with self.assertLogs("core.session", level="WARNING") as messages:
+        with self.assertLogs("vcpi.sessions", level="WARNING") as messages:
             _apply_plugin_params(SimpleNamespace(engine=self.remote), 2, {
                 "bypass": True, "mode": "Quiet Mode", "amplitude": 0.6,
             })

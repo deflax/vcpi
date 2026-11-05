@@ -14,11 +14,11 @@ from unittest.mock import patch
 import mido
 import numpy as np
 
-from core.audio_deps import require_native
-from core.engine import AudioEngine
-from core.models import InstrumentTrack
-from core.plugin_host import NativePlugin
-from core.audio_state import capture_plugin
+from vcpi.audio_deps import require_native
+from vcpi.audio.control import AudioEngine
+from vcpi.models import InstrumentTrack
+from vcpi.plugin_host import NativePlugin
+from vcpi.audio_state import capture_plugin
 
 
 class NativeAudioTests(unittest.TestCase):
@@ -218,8 +218,8 @@ class NativeAudioTests(unittest.TestCase):
     def test_gain_summaries_wait_for_quiet_without_delaying_applied_values(self):
         track = self.track(0)
         quiet = self.engine._gain_log_quiet_seconds
-        with self.assertLogs("core.engine", level="INFO") as captured:
-            with patch("core.engine.time.monotonic") as clock:
+        with self.assertLogs("vcpi.audio.control", level="INFO") as captured:
+            with patch("vcpi.audio.control.time.monotonic") as clock:
                 for step in range(20):
                     clock.return_value = 10 + step * quiet / 2
                     gain = step / 20
@@ -244,8 +244,8 @@ class NativeAudioTests(unittest.TestCase):
     def test_gain_summaries_are_independent_and_discard_retired_track_values(self):
         self.track(0)
         quiet = self.engine._gain_log_quiet_seconds
-        with self.assertLogs("core.engine", level="INFO") as captured:
-            with patch("core.engine.time.monotonic") as clock:
+        with self.assertLogs("vcpi.audio.control", level="INFO") as captured:
+            with patch("vcpi.audio.control.time.monotonic") as clock:
                 clock.return_value = 10
                 self.engine.set_track_state(0, gain=0.25)
                 clock.return_value = 10 + quiet / 2

@@ -7,14 +7,14 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from core.audio_process import RemoteAudioEngine
-from core.host import VcpiCore
-from core.link import LinkSync
+from vcpi.audio.client import RemoteAudioEngine
+from vcpi.host import VcpiCore
+from vcpi.link import LinkSync
 
 
 class DeckClockTests(unittest.TestCase):
     def test_local_tempo_changes_preserve_continuous_phase(self):
-        with patch("core.link.time.monotonic", return_value=10) as clock:
+        with patch("vcpi.link.time.monotonic", return_value=10) as clock:
             link = LinkSync(120)
             clock.return_value = 12
             self.assertEqual(link.timeline(), (120, 4, 12))
@@ -27,7 +27,7 @@ class DeckClockTests(unittest.TestCase):
             self.assertEqual(link.beat, 10)
 
     def test_link_peer_tempo_and_phase_continue_locally_on_disable(self):
-        with patch("core.link.time.monotonic", return_value=10) as clock:
+        with patch("vcpi.link.time.monotonic", return_value=10) as clock:
             link = LinkSync()
             peer = SimpleNamespace(tempo=128, beat=19.25, enabled=True)
             link._link, link._enabled = peer, True
@@ -62,7 +62,7 @@ class DeckClockTests(unittest.TestCase):
 
         host._feed_deck_clock = fail
         host._deck_clock_thread = threading.Thread(target=host._run_deck_clock)
-        with self.assertLogs("core.host", level="WARNING") as logs:
+        with self.assertLogs("vcpi.host", level="WARNING") as logs:
             host._deck_clock_thread.start()
             self.addCleanup(host._stop_deck_clock)
             self.assertTrue(attempts.wait(1))

@@ -159,9 +159,10 @@ sed -i 's/dtoverlay=vc4-kms-v3d$/dtoverlay=vc4-kms-v3d,noaudio/' "$BOOT_MOUNT/co
 
 # Build the checked-out source, including local changes, not a fresh remote clone.
 mkdir -p "$MOUNT_DIR/home/pi/vcpi"
-tar -C "$REPO_DIR" --exclude='__pycache__' --exclude='core/_vcpi_native*.so' -cf - \
-  core controllers graph sampler patches sessions vst3 native \
-  main.py build_native.py requirements.txt vcpi vcpid README.md USAGE.md \
+tar -C "$REPO_DIR" --exclude='__pycache__' --exclude='*.egg-info' \
+  --exclude='src/vcpi/_vcpi_native*.so' -cf - \
+  src assets sessions \
+  build_native.py pyproject.toml requirements.txt vcpi vcpid README.md USAGE.md \
   LICENSE LICENSE.GPL-3.0 | tar -C "$MOUNT_DIR/home/pi/vcpi" -xf -
 
 if [ -e "$MOUNT_DIR/etc/resolv.conf" ] || [ -L "$MOUNT_DIR/etc/resolv.conf" ]; then

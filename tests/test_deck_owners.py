@@ -11,15 +11,15 @@ import wave
 from pathlib import Path
 from unittest.mock import patch
 
-from controllers.akai_midimix import MidiMixController
+from vcpi.controllers.akai_midimix import MidiMixController
 
-from core.audio_process import RemoteAudioEngine
-from core.audio_state import PluginSnapshot
-from core.deck_bank import load_bank, make_catalog
-from core.engine import AudioEngine
-from core.host import VcpiCore
-from core.models import InstrumentTrack, NUM_TRACKS
-from core.track_process import TrackWorker
+from vcpi.audio.client import RemoteAudioEngine
+from vcpi.audio_state import PluginSnapshot
+from vcpi.deck_bank import load_bank, make_catalog
+from vcpi.audio.control import AudioEngine
+from vcpi.host import VcpiCore
+from vcpi.models import InstrumentTrack, NUM_TRACKS
+from vcpi.audio.track_client import TrackWorker
 
 
 class DeckOwnerTests(unittest.TestCase):

@@ -6,9 +6,9 @@ from unittest.mock import patch
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from core.host import VcpiCore
+    from vcpi.host import VcpiCore
 
-from core.processes import _Snapshot, render_processes
+from vcpi.processes import _Snapshot, render_processes
 
 
 class ProcessDisplayTests(unittest.TestCase):
@@ -20,10 +20,10 @@ class ProcessDisplayTests(unittest.TestCase):
                           {100: 1, 101: 1, 102: 1, 103: 1, 104: 1, 105: 1})
         last = _Snapshot(2, 11, 10485760, "sleeping", "python", 7,
                          {100: 1, 101: 1, 102: 1, 103: 2, 104: 1, 105: 1, 106: 1})
-        with patch("core.processes.psutil.Process", return_value=process), \
-             patch("core.processes._snapshot", side_effect=[first, last]), \
-             patch("core.processes.time.sleep"), \
-             patch("core.processes._thread_name", side_effect=lambda pid, tid, names:
+        with patch("vcpi.processes.psutil.Process", return_value=process), \
+             patch("vcpi.processes._snapshot", side_effect=[first, last]), \
+             patch("vcpi.processes.time.sleep"), \
+             patch("vcpi.processes._thread_name", side_effect=lambda pid, tid, names:
                    "plugin-worker" if tid == 102 else "python"):
             return render_processes(cast("VcpiCore", host), show_all=show_all)
 
@@ -75,11 +75,11 @@ class ProcessDisplayTests(unittest.TestCase):
                 ("mem", [(100, "-"), (100, "100"), (100, "101"), (100, "102"),
                          (200, "-"), (200, "200")])):
             with self.subTest(sort_by=sort_by), \
-                 patch("core.processes.psutil.Process", return_value=root), \
-                 patch("core.processes._snapshot",
+                 patch("vcpi.processes.psutil.Process", return_value=root), \
+                 patch("vcpi.processes._snapshot",
                        side_effect=[first[100], first[200], last[100], last[200]]), \
-                 patch("core.processes.time.sleep"), \
-                 patch("core.processes._thread_name", return_value="python"):
+                 patch("vcpi.processes.time.sleep"), \
+                 patch("vcpi.processes._thread_name", return_value="python"):
                 output = render_processes(cast("VcpiCore", host),
                                           show_all=True, sort_by=sort_by)
             rows = [(int(parts[0]), parts[1]) for line in output.splitlines()

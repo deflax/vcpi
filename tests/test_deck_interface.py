@@ -10,15 +10,15 @@ from unittest.mock import Mock
 
 from rich.console import Console
 
-from controllers.akai_midimix import KNOB_CCS, MUTE_NOTES, MidiMixController
-from controllers.midi_input import MidiInputController
-from core.audio_state import ParameterSnapshot, PluginSnapshot, apply_deck_status
-from core.cli import HostCLI
-from core.client_display import display_response
-from core.completion import complete_line
-from core.deps import HAS_MIDO
-from core.models import InstrumentTrack
-from core.session import snapshot
+from vcpi.controllers.akai_midimix import KNOB_CCS, MUTE_NOTES, MidiMixController
+from vcpi.controllers.midi_input import MidiInputController
+from vcpi.audio_state import ParameterSnapshot, PluginSnapshot, apply_deck_status
+from vcpi.commands.cli import HostCLI
+from vcpi.presentation.client_display import display_response
+from vcpi.commands.completion import complete_line
+from vcpi.deps import HAS_MIDO
+from vcpi.models import InstrumentTrack
+from vcpi.sessions.snapshot import snapshot
 
 
 def deck_track(generation=7):

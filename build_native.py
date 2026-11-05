@@ -51,10 +51,10 @@ def main():
     root = Path(__file__).resolve().parent
     # Never reuse CMake's compiler/Python cache across platforms or ABIs.
     target = f"{sys.platform}-{platform.machine()}-{sys.implementation.cache_tag}"
-    build = root / "build" / target
+    build = root / "build" / "engine" / target
     try:
         run_build_step([
-            "cmake", "-S", str(root / "native"), "-B", str(build),
+            "cmake", "-S", str(root / "src" / "engine"), "-B", str(build),
             "-DCMAKE_BUILD_TYPE=Release", f"-DPython_EXECUTABLE={sys.executable}",
         ])
         # Large JUCE translation units can exhaust memory on small machines.

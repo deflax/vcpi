@@ -10,12 +10,12 @@ import time
 import unittest
 import wave
 
-from controllers.midi_input import MidiInputController
-from core.client import _read_response_lines
-from core.deps import HAS_MIDO, mido
-from core.host import VcpiCore
-from core.server import VcpiServer
-from core.session import snapshot
+from vcpi.controllers.midi_input import MidiInputController
+from vcpi.client import _read_response_lines
+from vcpi.deps import HAS_MIDO, mido
+from vcpi.host import VcpiCore
+from vcpi.server import VcpiServer
+from vcpi.sessions.snapshot import snapshot
 
 
 class DeckSessionTests(unittest.TestCase):
@@ -141,7 +141,7 @@ class DeckSessionTests(unittest.TestCase):
                         {"kind": "wav", "name": "Unaffected", "path": str(self.root / "first.wav")},
                     ]}))
                 restored = self.host()
-                with self.assertLogs("core.session", level="WARNING") as messages:
+                with self.assertLogs("vcpi.sessions", level="WARNING") as messages:
                     restored.restore_session()
                 self.assertIsNone(restored.engine.tracks[0])
                 self.assertEqual(restored.engine.tracks[1].name, "Unaffected")

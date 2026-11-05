@@ -12,7 +12,7 @@ import wave
 
 import numpy as np
 
-from core.audio_deps import require_native
+from vcpi.audio_deps import require_native
 
 
 class NativeDeckTests(unittest.TestCase):

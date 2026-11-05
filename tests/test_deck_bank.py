@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.deck_bank import CATALOG_LIMIT, audio_entry, encode_deck_message, load_bank, make_catalog
-from core.state_transport import receive_frame, send_frame
+from vcpi.deck_bank import CATALOG_LIMIT, audio_entry, encode_deck_message, load_bank, make_catalog
+from vcpi.state_transport import receive_frame, send_frame
 
 
 class DeckBankTests(unittest.TestCase):
