@@ -167,6 +167,7 @@ class HostCLI(cmd.Cmd):
                 continue
             title, commands = group
             rows = [(name, summary) for name, summary in entries if name in commands]
+            rows.sort(key=lambda row: row[0] != "track")
             if not rows:
                 continue
             self._print(f"\n{title}:")
