@@ -2,6 +2,7 @@
 """Build the native audio extension for this interpreter and platform."""
 
 from pathlib import Path
+import hashlib
 import os
 import platform
 import subprocess
@@ -47,11 +48,17 @@ def run_build_step(command):
         raise subprocess.CalledProcessError(returncode, command)
 
 
+def native_build_directory(root: Path) -> Path:
+    """Keep absolute-path CMake caches private to one resolved checkout."""
+    root = root.resolve()
+    target = f"{sys.platform}-{platform.machine()}-{sys.implementation.cache_tag}"
+    checkout = hashlib.sha256(os.fsencode(root)).hexdigest()[:16]
+    return root / "build" / "engine" / target / checkout
+
+
 def main():
     root = Path(__file__).resolve().parent
-    # Never reuse CMake's compiler/Python cache across platforms or ABIs.
-    target = f"{sys.platform}-{platform.machine()}-{sys.implementation.cache_tag}"
-    build = root / "build" / "engine" / target
+    build = native_build_directory(root)
     try:
         run_build_step([
             "cmake", "-S", str(root / "src" / "engine"), "-B", str(build),

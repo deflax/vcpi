@@ -114,8 +114,9 @@ sudo PLUGDATA_URL=https://mirror.example/plugdata-Debian-aarch64.tar.xz \
 - The native C++ extension is built, then WAV/MIDI/mixer and installed-plugdata
   smoke checks run as `pi` without a display or audio device. The plugdata check
   imports `assets/patches/sine.pd`, verifies a MIDI-selected tone, and
-  checks silence after note-off. Native build dependencies are retained for
-  offline incremental builds.
+  checks silence after note-off. Native build dependencies are retained in the
+  checkout-specific cache for offline incremental builds. Provisioning and
+  `./vcpid` use the same build-directory calculation at `/home/pi/vcpi`.
 - Temporary build-host DNS, service-start suppression and the copied QEMU
   interpreter are removed/restored before the output image is published.
 

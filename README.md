@@ -177,8 +177,13 @@ audio facades from `vcpi.audio.client`, `vcpi.audio.track_client`, and
 `vcpi.audio.control`; and session file operations from `vcpi.sessions.persistence`.
 Command execution and completion share `vcpi.commands.assets` for discovery.
 Native backend imports remain deferred to the processes that own audio resources.
-The build cache lives under `build/engine/<platform-architecture-python-abi>/`,
-and CMake places the compiled `_vcpi_native` extension inside `src/vcpi`.
+The build cache lives under
+`build/engine/<platform-architecture-python-abi>/<checkout-id>/`, where the
+checkout ID is derived from the resolved checkout path. Moving or copying a
+checkout selects a fresh cache rather than reusing CMake's incompatible absolute
+paths. Existing caches are left untouched; the first build at a new location may
+download the pinned build dependencies again. CMake places the compiled
+`_vcpi_native` extension inside `src/vcpi`.
 
 The native `PluginOwnership` guard is shared by track rendering and master effects.
 Pd-state conversion stays on the control thread, while deck streaming and callback

@@ -156,14 +156,12 @@ cp "$PROJECT_DIR/pyproject.toml" "$PROJECT_DIR/.venv/.vcpi-pyproject.toml"
 # build_native.py reconfigures each time; suppress FetchContent remote updates.
 "$PYTHON" - <<'PY'
 from pathlib import Path
-import platform
 import subprocess
-import sys
+from build_native import native_build_directory
 
 root = Path.cwd()
-target = f"{sys.platform}-{platform.machine()}-{sys.implementation.cache_tag}"
 subprocess.run([
-    "cmake", "-S", str(root / "src" / "engine"), "-B", str(root / "build" / "engine" / target),
+    "cmake", "-S", str(root / "src" / "engine"), "-B", str(native_build_directory(root)),
     "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
 ], check=True)
 PY
