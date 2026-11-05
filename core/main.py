@@ -46,14 +46,14 @@ def _device_selector(value: str) -> str:
 
 def _add_host_args(parser: argparse.ArgumentParser):
     """Add grouped startup settings; None means preserve restored state."""
-    audio = parser.add_argument_group("Audio setup (does not start audio)")
+    audio = parser.add_argument_group("Audio setup")
     audio.add_argument("--sample-rate", type=_positive_int, default=44100,
                        metavar="HZ", help="Startup sample rate in Hz (default: 44100)")
     audio.add_argument("--buffer-size", type=_positive_int, default=512,
                        metavar="FRAMES", help="Startup buffer size in frames (default: 512)")
     audio.add_argument("--output", type=_device_selector, metavar="INDEX_OR_NAME",
-                       help="Preferred output device, zero-based index or name; "
-                            "used by audio start (default: saved preference or system default)")
+                       help="Start audio on this output, overriding the saved device; "
+                            "zero-based index or quoted name (default: restore saved output)")
 
     tempo = parser.add_argument_group(
         "Tempo and synchronization",
@@ -100,12 +100,16 @@ def _boot_host(args) -> "VcpiCore":
             host.link.bpm = args.bpm
         if not args.no_restore:
             try:
-                host.restore_session(start_audio=False, skip_settings=overridden)
+                host.restore_session(skip_settings=overridden)
             except Exception as e:
                 logger.warning("session restore failed: %s", e)
 
         if args.output is not None:
             host.preferred_output_device = args.output
+            try:
+                host.start_audio()
+            except Exception as e:
+                logger.warning("audio startup failed for '%s': %s", args.output, e)
         if args.link is not None:
             try:
                 if args.link:
@@ -206,10 +210,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_serve = sub.add_parser(
         "serve",
         help="Run headless with a Unix socket control interface",
-        description="Restore the host setup and serve commands without starting audio.",
+        description="Restore the host setup, reopen saved audio output, and serve commands.",
         epilog="Explicit options override saved settings; omitted options preserve them. "
                "Sample rate and buffer size are startup-only, never restored. "
-               "Use audio start in the interactive CLI when ready. "
+               "Without a saved or explicit output, use audio start in the interactive CLI. "
                "Quote device names or paths containing spaces.",
         allow_abbrev=False)
     _add_host_args(sp_serve)

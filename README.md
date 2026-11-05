@@ -52,7 +52,8 @@ Both launchers create `.venv` if needed and install Python dependencies on first
 launch or when `requirements.txt` changes. `./vcpid` also builds the native
 extension incrementally before starting the daemon.
 
-Audio does **not** start automatically. In the client, try a bundled sample:
+On a fresh session, start audio manually. Later server launches automatically
+reopen the saved audio output. In the client, try a bundled sample:
 
 ```text
 track 1 wav piano c4-soft
@@ -187,8 +188,9 @@ Startup options use descriptive names, for example:
 
 Explicit tempo, Link, and device options override restored session settings.
 Omitted options preserve saved settings; sample rate and buffer size are
-startup-only. The server always starts with audio stopped. `audio start` uses
-the selected or restored output; supply a device to select a different output.
+startup-only. The server automatically reopens the saved audio output;
+`--output` starts the explicitly selected output instead. With no saved or
+explicit output, audio stays stopped until `audio start [device]`.
 Use `--midi-input` repeatedly to select multiple MIDI inputs and
 `--midimix-input` / `--midimix-output` for controller connections.
 

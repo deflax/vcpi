@@ -115,7 +115,7 @@ class StartupTests(unittest.TestCase):
         self.addCleanup(host.shutdown, save=False)
         return host
 
-    def test_restore_preserves_setup_but_never_opens_audio(self):
+    def test_restore_preserves_setup_and_reopens_saved_audio(self):
         self.session(bpm=93, link_enabled=True, master_gain=0.45,
                      sample_rate=22050, buffer_size=64,
                      connections={"audio_output": "Studio Output"})
@@ -125,10 +125,8 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(host.engine.master_gain, 0.45)
         self.assertEqual((host.sample_rate, host.buffer_size), (44100, 512))
         self.assertEqual(host.preferred_output_device, "Studio Output")
-        self.assertIsNone(host.audio_output_name)
-        self.assertFalse(host.engine.running)
-        self.assertEqual(host.engine.opened_outputs, [])
-        host.start_audio()
+        self.assertTrue(host.engine.running)
+        self.assertEqual(host.engine.opened_outputs, ["Studio Output"])
         self.assertEqual(host.audio_output_name, "Studio Output")
 
     def test_explicit_settings_override_without_opening_saved_devices(self):
@@ -146,9 +144,9 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(host.mixer_midi_name, "MIDI Mix")
         self.assertEqual(host.mixer_midi_out_name, "MIDI Mix")
         self.assertNotIn("Saved Keyboard", MidiHardware.opened)
-        self.assertEqual(host.engine.opened_outputs, [])
+        self.assertEqual(host.engine.opened_outputs, ["Studio Output"])
+        self.assertTrue(host.engine.running)
         self.assertEqual((host.sample_rate, host.buffer_size), (48000, 256))
-        host.start_audio()
         self.assertEqual(host.audio_output_name, "Studio Output")
 
     def test_omitted_midi_connections_restore_and_link_uses_explicit_tempo(self):
@@ -170,18 +168,18 @@ class StartupTests(unittest.TestCase):
         self.assertFalse(host.link.enabled)
         self.assertIsNone(host.preferred_output_device)
         self.assertEqual(host.engine.opened_outputs, [])
-        explicit = self.boot("--no-restore", "--bpm", "142", "--link")
+        explicit = self.boot("--no-restore", "--bpm", "142", "--link", "--output", "0")
         self.assertTrue(explicit.link.enabled)
         self.assertEqual(explicit.link.bpm, 142)
+        self.assertTrue(explicit.engine.running)
+        self.assertEqual(explicit.engine.opened_outputs, ["Built-in"])
 
-    def test_stopped_numeric_preference_round_trips_then_runtime_load_starts_audio(self):
-        self.session(connections={"audio_output": 1})
-        host = self.boot()
+    def test_numeric_preference_round_trips_and_reopens_on_restart(self):
+        host = self.boot("--no-restore")
+        host.preferred_output_device = 1
         host.save_session()
         self.assertEqual(json.loads(self.path.read_text())["connections"]["audio_output"], 1)
         restored = self.boot()
-        self.assertFalse(restored.engine.running)
-        restored.restore_session()
         self.assertTrue(restored.engine.running)
         self.assertEqual(restored.audio_output_name, "Studio Output")
         restored.stop_audio()
@@ -196,6 +194,26 @@ class StartupTests(unittest.TestCase):
         restored.save_session()
         self.assertEqual(json.loads(self.path.read_text())["connections"]["audio_output"],
                          "Built-in")
+
+    def test_shutdown_saves_active_output_for_automatic_restart(self):
+        host = self.boot("--no-restore")
+        host.start_audio()
+        host.shutdown()
+        restored = self.boot()
+        self.assertTrue(restored.engine.running)
+        self.assertEqual(restored.audio_output_name, "Built-in")
+        self.assertEqual(restored.engine.opened_outputs, ["Built-in"])
+
+    def test_fresh_or_unselected_session_leaves_audio_stopped(self):
+        fresh = self.boot()
+        self.assertFalse(fresh.engine.running)
+        self.assertEqual(fresh.engine.opened_outputs, [])
+        for connections in ({}, {"audio_output": None}, {"audio_output": ""}):
+            with self.subTest(connections=connections):
+                self.session(connections=connections)
+                host = self.boot()
+                self.assertFalse(host.engine.running)
+                self.assertEqual(host.engine.opened_outputs, [])
 
     def test_runtime_load_disables_saved_link_and_retains_running_default_output(self):
         host = self.boot("--no-restore", "--link")

@@ -60,7 +60,7 @@ Hidden directories present in the workspace:
 
 - `serve` starts the headless host and exposes a Unix socket control interface.
 - `cli` connects to an already-running server.
-- Server mode does **not** auto-start audio; start it manually from the client with `audio start [device]`.
+- Server mode automatically reopens a saved audio output; `--output` overrides it and starts that device. Without a saved or explicit output, use `audio start [device]`. `--no-restore` skips saved connections.
 - Only one server instance per user is allowed.
 - Default socket path is `$XDG_RUNTIME_DIR/vcpi/vcpi.sock` with fallbacks documented in `USAGE.md`.
 

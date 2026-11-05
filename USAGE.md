@@ -60,13 +60,16 @@ These flags apply when starting the host server (`python main.py serve`).
 | `--midi-input <port> [port ...]` | restored | MIDI input indexes or quoted names; repeatable, occurrences accumulate |
 | `--midimix-input <port>` | restored | MIDI Mix input index or quoted name |
 | `--midimix-output <port>` | restored | MIDI Mix output index or quoted name (LED feedback) |
-| `--output <device>` | restored, otherwise system default | Preferred output index or quoted name; does not start audio |
+| `--output <device>` | restored, otherwise unopened | Start audio on this output index or quoted name, overriding the saved output |
 | `--session <path>` | `~/.config/vcpi/session.json` | Automatic session file path |
 | `--no-restore` | off | Skip restoring the automatic session at startup |
 
-When running `serve`, vcpi always starts with audio stopped, including after
-restoring a session. Start audio manually with `audio start [device]`; without
-a device it uses the explicit `--output` selection or restored output.
+When running `serve`, vcpi automatically reopens a saved audio output after
+restoring the session. An explicit `--output` starts that device instead, without
+opening the saved device first, including with `--no-restore`. A fresh session
+without a saved or explicit output stays stopped; use `audio start [device]`.
+This restores the previous saved-output behavior: no separate running/stopped
+flag is stored, so even an output stopped before saving is reopened on restart.
 
 Precedence for tempo, Link, and device connections is **defaults → restored
 session → explicit startup options**. Overridden saved connections are not
@@ -988,10 +991,10 @@ not repair its state.
 JSON is written in the control process. A failed native owner or state capture
 makes saving fail rather than overwrite the last good session.
 
-Startup restores saved MIDI connections but leaves audio stopped, retaining the
-saved output selection for `audio start`. Explicit startup device flags override
-saved connections. Interactive `load` can reconnect/start the saved audio output
-after restoration completes.
+Startup restores saved MIDI connections and reopens the saved audio output.
+Explicit startup device flags override saved connections; `--no-restore` skips
+saved connections, while an explicit `--output` still starts audio.
+Interactive `load` also reconnects/starts the saved audio output after restoration.
 
 An interrupted startup retires native owners without saving partially restored
 state; the original session file remains unchanged. Native owners ignore
