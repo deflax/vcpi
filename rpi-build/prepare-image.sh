@@ -163,7 +163,7 @@ tar -C "$REPO_DIR" --exclude='__pycache__' --exclude='*.egg-info' \
   --exclude='src/_vcpi_native*.so' -cf - \
   src assets sessions \
   build_native.py pyproject.toml requirements.txt vcpi vcpid README.md USAGE.md \
-  LICENSE LICENSE.GPL-3.0 | tar -C "$MOUNT_DIR/home/pi/vcpi" -xf -
+  LICENSE | tar -C "$MOUNT_DIR/home/pi/vcpi" -xf -
 
 if [ -e "$MOUNT_DIR/etc/resolv.conf" ] || [ -L "$MOUNT_DIR/etc/resolv.conf" ]; then
   mv "$MOUNT_DIR/etc/resolv.conf" "$MOUNT_DIR/root/vcpi-resolv.conf"

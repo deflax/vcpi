@@ -618,8 +618,8 @@ PortAudio under its permissive license, and [Queen Mary DSP](https://github.com/
 under GPL-2.0-or-later (pinned to `e34a3cc188332ed7c33cd9257ef164de5b587191`).
 Queen Mary DSP's original notices and its bundled KissFFT license are retained in
 the fetched sources; `aalink` retains its GPL-3.0 license. Separately installed
-VST3 plugins retain their respective licenses. GPLv3 text is retained in
-[LICENSE.GPL-3.0](LICENSE.GPL-3.0).
+VST3 plugins retain their respective licenses. Both the AGPLv3 project license
+and the GPLv3 text for dependencies are retained in [LICENSE](LICENSE).
 
 If you modify vcpi and let users interact with it remotely over a network,
 AGPLv3 requires offering those users the corresponding source for the version
