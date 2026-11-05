@@ -27,16 +27,18 @@ class DeckBankTests(unittest.TestCase):
         catalog = json.loads(load_bank(self.bank()))
         self.assertEqual(catalog["tracks"][0]["path"], str(self.root / "missing.wav"))
         self.assertEqual(catalog["initial_track"], 1)
+        self.assertTrue(catalog["sync"])
         self.assertFalse(Path(catalog["tracks"][0]["path"]).exists())
 
     def test_stable_identity_survives_reordering_without_fallback(self):
         self.bank([{"id": "second", "path": "/music/second.wav"},
                    {"id": "first", "path": "first.wav"}])
         catalog = json.loads(load_bank(self.path, track_id="first", bank_id="set",
-                                      cue=12.5, pitch=-1.25))
+                                      cue=12.5, pitch=-1.25, sync=False))
         self.assertEqual(catalog["initial_track"], 2)
         self.assertEqual(catalog["cue"], 12.5)
         self.assertEqual(catalog["pitch"], -1.25)
+        self.assertFalse(catalog["sync"])
         with self.assertRaisesRegex(ValueError, "not found"):
             load_bank(self.path, track_id="removed")
         with self.assertRaisesRegex(ValueError, "mismatch"):
@@ -55,7 +57,8 @@ class DeckBankTests(unittest.TestCase):
     def test_restore_scalars_are_finite_and_bounded(self):
         self.bank()
         for arguments in ({"pitch": 17}, {"pitch": float("nan")},
-                          {"cue": -1}, {"cue": float("inf")}):
+                          {"cue": -1}, {"cue": float("inf")},
+                          {"sync": "false"}, {"sync": 0}, {"sync": None}):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 load_bank(self.path, **arguments)
 

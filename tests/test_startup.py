@@ -85,6 +85,7 @@ class LinkHardware:
 
     def __init__(self, bpm):
         self.tempo = bpm
+        self.beat = 0.0
         self.enabled = False
         self.num_peers = 0
         self.created_tempos.append(bpm)

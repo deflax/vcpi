@@ -44,10 +44,10 @@ _HELP_TOPICS = {
     "track deck": ("Load or control a deck",
                    "track <1-8> deck <bank.json> [--name <label>]\ntrack <1-8> deck status\ntrack <1-8> deck seek <seconds>\ntrack <1-8> deck cue [set]",
                    "bank.json: bank path (quote spaces). --name: optional display label. seconds: absolute source time.",
-                   "New selections load paused at zero. Transport is independent of Link. Related: help track deck status; get; set."),
+                   "New selections load paused at zero. Detected beats follow global/Link tempo and phase by default (vinyl speed/pitch, not key lock). Use set 1 sync false for manual pitch. Related: help track deck status; get; set."),
     "track deck status": ("Read cached deck transport", "track <1-8> deck status",
                           "track: 1-based loaded deck track.",
-                          "Shows requested/applied selection, position and duration in seconds, play, cue, pitch (%) and nudge. Does not synchronize with the worker."),
+                          "Shows selection, transport, detected bpm, beat_offset (seconds), beat_confidence, sync and sync_error. Unreliable beat grids remain unsynced. Reads cached state without waiting for the worker."),
     "track deck seek": ("Seek a deck", "track <1-8> deck seek <seconds>",
                         "seconds: absolute source position in seconds.",
                         "Requests a seek while retaining play state. Use track <track> deck status to inspect applied transport."),
@@ -795,7 +795,9 @@ class HostCLI(cmd.Cmd):
         status = track.deck
         for key in ("bank_path", "bank_id", "track_id", "track_title",
                     "requested_track_id", "request_id", "state", "play",
-                    "position", "duration", "cue", "pitch", "nudge", "error"):
+                    "position", "duration", "cue", "pitch", "nudge", "bpm",
+                    "beat_offset", "beat_confidence", "sync", "sync_active",
+                    "sync_error", "playback_speed", "beat_phase_error", "error"):
             self._print(f"  {key} = {status.get(key, '(not cached)')}")
         for ordinal, entry in enumerate(status.get("tracks", []), 1):
             self._print(f"  {ordinal}: {entry['id']} — {entry.get('title') or entry['id']}")

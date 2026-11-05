@@ -24,7 +24,8 @@ def deck_track(generation=7):
         "play": ParameterSnapshot(kind="bool", is_boolean=True),
         "pitch": ParameterSnapshot(range=(-16, 16), units="%"),
         "nudge": ParameterSnapshot(range=(-1, 1)),
-    }, values={"track_select": 1, "play": False, "pitch": 0.0, "nudge": 0.0})
+        "sync": ParameterSnapshot(kind="bool", is_boolean=True, range=(0, 1)),
+    }, values={"track_select": 1, "play": False, "pitch": 0.0, "nudge": 0.0, "sync": True})
     track = InstrumentTrack("Deck A", "/bank.json", plugin,
                             source_type="deck", generation=generation)
     track.deck = {
@@ -32,7 +33,7 @@ def deck_track(generation=7):
         "track_title": "Opening title", "requested_track_id": "second",
         "request_id": 4, "state": "loading", "play": False,
         "position": 12.5, "duration": 100, "cue": 2.0, "pitch": -1.25,
-        "nudge": 0, "error": "",
+        "nudge": 0, "sync": False, "error": "",
         "tracks": [{"id": str(i), "title": f"Title {i}"} for i in range(257)],
     }
     return track
@@ -68,10 +69,16 @@ class DeckCLITests(unittest.TestCase):
                          ["cue", "seek", "status"])
         self.assertEqual(complete_line(self.cli, "track 1 deck cue ")["matches"], ["set"])
         self.assertEqual(complete_line(self.cli, "set 1 play ")["matches"], ["false", "true"])
+        self.assertIn("sync", complete_line(self.cli, "set 1 ")["matches"])
+        self.assertEqual(complete_line(self.cli, "set 1 sync ")["matches"], ["false", "true"])
         self.assertIn("257", complete_line(self.cli, "set 1 track_select ")["matches"])
         self.engine.request.assert_not_called()
         self.engine.deck_command.assert_not_called()
         self.host.load_deck.assert_not_called()
+
+    def test_sync_false_is_a_typed_parameter(self):
+        self.cli.onecmd("set 1 sync false")
+        self.engine.set_parameter.assert_called_once_with(0, "sync", False, fx_index=None)
 
 
     def test_deck_payload_omits_source_chunk_but_keeps_insert_chunks(self):
@@ -93,7 +100,7 @@ class DeckCLITests(unittest.TestCase):
         self.assertNotIn("native_state", saved)
         self.assertEqual(saved["deck"], {
             "bank_path": "/bank.json", "bank_id": "set", "track_id": "first",
-            "cue": 2.0, "pitch": -1.25})
+            "cue": 2.0, "pitch": -1.25, "sync": False})
         self.assertEqual(base64.b64decode(saved["effects"][0]["native_state"]), b"effect-state")
 
 

@@ -107,15 +107,17 @@ Loading or replacing a track does not stop unrelated tracks; read-only plugin
 commands use cached snapshots.
 
 Sessions save native VST3 state chunks for instruments, track inserts, and master
-effects; WAV tracks remain path-based, while decks save bank/track identity, cue
-and pitch and restore paused. See [session commands](USAGE.md#session-commands)
+effects; WAV tracks remain path-based, while decks save bank/track identity, cue,
+pitch and sync mode and restore paused. See [session commands](USAGE.md#session-commands)
 for save/restore behavior and legacy session compatibility.
 
-Native decks stream mono/stereo WAV tracks from JSON music banks for manual DJ
-beatmatching. Each has independent play/pause, vinyl-style pitch, momentary nudge,
-seek and one cue point; Link does not drive deck playback. See
-[deck commands and MIDI bindings](USAGE.md#deck-commands) for the manifest format
-and controls. There is no automatic sync, key lock, looping or crossfader.
+Native decks stream mono/stereo AIFF, WAV, MP3 and FLAC tracks from JSON music
+banks. Automatic beat detection supplies a tempo and beat grid; decks follow the
+global tempo and beat phase by default, or Ableton Link when enabled. Each has
+play/pause, vinyl-style speed/pitch, momentary nudge, seek and one cue point.
+Use `set 1 sync false` for manual beatmatching. See
+[deck commands and MIDI bindings](USAGE.md#deck-commands) for the manifest format,
+analysis limits and controls. There is no key lock, looping or crossfader.
 
 ## Repository Layout
 
@@ -450,21 +452,21 @@ For continuous deck playback instead of MIDI-triggered sample voices:
 ```text
 vcpi> track 1 deck /music/live-set.json --name Deck-A
 vcpi> track 2 deck /music/live-set.json --name Deck-B
+vcpi> tempo 120
 vcpi> audio start
 vcpi> set 1 play true
-vcpi> set 2 pitch -1.25
 vcpi> set 2 play true
-vcpi> set 2 nudge 1
-vcpi> set 2 nudge 0
-vcpi> track 2 deck cue set
+vcpi> track 2 deck status
 ```
 
 Both decks initially load paused. Select bank entries with
 `set 1 track_select 2`; selection is asynchronous and commits paused without
 replacing the worker or inserts. Inspect `track 1 deck status` for requested
-versus applied identity and load errors. Deck streaming has hardware-free Linux
-coverage; audible Linux/macOS acceptance and intended-Pi read-ahead/deadline
-measurements are still required before claiming live-set suitability there.
+versus applied identity, detected BPM, confidence, sync state and errors.
+Automatic analysis targets steady 60–200 BPM material; uncertain grids remain
+manual rather than guessing. Hardware-free Linux rendering and daemon command
+coverage do not replace audible Linux/macOS acceptance or intended-Pi
+read-ahead/deadline measurements before live use.
 
 Built-in packs include drums (`808`, `909`) plus melodic/synth packs:
 

@@ -66,6 +66,7 @@ class DeckSessionTests(unittest.TestCase):
         host.engine.set_track_state(0, gain=0.4, muted=True)
         host.engine.set_parameter(0, "play", True)
         host.engine.set_parameter(0, "nudge", 1)
+        host.engine.set_parameter(0, "sync", False)
         host.save_session()
         saved = json.loads(self.session.read_text())
         entry = saved["tracks"][0]
@@ -73,7 +74,7 @@ class DeckSessionTests(unittest.TestCase):
         self.assertNotIn("native_state", entry)
         self.assertEqual(entry["deck"], {
             "bank_path": str(self.bank.resolve()), "bank_id": "live-set",
-            "track_id": "second", "cue": 0.25, "pitch": -1.25})
+            "track_id": "second", "cue": 0.25, "pitch": -1.25, "sync": False})
         self.write_bank(list(reversed(self.entries)))
         restored = self.host()
         restored.restore_session()
@@ -84,11 +85,26 @@ class DeckSessionTests(unittest.TestCase):
         self.assertEqual(restored.channel_map, {3: 0})
         status = self.await_status(restored, 0, lambda state: state.get("track_id") == "second")
         self.assertFalse(status["play"])
+        self.assertFalse(status["sync"])
+        self.assertFalse(track.plugin.values["sync"])
         self.assertEqual(status["nudge"], 0)
         self.assertAlmostEqual(status["pitch"], -1.25)
         self.assertAlmostEqual(status["cue"], 0.25)
         self.assertAlmostEqual(status["position"], 0.25, places=3)
         self.assertEqual(track.plugin.values["track_select"], 1)
+
+    def test_old_session_defaults_to_sync_and_restores_paused(self):
+        self.session.write_text(json.dumps({
+            "version": 3, "tracks": [
+                {"kind": "deck", "name": "Old", "path": str(self.bank),
+                 "deck": {"bank_path": str(self.bank), "bank_id": "live-set",
+                          "track_id": "first", "cue": 0, "pitch": 0}},
+            ]}))
+        host = self.host()
+        host.restore_session(start_audio=False)
+        status = self.await_status(host, 0, lambda state: state.get("state") == "ready")
+        self.assertTrue(status["sync"])
+        self.assertFalse(status["play"])
 
     def test_missing_id_and_bank_identity_report_errors_but_restore_other_tracks(self):
         for bank_id, track_id, bank_path in (

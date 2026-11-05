@@ -188,7 +188,7 @@ def apply_deck_status(track, status):
     """Refresh transport and typed parameter caches from one applied snapshot."""
     track.deck.update(status)
     plugin = track.plugin
-    for name in ("track_select", "play", "pitch", "nudge"):
+    for name in ("track_select", "play", "pitch", "nudge", "sync"):
         if name not in status:
             continue
         value = status[name]

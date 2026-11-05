@@ -466,15 +466,17 @@ volume remains accessible through `get`/`set` but does not consume a knob.
 
 ### Deck Commands
 
-Decks play continuous tracks independently of Link/global transport. They are
-not the MIDI-triggered `wav` sampler. Create up to eight ordinary mixer tracks:
+Decks play continuous tracks, not MIDI-triggered `wav` sampler voices. They detect
+a beat grid automatically and follow the global tempo and beat phase by default,
+using Ableton Link's timeline when enabled. Play/pause is still controlled per
+deck, independently of global transport start/stop. Create up to eight ordinary mixer tracks:
 
 ```text
 track 1 deck /music/live-set.json --name Deck-A
 track 2 deck /music/live-set.json --name Deck-B
+tempo 120
 audio start
 set 1 play true
-set 2 pitch -1.25
 set 2 play true
 ```
 
@@ -499,23 +501,54 @@ Reopening reloads the manifest; there is no automatic rescan. Manifest and resol
 catalog each have a 512 KiB transfer budget, with 1024-byte text fields; there is
 no 128-track limit. Large catalogs use bounded multipart IPC, not larger frames.
 
-Supported audio is mono (duplicated to stereo) or stereo WAV, including supported
-PCM/float encodings, at source rates from 8 kHz to 768 kHz. MP3, FLAC and other
-layouts/formats are rejected. Audio is streamed through bounded read-ahead storage
-and retained sinc resampling with an anti-alias prefilter, not loaded in full.
+Supported audio is mono (duplicated to stereo) or stereo AIFF (`.aif`, `.aiff`,
+`.aifc`, supported encodings), WAV (`.wav`, `.wave`, supported PCM/float encodings),
+MP3 and FLAC, at source rates from 8 kHz to 768 kHz. Other formats and multichannel
+layouts are rejected. Decoding uses native JUCE readers; FFmpeg is not a runtime
+dependency. Audio is streamed through bounded read-ahead storage and retained
+sinc resampling with an anti-alias prefilter, not loaded in full for playback.
 
 | Command | Behaviour |
 |---|---|
-| `get 1` / `track 1 deck status` | Cached catalog, requested/applied identity, transport and errors |
+| `get 1` / `track 1 deck status` | Cached catalog, identity, transport, detected grid, sync state and errors |
 | `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
 | `set 1 play true` / `set 1 play false` | Resume / pause, preserving source position |
+| `set 1 sync true` / `set 1 sync false` | Follow global/Link tempo and beat phase / use manual pitch and nudge |
 | `set 1 pitch -1.25` | Vinyl-style speed and pitch, -16 to +16 percent |
 | `set 1 nudge 1` / `set 1 nudge 0` | Temporary speed offset (-1..+1 gives up to ±2%); release to zero |
 | `track 1 deck seek 90` | Seek in original-track seconds, bounded to track duration; retain play state |
 | `track 1 deck cue set` | Store current source position without moving |
 | `track 1 deck cue` | Recall cue and pause |
 
-Pitch and nudge are smoothed; pitch changes pitch as well as speed (no key lock).
+Automatic analysis scans at most the first 60 seconds of the selected file,
+off the render thread, and caches the result while the bank is open. It targets
+steady 60–200 BPM material with at least eight usable transients. Status reports
+`bpm`, `beat_offset` (source seconds modulo a beat), `beat_confidence` (0–1),
+`sync`, `sync_active`, `sync_error`, `playback_speed` and `beat_phase_error`
+(signed beats, wrapped to ±0.5). A long beatless intro, ambiguous rhythm or
+variable-tempo recording may not yield a reliable constant grid. Unreliable
+analysis reports `No reliable beat grid` and leaves playback manual.
+
+Set the target with `tempo 128`; enable Link normally to follow its shared
+timeline instead. Local tempo changes preserve beat continuity. Sync matches
+tempo and gradually corrects beat phase, rather than jumping the source cursor;
+allow a few seconds to settle after starting, seeking or changing tempo.
+Supported target/source tempo ratios are 0.5–2.0, with up to ±8% temporary phase
+correction. Unsupported ratios report an error and leave playback manual.
+This aligns beats, not automatically detected bar/downbeat or musical phrases.
+
+Sync uses vinyl-style speed/pitch changes, **not key lock or time stretching**.
+While sync is active it owns playback speed; stored pitch/nudge controls apply
+when sync is off or unavailable. For manual beatmatching:
+
+```text
+set 1 sync false
+set 1 pitch -1.25
+set 1 nudge 1
+set 1 nudge 0
+```
+
+Manual pitch and nudge are smoothed; pitch changes pitch as well as speed.
 Selections/seek prepare outside rendering; the old track remains usable until an
 audio-side commit. Successful selection fades out, resets cue/position to zero,
 clears nudge and pauses, retaining pitch, mixer, routing and inserts. Newest
@@ -526,8 +559,8 @@ Mute continues transport. Stopping output freezes position without changing the
 deck play flag; pending prepared changes commit when rendering resumes. EOF stops
 at duration without wrapping; Play from ended restarts at cue. Temporary shortages
 fade to silence and hold position until matching data arrives. Status progress is
-capped at 10 Hz. There is no automatic sync, beat detection, time stretching,
-scratching, reverse, looping, waveform UI or crossfader.
+capped at 10 Hz. There is no key lock/time stretching, scratching, reverse,
+looping, waveform UI or crossfader.
 
 Routed generic MIDI input uses the following local deck mapping. Route the device
 channel explicitly with `midi link <channel> <track>`, then open its input port.
@@ -912,10 +945,11 @@ Pure Data/plugdata tracks also use native chunks, embedding the main patch while
 retaining its original location for resolving external files. Abstractions and
 sample files must remain installed separately.
 Decks instead store an explicit `deck` payload with `bank_path`, `bank_id`,
-committed stable `track_id`, `cue` seconds and `pitch`. They do not store a VST3
-chunk for the source; insert chunks are preserved normally. Restore resolves the
-selected ID even if the manifest order changed, prepares at cue paused, and sets
-nudge to zero. Missing banks/IDs or a bank-ID mismatch are reported per track;
+committed stable `track_id`, `cue` seconds, `pitch` and boolean `sync`. They do not
+store a VST3 chunk for the source; insert chunks are preserved normally. Restore
+resolves the selected ID even if the manifest order changed, prepares at cue
+paused, sets nudge to zero and reanalyzes the selected audio. Older deck payloads
+without `sync` default to automatic sync. Missing banks/IDs or a bank-ID mismatch are reported per track;
 unaffected tracks continue restoring. A pending selection is never persisted in
 place of the committed track.
 

@@ -4,7 +4,7 @@ Saved state includes:
   - Per-track: source kind (plugin/wav/deck/vcv/pd), instrument path, name, gain,
     enabled, muted, solo, insert effect paths/names, and opaque native VST3 state
   - Master effects: paths, names, and opaque native VST3 state
-  - Decks: bank locator/ID, committed stable track ID, cue and pitch; no VST chunk
+  - Decks: bank locator/ID, committed stable track ID, cue, pitch and sync; no VST chunk
   - Master gain
   - MIDI channel -> track routing
   - Link BPM and enabled state
@@ -146,6 +146,7 @@ def _snapshot_cached(host: VcpiCore) -> dict:
                 "track_id": status["track_id"],
                 "cue": status["cue"],
                 "pitch": status["pitch"],
+                "sync": status.get("sync", True),
             }
         elif track.source_type != "wav":
             track_entry["native_state"] = _saved_plugin_state(track.plugin)
@@ -276,7 +277,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None, *,
                     track = host.load_deck(
                         idx, deck["bank_path"], track_data.get("name"),
                         bank_id=deck["bank_id"], track_id=deck["track_id"],
-                        cue=deck["cue"], pitch=deck["pitch"])
+                        cue=deck["cue"], pitch=deck["pitch"], sync=deck.get("sync", True))
                 case "wav":
                     track = host.load_wav(idx, plugin_path, track_data.get("name"))
                 case "vcv":

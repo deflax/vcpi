@@ -16,6 +16,7 @@ import concurrent.futures
 import logging
 import math
 import threading
+import time
 
 from core.deps import HAS_LINK, aalink
 
@@ -48,6 +49,9 @@ class LinkSync:
         self._enabled = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
+        self._clock_lock = threading.RLock()
+        self._beat = 0.0
+        self._beat_time = time.monotonic()
 
     def _start_loop_thread(self) -> asyncio.AbstractEventLoop:
         if self._loop is not None and self._loop_thread is not None and self._loop_thread.is_alive():
@@ -101,9 +105,11 @@ class LinkSync:
             return
 
         try:
-            self._link = self._make_link()
-            self._link.enabled = True
-            self._enabled = True
+            link = self._make_link()
+            link.enabled = True
+            with self._clock_lock:
+                self._link = link
+                self._enabled = True
         except Exception:
             self._link = None
             self._enabled = False
@@ -111,10 +117,12 @@ class LinkSync:
             raise
 
     def disable(self):
-        if self._link:
-            self._link.enabled = False
-            self._link = None
-        self._enabled = False
+        with self._clock_lock:
+            if self._link is not None:
+                self._bpm, self._beat, self._beat_time = self.timeline()
+                self._link.enabled = False
+                self._link = None
+            self._enabled = False
         self._stop_loop_thread()
 
     @property
@@ -123,18 +131,44 @@ class LinkSync:
 
     @property
     def bpm(self) -> float:
-        return self._link.tempo if self._link else self._bpm
+        with self._clock_lock:
+            return self._link.tempo if self._link is not None else self._bpm
 
     @bpm.setter
     def bpm(self, value: float):
         value = validate_bpm(value)
-        self._bpm = value
-        if self._link:
-            self._link.tempo = value
+        with self._clock_lock:
+            _, beat, now = self.timeline()
+            if self._link is not None:
+                self._link.tempo = value
+            self._beat, self._beat_time = beat, now
+            self._bpm = value
 
     @property
     def num_peers(self) -> int:
         return self._link.num_peers if self._link else 0
+
+    def timeline(self) -> tuple[float, float, float]:
+        """Sample shared BPM, beat and local monotonic time without waiting.
+
+        Local tempo changes retain phase. Disabling Link continues from its
+        last beat and tempo; no common epoch with the native clock is assumed.
+        """
+        with self._clock_lock:
+            now = time.monotonic()
+            if self._link is not None:
+                bpm = validate_bpm(self._link.tempo)
+                beat = float(self._link.beat)
+                if not math.isfinite(beat):
+                    raise ValueError("Link beat must be finite")
+            else:
+                bpm = self._bpm
+                beat = self._beat + (now - self._beat_time) * bpm / 60.0
+            return bpm, beat, now
+
+    @property
+    def beat(self) -> float:
+        return self.timeline()[1]
 
     # -- beat-grid sync (thread-safe) ----------------------------------------
 

@@ -906,6 +906,11 @@ class RemoteAudioEngine:
     def _enqueue(self, kind, index, payload, generation=None):
         self._check_owner()
         with self._input_lock:
+            timing = kind == "deck" and payload[0] in {"sync_tempo", "sync_beat"}
+            # Clock refreshes are replaceable. Reserve input capacity for MIDI
+            # and user commands instead of failing the owner on timing backlog.
+            if timing and self._events.qsize() >= self._events.maxsize // 2:
+                return False
             if index is not None and generation is None:
                 track = self.tracks[index]
                 generation = track.generation if track is not None else 0
@@ -914,9 +919,12 @@ class RemoteAudioEngine:
             try:
                 self._events.put_nowait(message)
             except queue.Full:
+                if timing:
+                    return False
                 self._fail("audio input queue overflow; owner stopped instead of dropping MIDI", terminate=True)
                 raise AudioProcessError(self._failure)
             self._last_input = sequence
+            return True
 
     def enqueue_midi(self, track_index, message, generation=None):
         self._enqueue("midi", track_index, message.dict(), generation)
@@ -925,7 +933,7 @@ class RemoteAudioEngine:
         self._enqueue("parameter", track_index, (name, value), generation)
 
     def enqueue_deck_command(self, track_index, action, value=0, generation=None):
-        self._enqueue("deck", track_index, (action, value), generation)
+        return self._enqueue("deck", track_index, (action, value), generation)
 
     def enqueue_track_change(self, track_index, generation=None, **fields):
         self._enqueue("track", track_index, fields, generation)

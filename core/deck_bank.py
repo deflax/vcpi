@@ -20,7 +20,7 @@ def _text(value, label):
     return value
 
 
-def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0):
+def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=True):
     """Resolve ordered assets without opening them; select saved identity exactly."""
     path = Path(bank_path).expanduser().resolve()
     with path.open("rb") as source:
@@ -59,8 +59,11 @@ def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0):
         raise ValueError("deck cue must be finite and nonnegative")
     if not math.isfinite(pitch) or not -16 <= pitch <= 16:
         raise ValueError("deck pitch must be between -16 and 16")
+    if type(sync) is not bool:
+        raise ValueError("deck sync must be a boolean")
     catalog = {"version": 1, "id": identity, "bank_path": str(path),
-               "tracks": tracks, "initial_track": initial, "cue": cue, "pitch": pitch}
+               "tracks": tracks, "initial_track": initial, "cue": cue, "pitch": pitch,
+               "sync": sync}
     encoded = json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
     validate_catalog(encoded)
     return encoded

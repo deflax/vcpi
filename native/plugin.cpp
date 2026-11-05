@@ -478,7 +478,7 @@ PluginMetadata Plugin::metadata() {
     return result;
 }
 std::vector<ParameterSnapshot> Plugin::parameters() {
-    if (deck) return {deckParameter("track_select"), deckParameter("play"), deckParameter("pitch"), deckParameter("nudge")};
+    if (deck) return {deckParameter("track_select"), deckParameter("play"), deckParameter("pitch"), deckParameter("nudge"), deckParameter("sync")};
     ControlOwnership lock(ownership);
     std::vector<ParameterSnapshot> result;
     result.reserve(parameterInfos.size());
@@ -502,7 +502,7 @@ Scalar Plugin::parameterValue(const ParameterInfo& info) const {
 Scalar Plugin::getParameter(const std::string& key) {
     if (deck) {
         const auto value = deck->parameter(key);
-        return key == "play" ? Scalar(value != 0) : Scalar(value);
+        return key == "play" || key == "sync" ? Scalar(value != 0) : Scalar(value);
     }
     ControlOwnership lock(ownership);
     return parameterValue(parameter(key));
@@ -514,7 +514,7 @@ Scalar Plugin::setParameter(const std::string& key, const Scalar& value) {
         const auto* boolean = std::get_if<bool>(&value);
         if (!number && !boolean) throw std::invalid_argument("Deck parameters require numeric or boolean values");
         const auto result = deck->setParameter(key, number ? *number : (*boolean ? 1.0 : 0.0));
-        return key == "play" ? Scalar(result != 0) : Scalar(result);
+        return key == "play" || key == "sync" ? Scalar(result != 0) : Scalar(result);
     }
     ControlOwnership lock(ownership);
     auto& info = parameter(key);
@@ -747,7 +747,7 @@ ParameterSnapshot Plugin::deckParameter(const std::string& key) const {
         result.low = 1;
         result.high = deck->trackCount();
         result.discrete = true;
-    } else if (key == "play") {
+    } else if (key == "play" || key == "sync") {
         result.kind = "bool";
         result.boolean = result.discrete = true;
         result.value = result.rawValue != 0;

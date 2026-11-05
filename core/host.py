@@ -7,6 +7,7 @@ import importlib
 import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +44,8 @@ class VcpiCore:
         self._shutdown = False
         self._note_lock = threading.Lock()
         self._note_timers: dict[threading.Timer, tuple[int, object, int]] = {}
+        self._deck_clock_stop = threading.Event()
+        self._deck_clock_thread: threading.Thread | None = None
         self.engine = RemoteAudioEngine(sample_rate, buffer_size)
         try:
             self.link = LinkSync()
@@ -50,10 +53,49 @@ class VcpiCore:
             self.engine.add_state_listener(self.midimix.refresh_leds)
             sequencer_module = importlib.import_module("core.sequencer")
             self.sequencer = sequencer_module.Sequencer(self)
+            self._deck_clock_thread = threading.Thread(
+                target=self._run_deck_clock, name="vcpi-deck-clock", daemon=True)
+            self._deck_clock_thread.start()
         except BaseException:
             self._shutdown = True
             self._close_resources()
             raise
+
+    def _feed_deck_clock(self):
+        decks = [(index, track.generation)
+                 for index, track in enumerate(self.engine.tracks)
+                 if track is not None and track.source_type == "deck"]
+        if not decks:
+            return
+        bpm, beat, sampled_at = self.link.timeline()
+        for index, generation in decks:
+            if self._deck_clock_stop.is_set():
+                return
+            accepted = self.engine.enqueue_deck_command(
+                index, "sync_tempo", bpm, generation=generation)
+            if accepted is False:
+                continue
+            current_beat = beat + (time.monotonic() - sampled_at) * bpm / 60.0
+            self.engine.enqueue_deck_command(
+                index, "sync_beat", current_beat, generation=generation)
+
+    def _run_deck_clock(self):
+        failed = False
+        while not self._deck_clock_stop.is_set():
+            try:
+                self._feed_deck_clock()
+                failed = False
+            except Exception:
+                if not failed:
+                    logger.warning("[Deck] Timing feed unavailable", exc_info=True)
+                failed = True
+            self._deck_clock_stop.wait(1.0 if failed else 0.1)
+
+    def _stop_deck_clock(self):
+        self._deck_clock_stop.set()
+        thread = self._deck_clock_thread
+        if thread is not None and thread.ident is not None:
+            thread.join(timeout=1.0)
 
     @property
     def channel_map(self) -> dict[int, int]:
@@ -184,14 +226,14 @@ class VcpiCore:
 
     def load_deck(self, track_index: int, bank_path: str,
                   name: Optional[str] = None, *, track_id=None, bank_id=None,
-                  cue=0, pitch=0) -> InstrumentTrack:
+                  cue=0, pitch=0, sync=True) -> InstrumentTrack:
         """Validate a bank on the control side and stage its saved selection."""
         from core.deck_bank import load_bank
 
         if not 0 <= track_index < NUM_TRACKS:
             raise ValueError(f"track must be 1-{NUM_TRACKS}")
         catalog = load_bank(bank_path, track_id=track_id, bank_id=bank_id,
-                            cue=cue, pitch=pitch)
+                            cue=cue, pitch=pitch, sync=sync)
         self._clear_deck_holds(track_index=track_index)
         self.engine.request("load_deck", track_index=track_index, catalog=catalog, name=name)
         return self._loaded_track(track_index)
@@ -404,7 +446,7 @@ class VcpiCore:
 
     def _close_resources(self):
         """Try every cleanup even when another subsystem has failed."""
-        actions = [self._cancel_note_timers]
+        actions = [self._stop_deck_clock, self._cancel_note_timers]
         sequencer = getattr(self, "sequencer", None)
         if sequencer is not None:
             actions.append(sequencer.stop)

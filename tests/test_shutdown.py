@@ -112,6 +112,7 @@ class HostShutdownTests(unittest.TestCase):
         ))
         self.assertFalse(self.sequence_thread.is_alive())
         self.assertFalse(self.link_thread.is_alive())
+        self.assertFalse(host._deck_clock_thread.is_alive())
         self.assertEqual(host.midi_inputs, [])
         self.assertIsNone(self.midi_input.port_name)
         self.assertIsNone(host.midimix.input_port_name)

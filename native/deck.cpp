@@ -8,7 +8,11 @@
 
 namespace vcpi {
 namespace {
-constexpr double maximumSpeed = 1.16 * 1.02;
+constexpr double minimumSyncSpeed = 0.5, maximumSyncSpeed = 2.0;
+constexpr double maximumSpeed = maximumSyncSpeed * 1.08;
+double monotonicSeconds() noexcept {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 double number(const juce::var& object, const char* key, double fallback) {
     return object.hasProperty(key) ? static_cast<double>(object[key]) : fallback;
 }
@@ -48,6 +52,11 @@ Deck::Deck(const std::string& catalog, double rate)
     appliedTrack.store(requested.track);
     pitchTarget.store(initialPitch);
     pitch = initialPitch;
+    syncEnabled.store(number(parsed, "sync", 1) != 0);
+    formats.registerFormat(new juce::WavAudioFormat(), true);
+    formats.registerFormat(new juce::AiffAudioFormat(), false);
+    formats.registerFormat(new juce::MP3AudioFormat(), false);
+    formats.registerFormat(new juce::FlacAudioFormat(), false);
     // Nothing is published and no thread exists until the first reader and its
     // bounded read-ahead have succeeded. A throwing constructor cannot leak a worker.
     prepare(streams[0], requested);
@@ -57,6 +66,7 @@ Deck::Deck(const std::string& catalog, double rate)
     positionSeconds.store(cursor / streams[0].rate);
     durationSeconds.store(static_cast<double>(streams[0].length) / streams[0].rate);
     ended.store(cursor >= streams[0].length);
+    publishGrid(streams[0]);
     worker = std::thread([this] { work(); });
 }
 Deck::~Deck() {
@@ -106,7 +116,7 @@ bool Deck::fill(Stream& stream) {
     if (end > begin) {
         const auto offset = static_cast<int>(begin - stream.nextSource);
         if (!stream.reader->read(&decode, offset, static_cast<int>(end - begin), begin, true, true))
-            throw std::runtime_error("Failed reading deck WAV");
+            throw std::runtime_error("Failed reading deck audio");
         if (stream.reader->numChannels == 1)
             decode.copyFrom(1, offset, decode, 0, offset, static_cast<int>(end - begin));
     }
@@ -129,30 +139,147 @@ bool Deck::fill(Stream& stream) {
     stream.written.store(next, std::memory_order_release);
     return true;
 }
+bool Deck::analyze(Stream& stream, BeatGrid& grid) {
+    // Bounded 60-second onset-envelope scan; only the preparation thread touches
+    // the per-catalog cache. Published streams carry an immutable grid copy.
+    constexpr double envelopeRate = 200.0;
+    const int hop = std::max(1, static_cast<int>(std::lround(stream.rate / envelopeRate)));
+    const double step = hop / stream.rate;
+    const auto length = std::min(stream.length, static_cast<juce::int64>(stream.rate * 60));
+    std::vector<double> envelope(static_cast<std::size_t>((length + hop - 1) / hop), 0);
+    juce::AudioBuffer<float> audio(2, decodeFrames);
+    for (juce::int64 start = 0; start < length; start += decodeFrames) {
+        if (cancelled(stream.request.id)) return false;
+        const auto count = static_cast<int>(std::min<juce::int64>(decodeFrames, length - start));
+        audio.clear();
+        if (!stream.reader->read(&audio, 0, count, start, true, true))
+            throw std::runtime_error("Failed reading deck beat analysis");
+        for (int frame = 0; frame < count; ++frame) {
+            const double a = audio.getSample(0, frame), b = audio.getSample(1, frame);
+            envelope[static_cast<std::size_t>((start + frame) / hop)] += a * a + b * b;
+        }
+        // Selection analysis must not starve the still-playing old stream.
+        for (auto& other : streams) {
+            if (&other == &stream || other.state.load(std::memory_order_acquire) != active) continue;
+            try { fill(other); }
+            catch (const std::exception& error) {
+                other.failed.store(true, std::memory_order_release);
+                setError(other.request.id, error.what());
+            }
+        }
+    }
+    BeatGrid result;
+    result.analyzed = true;
+    double peak = 0, previous = 0;
+    for (auto& energy : envelope) {
+        const auto level = std::sqrt(energy / hop);
+        energy = std::max(0.0, level - previous);
+        previous = level;
+        peak = std::max(peak, energy);
+    }
+    if (peak < 0.0001) { grid = result; return true; }
+    // Pick the first transient edge, not the decaying waveform's individual
+    // cycles. Local contrast rejects sustained tones and unstructured noise.
+    std::vector<double> onsets;
+    for (std::size_t i = 0; i < envelope.size(); ++i) {
+        if ((i & 1023) == 0 && cancelled(stream.request.id)) return false;
+        double background = 0;
+        const auto begin = i > 40 ? i - 40 : 0;
+        for (auto j = begin; j < i; ++j) background += envelope[j];
+        background /= std::max<std::size_t>(1, i - begin);
+        if (envelope[i] < peak * 0.12 || envelope[i] < background * 3 ||
+            (i > 0 && envelope[i] < envelope[i - 1]) ||
+            (i + 1 < envelope.size() && envelope[i] < envelope[i + 1])) continue;
+        const double time = i * step;
+        if (onsets.empty() || time - onsets.back() >= 0.18) onsets.push_back(time);
+    }
+    if (onsets.size() < 8) { grid = result; return true; }
+    // Evaluate candidate periods against actual transient pairs, allowing a
+    // missed beat. Strongest fundamental wins over its half-tempo multiple.
+    double bestPeriod = 0, bestScore = 0;
+    for (double period = 60.0 / 200; period <= 60.0 / 60 + step * 0.25; period += step) {
+        if (cancelled(stream.request.id)) return false;
+        double score = 0;
+        for (std::size_t i = 1; i < onsets.size(); ++i) {
+            const auto distance = (onsets[i] - onsets[i - 1]) / period;
+            const auto beats = std::round(distance);
+            if (beats < 1 || beats > 4) continue;
+            const auto error = std::abs(distance - beats) * period;
+            score += std::max(0.0, 1.0 - error / (2.5 * step)) / beats;
+        }
+        score /= onsets.size() - 1;
+        if (score > bestScore) { bestScore = score; bestPeriod = period; }
+    }
+    if (bestScore < 0.65) { grid = result; return true; }
+    double intervalSum = 0, beatSum = 0;
+    for (std::size_t i = 1; i < onsets.size(); ++i) {
+        const auto interval = onsets[i] - onsets[i - 1];
+        const auto beats = std::round(interval / bestPeriod);
+        if (beats >= 1 && beats <= 4 && std::abs(interval - beats * bestPeriod) < 2.5 * step) {
+            intervalSum += interval;
+            beatSum += beats;
+        }
+    }
+    bestPeriod = intervalSum / beatSum;
+    // Fit the grid over the whole scan, eliminating hop-size tempo drift.
+    double sumX = 0, sumY = 0, sumXX = 0, sumXY = 0, count = 0;
+    for (const auto time : onsets) {
+        const auto beat = std::round((time - onsets.front()) / bestPeriod);
+        if (std::abs(time - onsets.front() - beat * bestPeriod) > bestPeriod * 0.12) continue;
+        sumX += beat; sumY += time; sumXX += beat * beat; sumXY += beat * time; ++count;
+    }
+    const auto denominator = count * sumXX - sumX * sumX;
+    if (count < 8 || count < onsets.size() * 0.65 || denominator <= 0) { grid = result; return true; }
+    const auto period = (count * sumXY - sumX * sumY) / denominator;
+    const auto offset = (sumY - period * sumX) / count;
+    if (period < 60.0 / 201 || period > 60.0 / 59) { grid = result; return true; }
+    std::size_t matched = 0;
+    for (const auto time : onsets)
+        if (std::abs(std::remainder(time - offset, period)) < std::max(0.015, period * 0.06)) ++matched;
+    const double confidence = static_cast<double>(matched) / onsets.size();
+    if (confidence >= 0.75) {
+        result.bpm = 60 / period;
+        result.offset = std::fmod(std::fmod(offset, period) + period, period);
+        result.confidence = confidence * bestScore;
+    }
+    if (cancelled(stream.request.id)) return false;
+    grid = result;
+    return true;
+}
+void Deck::publishGrid(const Stream& stream) noexcept {
+    detectedBpm.store(stream.grid.bpm, std::memory_order_relaxed);
+    detectedOffset.store(stream.grid.offset, std::memory_order_relaxed);
+    detectedConfidence.store(stream.grid.confidence, std::memory_order_relaxed);
+    syncActive.store(false, std::memory_order_relaxed);
+    beatPhaseError.store(0, std::memory_order_relaxed);
+}
 bool Deck::prepare(Stream& stream, const Request& wanted) {
     stream.request = wanted;
     stream.failed.store(false);
     stream.read.store(0);
     stream.written.store(0);
     const juce::File file{juce::String(tracks[static_cast<std::size_t>(wanted.track - 1)].path)};
-    if (!file.hasFileExtension("wav;wave")) throw std::invalid_argument("Deck supports WAV files only");
+    if (!file.hasFileExtension("wav;wave;aif;aiff;aifc;mp3;flac"))
+        throw std::invalid_argument("Deck supports AIFF, WAV, MP3 and FLAC files");
     if (!std::filesystem::is_regular_file(file.getFullPathName().toStdString()))
-        throw std::invalid_argument("Deck WAV must be a regular file");
-    juce::WavAudioFormat format;
-    stream.reader.reset(format.createReaderFor(file.createInputStream().release(), true));
-    if (!stream.reader) throw std::runtime_error("Unable to decode deck WAV: " + file.getFullPathName().toStdString());
+        throw std::invalid_argument("Deck audio must be a regular file");
+    stream.reader.reset(formats.createReaderFor(file));
+    if (!stream.reader) throw std::runtime_error("Unable to decode deck audio: " + file.getFullPathName().toStdString());
     if (stream.reader->numChannels < 1 || stream.reader->numChannels > 2)
-        throw std::invalid_argument("Deck WAV must be mono or stereo");
+        throw std::invalid_argument("Deck audio must be mono or stereo");
     stream.rate = stream.reader->sampleRate;
     stream.length = stream.reader->lengthInSamples;
     if (!std::isfinite(stream.rate) || stream.rate < 8000 || stream.rate > 768000 || stream.length <= 0)
-        throw std::invalid_argument("Invalid deck WAV rate or empty audio");
+        throw std::invalid_argument("Invalid deck audio rate or empty audio");
+    auto& grid = tracks[static_cast<std::size_t>(wanted.track - 1)].grid;
+    if (!grid.analyzed && !analyze(stream, grid)) return false;
+    stream.grid = grid;
     stream.target = std::clamp(wanted.seconds * stream.rate, 0.0, static_cast<double>(stream.length));
     const auto targetFrame = static_cast<juce::int64>(std::floor(stream.target));
     stream.nextSource = targetFrame - history / 2 - preRoll;
     stream.discard = preRoll;
     // WindowedSincInterpolator has a fixed source-rate cutoff. A retained
-    // Butterworth prefilter supplies anti-aliasing even at maximum pitch+nudge.
+    // Butterworth prefilter supplies anti-aliasing at every supported sync speed.
     // It is deliberately conservative, independent of live speed, and runs on
     // decoded source samples on the worker, not on the real-time thread.
     const auto cutoff = std::min(stream.rate * 0.45, outputRate * 0.40 / maximumSpeed);
@@ -263,6 +390,7 @@ void Deck::commit(int index) noexcept {
     appliedTrack.store(stream.request.track, std::memory_order_release);
     durationSeconds.store(static_cast<double>(stream.length) / stream.rate, std::memory_order_release);
     positionSeconds.store(cursor / stream.rate, std::memory_order_release);
+    publishGrid(stream);
     finishedRequest.store(stream.request.id, std::memory_order_release);
     stream.state.store(active, std::memory_order_release);
     lastLeft = lastRight = 0;
@@ -276,13 +404,39 @@ void Deck::render(float* left, float* right, int frames) noexcept {
         if (cancelled(streams[index].request.id)) streams[index].state.store(retired, std::memory_order_release);
         else { retirePending(); pending = index; }
     }
+    const auto now = monotonicSeconds();
+    // Sample-time continuity supports both hardware callbacks and offline
+    // rendering. Re-anchor after a stopped device; periodic clock commands
+    // re-project their reception time, without assuming Python's clock epoch.
+    if (clockReset || nextClockTime == 0 || now > nextClockTime + 0.1) nextClockTime = now;
+    clockReset = false;
+    const auto tempo = targetTempo.load(std::memory_order_relaxed);
+    const auto beatStep = tempo / (60 * outputRate);
+    double globalBeat = clockAnchorBeat + (nextClockTime - clockAnchorTime) * tempo / 60;
+    nextClockTime += frames / outputRate;
+    const bool clockValid = clockReceived.load(std::memory_order_relaxed) && tempo > 0;
+    const bool requestedSync = syncEnabled.load(std::memory_order_relaxed);
+    bool activeSync = false;
+    double speed = 1, phaseError = 0;
     for (int frame = 0; frame < frames; ++frame) {
         if (pending >= 0 && cancelled(streams[pending].request.id)) retirePending();
         if (pending >= 0 && gain <= 0) commit(pending);
         auto& stream = streams[current];
         pitch += (pitchTarget.load(std::memory_order_relaxed) - pitch) * pitchStep;
         nudge += (nudgeTarget.load(std::memory_order_relaxed) - nudge) * nudgeStep;
-        const auto ratio = stream.rate / outputRate * (1.0 + pitch / 100.0) * (1.0 + 0.02 * nudge);
+        speed = (1.0 + pitch / 100.0) * (1.0 + 0.02 * nudge);
+        const auto baseSpeed = stream.grid.bpm > 0 ? tempo / stream.grid.bpm : 0;
+        activeSync = requestedSync && clockValid && stream.grid.bpm > 0 &&
+                     baseSpeed >= minimumSyncSpeed && baseSpeed <= maximumSyncSpeed;
+        phaseError = 0;
+        if (activeSync) {
+            const auto sourceBeat = (cursor / stream.rate - stream.grid.offset) * stream.grid.bpm / 60;
+            phaseError = std::remainder(globalBeat - sourceBeat, 1.0);
+            const auto corrected = baseSpeed * (1 + std::clamp(phaseError * 1.5, -0.08, 0.08));
+            syncSpeed += (corrected - syncSpeed) * pitchStep;
+            speed = syncSpeed;
+        } else syncSpeed = speed;
+        const auto ratio = stream.rate / outputRate * speed;
         const auto consumed = stream.read.load(std::memory_order_relaxed);
         const auto available = stream.written.load(std::memory_order_acquire) - consumed;
         const bool wantsAudio = playing.load(std::memory_order_relaxed) && cursor < stream.length;
@@ -306,14 +460,19 @@ void Deck::render(float* left, float* right, int frames) noexcept {
         }
         left[frame] = lastLeft * static_cast<float>(gain);
         right[frame] = lastRight * static_cast<float>(gain);
+        globalBeat += beatStep;
     }
     positionSeconds.store(cursor / streams[current].rate, std::memory_order_release);
+    syncActive.store(activeSync, std::memory_order_release);
+    playbackSpeed.store(speed, std::memory_order_release);
+    beatPhaseError.store(phaseError, std::memory_order_release);
 }
 double Deck::parameter(const std::string& key) const {
     if (key == "track_select") return requestedTrack.load(std::memory_order_acquire);
     if (key == "play") return playing.load(std::memory_order_acquire) ? 1.0 : 0.0;
     if (key == "pitch") return pitchTarget.load(std::memory_order_acquire);
     if (key == "nudge") return nudgeTarget.load(std::memory_order_acquire);
+    if (key == "sync") return syncEnabled.load(std::memory_order_acquire) ? 1.0 : 0.0;
     throw std::invalid_argument("Unknown deck parameter: " + key);
 }
 double Deck::setParameter(const std::string& key, double value) {
@@ -332,12 +491,27 @@ double Deck::setParameter(const std::string& key, double value) {
     } else if (key == "nudge") {
         if (value < -1 || value > 1) throw std::invalid_argument("Deck nudge must be in [-1, 1]");
         nudgeTarget.store(value, std::memory_order_release);
+    } else if (key == "sync") {
+        syncEnabled.store(value != 0, std::memory_order_release);
+        if (value == 0) syncActive.store(false, std::memory_order_release);
     } else throw std::invalid_argument("Unknown deck parameter: " + key);
     return value;
 }
 void Deck::command(const std::string& action, double value) {
     if (!std::isfinite(value)) throw std::invalid_argument("Deck command value must be finite");
-    if (action == "cue_set") cueSeconds.store(positionSeconds.load(std::memory_order_acquire), std::memory_order_release);
+    if (action == "sync_tempo") {
+        if (value <= 0) throw std::invalid_argument("Deck sync_tempo must be positive");
+        const auto now = monotonicSeconds();
+        if (clockReceived.load(std::memory_order_relaxed))
+            clockAnchorBeat += (now - clockAnchorTime) * targetTempo.load(std::memory_order_relaxed) / 60;
+        clockAnchorTime = now;
+        targetTempo.store(value, std::memory_order_release);
+    } else if (action == "sync_beat") {
+        clockAnchorBeat = value;
+        clockAnchorTime = monotonicSeconds();
+        clockReset = true;
+        clockReceived.store(true, std::memory_order_release);
+    } else if (action == "cue_set") cueSeconds.store(positionSeconds.load(std::memory_order_acquire), std::memory_order_release);
     else if (action == "play_toggle") {
         // Controls are serialized by the native owner; CAS also makes rapid
         // direct callers lossless without a cached play-state round trip.
@@ -371,6 +545,13 @@ DeckStatus Deck::status() const {
         result.cue = cueSeconds.load(std::memory_order_acquire);
         result.pitch = pitchTarget.load(std::memory_order_acquire);
         result.nudge = nudgeTarget.load(std::memory_order_acquire);
+        result.bpm = detectedBpm.load(std::memory_order_acquire);
+        result.beatOffset = detectedOffset.load(std::memory_order_acquire);
+        result.beatConfidence = detectedConfidence.load(std::memory_order_acquire);
+        result.sync = syncEnabled.load(std::memory_order_acquire);
+        result.syncActive = syncActive.load(std::memory_order_acquire);
+        result.playbackSpeed = playbackSpeed.load(std::memory_order_acquire);
+        result.beatPhaseError = beatPhaseError.load(std::memory_order_acquire);
         {
             std::lock_guard<std::mutex> lock(controlMutex);
             result.requestedTrackSelect = requestedTrack.load(std::memory_order_acquire);
@@ -387,6 +568,13 @@ DeckStatus Deck::status() const {
     result.ready = !result.buffering;
     result.state = result.loading ? "loading" : result.buffering ? "buffering" : result.ended ? "ended" : "ready";
     { std::lock_guard<std::mutex> lock(errorMutex); result.error = lastError; }
+    const auto tempo = targetTempo.load(std::memory_order_acquire);
+    if (result.sync) {
+        if (result.bpm <= 0) result.syncError = "No reliable beat grid";
+        else if (!clockReceived.load(std::memory_order_acquire) || tempo <= 0) result.syncError = "Waiting for global clock";
+        else if (tempo / result.bpm < minimumSyncSpeed || tempo / result.bpm > maximumSyncSpeed)
+            result.syncError = "Unsupported sync speed (supported ratio 0.5 to 2.0)";
+    }
     return result;
 }
 } // namespace vcpi
