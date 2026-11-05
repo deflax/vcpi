@@ -868,10 +868,6 @@ class HostCLI(cmd.Cmd):
         """
         try:
             idx, fx_idx, plugin, remaining = self._parameter_target(shlex.split(arg))
-            if idx is not None and fx_idx is None and not remaining:
-                track = self.host.engine.tracks[idx]
-                if track.source_type == "deck":
-                    self._print_deck_status(track)
             groups = {
                 "controls": "Controls:",
                 "settings": "Plugin settings:",

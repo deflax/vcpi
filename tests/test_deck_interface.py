@@ -8,10 +8,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
+from rich.console import Console
+
 from controllers.akai_midimix import KNOB_CCS, MUTE_NOTES, MidiMixController
 from controllers.midi_input import MidiInputController
 from core.audio_state import ParameterSnapshot, PluginSnapshot, apply_deck_status
 from core.cli import HostCLI
+from core.client_display import display_response
 from core.completion import complete_line
 from core.deps import HAS_MIDO
 from core.models import InstrumentTrack
@@ -78,6 +81,27 @@ class DeckCLITests(unittest.TestCase):
         self.engine.request.assert_not_called()
         self.engine.deck_command.assert_not_called()
         self.host.load_deck.assert_not_called()
+
+    def test_get_lists_only_parameters_while_status_retains_playlist(self):
+        self.cli.onecmd("get 1")
+        lines = self.output.getvalue().splitlines()
+        names = [line.strip().split(" = ", 1)[0] for line in lines]
+        self.assertEqual(names, list(self.track.plugin.parameters))
+        rendered = io.StringIO()
+        display_response(Console(file=rendered, width=140, color_system=None), "get 1", lines)
+        text = rendered.getvalue()
+        self.assertIn("track_select", text)
+        self.assertIn("seek", text)
+        self.assertIn("12.5 s", text)
+        self.assertNotIn("Opening title", text)
+        self.assertNotIn("/music/", text)
+
+        self.output.seek(0)
+        self.output.truncate(0)
+        self.cli.onecmd("track 1 deck status")
+        status = self.output.getvalue()
+        self.assertIn("Opening title", status)
+        self.assertIn("/music/256.wav", status)
 
     def test_sync_false_is_a_typed_parameter(self):
         self.cli.onecmd("set 1 sync false")

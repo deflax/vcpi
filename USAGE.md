@@ -518,7 +518,8 @@ sinc resampling with an anti-alias prefilter, not loaded in full for playback.
 
 | Command | Behaviour |
 |---|---|
-| `get 1` / `track 1 deck status` | Cached catalog, identity, transport, detected grid, sync state and errors |
+| `get 1` | Deck parameters and their values, units and ranges, available for `set` |
+| `track 1 deck status` | Cached playlist, identity, transport, detected grid, sync state and errors |
 | `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
 | `track 1 deck <audio-file> [--name <label>]` | Append a song, or create a paused one-song deck |
 | `track 1 deck remove 2` | Remove playlist entry 2; final-entry removal requires `track 1 clear` |
@@ -538,9 +539,10 @@ nudge spans -1..+1. Playlist edits and committed song changes refresh those
 ranges. Nudge affects manual playback when sync is off or unavailable; return it
 to zero after nudging. Remaining controls are `play`, `pitch` and `sync`.
 
-`get <track>` includes deck status and the indexed playlist before the parameter
-listing. Empty `error` or `sync_error` fields are normal when no error is present;
-the client preserves these blank values when displaying the response.
+`get <track>` lists only the deck's get/set parameters, just like other sources;
+`get <track> <parameter>` reads one parameter. Use `track <track> deck status`
+for transport diagnostics and the indexed playlist. Empty `error` or `sync_error`
+fields in status are normal when no error is present.
 
 Automatic analysis scans at most the first 60 seconds of the selected file,
 off the render thread, and caches the result while the playlist is open. It targets
