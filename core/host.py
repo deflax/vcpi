@@ -228,22 +228,42 @@ class VcpiCore:
                   name: Optional[str] = None) -> InstrumentTrack:
         """Create a paused playlist or append without replacing its audio owner."""
         from uuid import uuid4
-        from core.deck_bank import audio_entry, make_catalog
+        from core.deck_bank import AUDIO_SUFFIXES, audio_entry, make_catalog
 
         if not 0 <= track_index < NUM_TRACKS:
             raise ValueError(f"track must be 1-{NUM_TRACKS}")
-        entry = audio_entry(audio_path)
+        path = Path(audio_path).expanduser().resolve()
+        if path.is_dir():
+            paths = sorted(
+                (child for child in path.iterdir()
+                 if child.suffix.lower() in AUDIO_SUFFIXES and child.is_file()),
+                key=lambda child: child.name,
+            )
+            if not paths:
+                raise ValueError(f"no supported deck audio files in directory: {path}")
+        else:
+            paths = [path]
         track = self.engine.tracks[track_index]
-        if track is not None and track.source_type == "deck":
-            catalog = make_catalog(track.deck["bank_id"], [*track.deck["tracks"], entry],
+        existing = track.deck["tracks"] if track is not None and track.source_type == "deck" else []
+        seen = {entry["path"] for entry in existing}
+        entries = []
+        for candidate in paths:
+            resolved = str(candidate.resolve())
+            if resolved not in seen:
+                entries.append(audio_entry(candidate))
+                seen.add(resolved)
+        if existing:
+            if not entries and name is None:
+                return self._loaded_track(track_index)
+            catalog = make_catalog(track.deck["bank_id"], [*existing, *entries],
                                    bank_path=track.deck["bank_path"])
             self.engine.request("update_deck_catalog", track_index=track_index,
                                 catalog=catalog, name=name)
         else:
-            catalog = make_catalog(uuid4().hex, [entry])
+            catalog = make_catalog(uuid4().hex, entries)
             self._clear_deck_holds(track_index=track_index)
             self.engine.request("load_deck", track_index=track_index, catalog=catalog,
-                                name=name if name is not None else entry["title"])
+                                name=name if name is not None else entries[0]["title"])
         return self._loaded_track(track_index)
 
     def remove_deck_entry(self, track_index: int, ordinal: int) -> InstrumentTrack:

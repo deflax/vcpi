@@ -113,9 +113,11 @@ song identity, cue, pitch and sync mode and restore paused. See [session command
 for save/restore behavior and legacy session compatibility.
 
 Native decks stream mono/stereo AIFF, WAV, MP3 and FLAC tracks from session-owned
-playlists. Load an audio file with `track 1 deck song.wav`; repeat with another
-file to append, or use `track 1 deck remove <index>` to remove a song. Queen Mary
-DSP analyzes the whole selected file for tempo and a stable beat grid; decks
+playlists. Load an audio file with `track 1 deck song.wav`, or a directory with
+`track 1 deck "/music/Live Set"` to add its supported audio files in filename
+order without scanning subdirectories. Repeat either command to append new files;
+already-listed resolved paths are skipped. Use `track 1 deck remove <index>` to
+remove a song. Queen Mary DSP analyzes the whole selected file for tempo and a stable beat grid; decks
 follow global tempo and beat phase by default, or Ableton Link when enabled.
 Each has play/pause,
 vinyl-style speed/pitch, momentary nudge, seek and one cue point. The first three

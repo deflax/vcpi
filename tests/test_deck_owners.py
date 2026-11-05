@@ -17,6 +17,7 @@ from core.audio_process import RemoteAudioEngine
 from core.audio_state import PluginSnapshot
 from core.deck_bank import load_bank, make_catalog
 from core.engine import AudioEngine
+from core.host import VcpiCore
 from core.models import InstrumentTrack, NUM_TRACKS
 from core.track_process import TrackWorker
 
@@ -75,6 +76,52 @@ class DeckOwnerTests(unittest.TestCase):
                 return dict(worker.track.deck)
             time.sleep(0.005)
         self.fail(f"deck status deadline expired: {worker.track.deck}")
+
+    def test_directory_playlist_is_shallow_ordered_and_deduplicated(self):
+        engine = self.remote()
+        host = VcpiCore.__new__(VcpiCore)
+        host.engine = engine
+        host.midi_inputs = []
+        host.midimix = MidiMixController(engine)
+        self.addCleanup(host.midimix.close)
+        folder = self.root / "playlist"
+        folder.mkdir()
+        for filename in ("b.WAV", "a.wav"):
+            (folder / filename).write_bytes(self.wav.read_bytes())
+        (folder / "alias.wav").symlink_to(folder / "a.wav")
+        (folder / "notes.txt").write_text("not audio")
+        nested = folder / "nested.wav"
+        nested.mkdir()
+        (nested / "hidden.wav").write_bytes(self.wav.read_bytes())
+
+        track = host.load_deck(0, str(folder), "Directory deck")
+        original = [dict(entry) for entry in track.deck["tracks"]]
+        self.assertEqual([entry["path"] for entry in original],
+                         [str(folder / "a.wav"), str(folder / "b.WAV")])
+        self.assertFalse(track.deck["play"])
+        selected = track.deck["track_id"]
+        owner = (track.worker_pid, track.generation)
+        host.load_deck(0, str(folder / "a.wav"))
+        host.load_deck(0, str(folder))
+        self.assertEqual(engine.tracks[0].deck["tracks"], original)
+        engine.set_parameter(0, "play", True)
+        (folder / "c.wav").write_bytes(self.wav.read_bytes())
+        updated = host.load_deck(0, str(folder))
+        self.assertEqual(updated.deck["tracks"][:2], original)
+        self.assertEqual([entry["path"] for entry in updated.deck["tracks"]],
+                         [str(folder / name) for name in ("a.wav", "b.WAV", "c.wav")])
+        self.assertEqual(updated.deck["track_id"], selected)
+        self.assertEqual((updated.worker_pid, updated.generation), owner)
+        self.assertTrue(updated.deck["play"])
+        self.assertEqual(updated.name, "Directory deck")
+        renamed = host.load_deck(0, str(folder), "Renamed")
+        self.assertEqual(renamed.name, "Renamed")
+        self.assertEqual(renamed.deck["tracks"], updated.deck["tracks"])
+        empty = self.root / "empty"
+        empty.mkdir()
+        (empty / "notes.txt").write_text("no supported files")
+        with self.assertRaisesRegex(ValueError, "no supported deck audio"):
+            host.load_deck(0, str(empty))
 
     def test_restore_prepares_saved_id_paused_without_rendering(self):
         worker, _ = self.worker(track_id="2", cue=0.25, pitch=-1.25)

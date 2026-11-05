@@ -11,6 +11,7 @@ from uuid import uuid4
 # Catalogs use the existing multipart pipe framing, never a larger frame limit.
 CATALOG_LIMIT = 512 * 1024
 TEXT_LIMIT = 1024
+AUDIO_SUFFIXES = frozenset({".wav", ".wave", ".aif", ".aiff", ".aifc", ".mp3", ".flac"})
 
 
 def _text(value, label):
@@ -57,7 +58,7 @@ def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=Tr
 def audio_entry(audio_path):
     """Create a stable playlist entry from a supported, existing audio file."""
     path = Path(audio_path).expanduser().resolve()
-    if path.suffix.lower() not in {".wav", ".wave", ".aif", ".aiff", ".aifc", ".mp3", ".flac"}:
+    if path.suffix.lower() not in AUDIO_SUFFIXES:
         raise ValueError("deck audio must be WAV, AIFF, MP3 or FLAC")
     if not path.is_file():
         raise FileNotFoundError(f"deck audio file not found: {path}")

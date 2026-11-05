@@ -360,7 +360,7 @@ hardware or empty plugin/effect lists may also yield no choices.
 |---|---|
 | `track <track> vst <path\|vst_name> [--name <label>]` | Load VST instrument into track |
 | `track <track> wav <pack> <sample> [--name <label>]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into track |
-| `track <track> deck <audio-file> [--name <label>]` | Create a paused streaming deck, or append to its session-owned playlist |
+| `track <track> deck <audio-file\|directory> [--name <label>]` | Create a paused streaming deck, or append a file or directory's audio files to its session-owned playlist |
 | `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `patches/<patch_name>.vcv` |
 | `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `patches/` or an absolute path |
 | `track <track\|master> fx <path\|vst_name> [--name <label>]` | Load effect into track insert chain or master bus |
@@ -495,10 +495,18 @@ set 2 play true
 ```
 
 Each deck owns an ordered playlist saved inside the session; no separate JSON
-bank file is required. The first audio-file command creates a paused deck.
-Repeating it appends another song without replacing the deck, interrupting the
+bank file is required. The first audio-file or directory command creates a paused
+deck. Repeating it appends new songs without replacing the deck, interrupting the
 selected song, or losing mixer settings, routing or inserts. An existing name
 is preserved unless `--name` is supplied.
+
+Use `track 1 deck "/music/Live Set"` to add a directory's supported WAV, AIFF,
+MP3 and FLAC files in filename order. Subdirectories and unsupported files are
+ignored; a directory with no supported audio files reports an error. Paths already
+in the playlist are skipped, including symlinks resolving to the same file.
+Loading the same file or directory again does not duplicate entries; rescanning
+a directory appends only newly discovered paths. Existing song IDs and playlist
+order are retained.
 
 ```text
 track 1 deck status
