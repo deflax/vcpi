@@ -257,12 +257,16 @@ Server/client specific:
 Type `help` for commands grouped by purpose. System-related groups come first:
 save & load sessions; status, signal & logging; and help, exit & shutdown.
 A horizontal separator follows these groups. The overview command, `show`,
-appears next, immediately before instruments & effects; then volume, mute & solo;
+appears next, immediately before instruments & effects; then Mixer;
 audio devices & output; MIDI ports & routing; and sequencing, tempo & Link.
 The separator appears in both plain and interactive output.
-Commands are alphabetical within each group. Use `help <command>` for
-detailed syntax and usage; `help get` and `help set` include parameter-targeting
-syntax and examples.
+Commands follow an explicit order within each group: `save`, `load`; `status`,
+`ps`, `deps`, `debug`; `help`, `about`, `quit`, `shutdown`; `show`; `track`, `get`,
+`set`; `gain`, `solo`, `mute`; `audio`; `midi`, `midimix`, `note`; and `tempo`,
+`ableton`, `seq`. The `exit` alias appears in the description of `quit`, not as a
+separate row; it remains available as a command and completion.
+Use `help <command>` for detailed syntax and usage; `help get` and `help set`
+include parameter-targeting syntax and examples.
 The interactive overview uses one compact table, with a different colour for each
 category's heading and command names; descriptions remain neutral. Descriptions
 wrap to the terminal width; detailed `help <command>` output is unchanged.

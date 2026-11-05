@@ -112,6 +112,8 @@ class HostCLI(cmd.Cmd):
                 summary = "Alias for quit"
             else:
                 summary = self._doc_summary(inspect.getdoc(handler))
+                if command == "quit":
+                    summary += " (alias: exit)"
 
             entries.append((command, summary))
 
@@ -141,7 +143,10 @@ class HostCLI(cmd.Cmd):
                 self._print(f"No help for '{command}'")
             return
 
-        entries = self._command_entries()
+        entries = [
+            (name, summary) for name, summary in self._command_entries()
+            if name != "exit"
+        ]
         if not entries:
             self._print("No commands available.")
             return
@@ -149,16 +154,16 @@ class HostCLI(cmd.Cmd):
         width = max(len(name) for name, _ in entries)
         self._print("Available commands:")
         groups = (
-            ("Save & load sessions", {"save", "load"}),
-            ("Status, signal & logging", {"status", "ps", "deps", "debug"}),
-            ("Help, exit & shutdown", {"help", "about", "quit", "exit", "shutdown"}),
+            ("Save & load sessions", ("save", "load")),
+            ("Status, signal & logging", ("status", "ps", "deps", "debug")),
+            ("Help, exit & shutdown", ("help", "about", "quit", "shutdown")),
             None,
-            ("Overview", {"show"}),
-            ("Instruments & effects", {"track", "get", "set"}),
-            ("Volume, mute & solo", {"gain", "mute", "solo"}),
-            ("Audio devices & output", {"audio"}),
-            ("MIDI ports & routing", {"midi", "midimix", "note"}),
-            ("Sequencing, tempo & Link", {"seq", "tempo", "ableton"}),
+            ("Overview", ("show",)),
+            ("Instruments & effects", ("track", "get", "set")),
+            ("Mixer", ("gain", "solo", "mute")),
+            ("Audio devices & output", ("audio",)),
+            ("MIDI ports & routing", ("midi", "midimix", "note")),
+            ("Sequencing, tempo & Link", ("tempo", "ableton", "seq")),
         )
         remaining = dict(entries)
         for group in groups:
@@ -166,8 +171,7 @@ class HostCLI(cmd.Cmd):
                 self._print("\n" + "-" * 60)
                 continue
             title, commands = group
-            rows = [(name, summary) for name, summary in entries if name in commands]
-            rows.sort(key=lambda row: row[0] != "track")
+            rows = [(name, remaining[name]) for name in commands if name in remaining]
             if not rows:
                 continue
             self._print(f"\n{title}:")
