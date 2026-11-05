@@ -259,10 +259,15 @@ def complete_line(cli: HostCLI, before: str) -> dict:
             return empty
         if mode == "deck":
             if len(args) == 2:
-                return choices(("status", "seek", "cue"))
+                return choices(("status", "seek", "cue", "remove"))
             if args[2:] == ["cue"]:
                 return choices(("set",))
-            if len(args) == 3 and args[2] not in ("status", "seek", "cue"):
+            if args[2:] == ["remove"]:
+                track = cli.host.engine.tracks[int(target) - 1]
+                if track is not None and track.source_type == "deck":
+                    return choices(str(index) for index in range(1, len(track.deck["tracks"]) + 1))
+                return empty
+            if len(args) == 3 and args[2] not in ("status", "seek", "cue", "remove"):
                 return choices(("--name",))
             return empty
         if mode == "vcv":

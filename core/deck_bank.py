@@ -1,4 +1,4 @@
-"""Control-side music-bank validation and bounded resolved catalog transfers."""
+"""Session playlists, legacy bank migration and bounded catalog transfers."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import math
 import pickle
 from pathlib import Path
+from uuid import uuid4
 
 # Catalogs use the existing multipart pipe framing, never a larger frame limit.
 CATALOG_LIMIT = 512 * 1024
@@ -49,11 +50,44 @@ def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=Tr
             asset = path.parent / asset
         title = _text(entry.get("title", identity_track), "track title")
         tracks.append({"id": identity_track, "path": str(asset.resolve()), "title": title})
+    return make_catalog(identity, tracks, bank_path=str(path), track_id=track_id,
+                        cue=cue, pitch=pitch, sync=sync)
+
+
+def audio_entry(audio_path):
+    """Create a stable playlist entry from a supported, existing audio file."""
+    path = Path(audio_path).expanduser().resolve()
+    if path.suffix.lower() not in {".wav", ".wave", ".aif", ".aiff", ".aifc", ".mp3", ".flac"}:
+        raise ValueError("deck audio must be WAV, AIFF, MP3 or FLAC")
+    if not path.is_file():
+        raise FileNotFoundError(f"deck audio file not found: {path}")
+    return {"id": uuid4().hex, "path": str(path), "title": path.stem}
+
+
+def make_catalog(identity, tracks, *, bank_path=None, track_id=None,
+                 cue=0, pitch=0, sync=True):
+    """Validate and encode an inline playlist, optionally restoring its selection."""
+    identity = _text(identity, "playlist ID")
+    if not isinstance(tracks, list) or not tracks:
+        raise ValueError("deck playlist must contain at least one track")
+    entries, seen = [], set()
+    for entry in tracks:
+        if not isinstance(entry, dict):
+            raise ValueError("deck track must be an object")
+        entry_id = _text(entry.get("id"), "track ID")
+        if entry_id in seen:
+            raise ValueError(f"duplicate deck track ID: {entry_id}")
+        seen.add(entry_id)
+        path = Path(_text(entry.get("path"), "track path")).expanduser()
+        if not path.is_absolute():
+            raise ValueError("inline deck track paths must be absolute")
+        entries.append({"id": entry_id, "path": str(path.resolve()),
+                        "title": _text(entry.get("title", entry_id), "track title")})
     initial = 1
     if track_id is not None:
         if track_id not in seen:
             raise ValueError(f"deck track ID not found: {track_id}")
-        initial = next(i for i, track in enumerate(tracks, 1) if track["id"] == track_id)
+        initial = next(i for i, entry in enumerate(entries, 1) if entry["id"] == track_id)
     cue, pitch = float(cue), float(pitch)
     if not math.isfinite(cue) or cue < 0:
         raise ValueError("deck cue must be finite and nonnegative")
@@ -61,12 +95,11 @@ def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=Tr
         raise ValueError("deck pitch must be between -16 and 16")
     if type(sync) is not bool:
         raise ValueError("deck sync must be a boolean")
-    catalog = {"version": 1, "id": identity, "bank_path": str(path),
-               "tracks": tracks, "initial_track": initial, "cue": cue, "pitch": pitch,
+    catalog = {"version": 1, "id": identity,
+               "bank_path": _text(bank_path or f"session:{identity}", "playlist locator"),
+               "tracks": entries, "initial_track": initial, "cue": cue, "pitch": pitch,
                "sync": sync}
-    encoded = json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
-    validate_catalog(encoded)
-    return encoded
+    return validate_catalog(json.dumps(catalog, ensure_ascii=False, separators=(",", ":")))
 
 
 def validate_catalog(catalog):

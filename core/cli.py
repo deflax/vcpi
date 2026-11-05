@@ -41,10 +41,13 @@ _HELP_TOPICS = {
     "track wav": ("Load a WAV sample", "track <1-8> wav <pack> <sample> [--name <label>]",
                   "pack: directory under sampler/samples. sample: filename, optionally without .wav.\n--name: display label; defaults to sample name.",
                   'Quote multiword pack/sample names. Example: track 1 wav "Drum Kit" "Deep Kick" --name Kick. Related: midi link; note.'),
-    "track deck": ("Load or control a deck",
-                   "track <1-8> deck <bank.json> [--name <label>]\ntrack <1-8> deck status\ntrack <1-8> deck seek <seconds>\ntrack <1-8> deck cue [set]",
-                   "bank.json: bank path (quote spaces). --name: optional display label. seconds: absolute source time.",
-                   "New selections load paused at zero. Detected beats follow global/Link tempo and phase by default (vinyl speed/pitch, not key lock). Use set 1 sync false for manual pitch. Related: help track deck status; get; set."),
+    "track deck": ("Edit or control a deck playlist",
+                   "track <1-8> deck <audio-file> [--name <label>]\ntrack <1-8> deck remove <index>\ntrack <1-8> deck status\ntrack <1-8> deck seek <seconds>\ntrack <1-8> deck cue [set]",
+                   "audio-file: WAV, AIFF, MP3 or FLAC path (quote spaces). Creates a paused deck or appends to its playlist. --name: optional display label. seconds: absolute source time.",
+                   "Appending retains playback and effects. Playlists are saved in the session. New selections load paused at zero. Detected beats follow global/Link tempo and phase by default. Use set 1 sync false for manual pitch."),
+    "track deck remove": ("Remove a playlist entry", "track <1-8> deck remove <index>",
+                          "index: 1-based entry shown by deck status.",
+                          "Removing the active entry selects the next entry, or the previous if last, paused at zero. Use track <1-8> clear to remove the final entry."),
     "track deck status": ("Read cached deck transport", "track <1-8> deck status",
                           "track: 1-based loaded deck track.",
                           "Shows selection, transport, detected bpm, beat_offset (seconds), beat_confidence, sync and sync_error. Unreliable beat grids remain unsynced. Reads cached state without waiting for the worker."),
@@ -663,9 +666,9 @@ class HostCLI(cmd.Cmd):
             try:
                 tokens = parts[2:]
                 if not tokens:
-                    raise ValueError("expected bank path, status, seek <seconds>, or cue [set]")
+                    raise ValueError("expected audio path, remove <index>, status, seek <seconds>, or cue [set]")
                 action = tokens[0]
-                if action in ("status", "seek", "cue"):
+                if action in ("status", "seek", "cue", "remove"):
                     track = self.host.engine.tracks[idx]
                     if track is None or track.source_type != "deck":
                         raise ValueError(f"Track {track_num} is not a deck")
@@ -678,8 +681,11 @@ class HostCLI(cmd.Cmd):
                         command = "cue_set" if len(tokens) == 2 else "cue"
                         self.host.engine.deck_command(idx, command)
                         self._print(f"  {command} accepted")
+                    elif action == "remove" and len(tokens) == 2:
+                        track = self.host.remove_deck_entry(idx, int(tokens[1]))
+                        self._print_deck_status(track)
                     else:
-                        raise ValueError("expected status, seek <seconds>, or cue [set]")
+                        raise ValueError("expected status, remove <index>, seek <seconds>, or cue [set]")
                 else:
                     sources, name = self._source_args(tokens, 1)
                     track = self.host.load_deck(
@@ -793,14 +799,15 @@ class HostCLI(cmd.Cmd):
     def _print_deck_status(self, track):
         """Render only the daemon snapshot, never synchronizing with a worker."""
         status = track.deck
-        for key in ("bank_path", "bank_id", "track_id", "track_title",
+        self._print(f"  playlist_id = {status.get('bank_id', '(not cached)')}")
+        for key in ("track_id", "track_title",
                     "requested_track_id", "request_id", "state", "play",
                     "position", "duration", "cue", "pitch", "nudge", "bpm",
                     "beat_offset", "beat_confidence", "sync", "sync_active",
                     "sync_error", "playback_speed", "beat_phase_error", "error"):
             self._print(f"  {key} = {status.get(key, '(not cached)')}")
         for ordinal, entry in enumerate(status.get("tracks", []), 1):
-            self._print(f"  {ordinal}: {entry['id']} — {entry.get('title') or entry['id']}")
+            self._print(f"  {ordinal}: {entry.get('title') or entry['id']} — {entry['path']}")
 
     def _parameter_target(self, parts, *, require_master_index=False):
         """Resolve a cached plugin and leave parameter/value arguments unconsumed."""

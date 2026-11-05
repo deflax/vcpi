@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 from controllers.akai_midimix import KNOB_CCS, MUTE_NOTES, MidiMixController
 from controllers.midi_input import MidiInputController
-from core.audio_state import ParameterSnapshot, PluginSnapshot
+from core.audio_state import ParameterSnapshot, PluginSnapshot, apply_deck_status
 from core.cli import HostCLI
 from core.completion import complete_line
 from core.deps import HAS_MIDO
@@ -21,11 +21,12 @@ from core.session import snapshot
 def deck_track(generation=7):
     plugin = PluginSnapshot(1, name="Deck", parameters={
         "track_select": ParameterSnapshot(kind="int", range=(1, 257)),
+        "seek": ParameterSnapshot(range=(0, 100), units="s"),
+        "nudge": ParameterSnapshot(range=(-1, 1)),
         "play": ParameterSnapshot(kind="bool", is_boolean=True),
         "pitch": ParameterSnapshot(range=(-16, 16), units="%"),
-        "nudge": ParameterSnapshot(range=(-1, 1)),
         "sync": ParameterSnapshot(kind="bool", is_boolean=True, range=(0, 1)),
-    }, values={"track_select": 1, "play": False, "pitch": 0.0, "nudge": 0.0, "sync": True})
+    }, values={"track_select": 1, "seek": 12.5, "play": False, "pitch": 0.0, "nudge": 0.0, "sync": True})
     track = InstrumentTrack("Deck A", "/bank.json", plugin,
                             source_type="deck", generation=generation)
     track.deck = {
@@ -34,7 +35,8 @@ def deck_track(generation=7):
         "request_id": 4, "state": "loading", "play": False,
         "position": 12.5, "duration": 100, "cue": 2.0, "pitch": -1.25,
         "nudge": 0, "sync": False, "error": "",
-        "tracks": [{"id": str(i), "title": f"Title {i}"} for i in range(257)],
+        "tracks": [{"id": str(i), "title": f"Title {i}", "path": f"/music/{i}.wav"}
+                   for i in range(257)],
     }
     return track
 
@@ -63,15 +65,16 @@ class DeckCLITests(unittest.TestCase):
         self.assertIn("track_id = first", text)
         self.assertIn("requested_track_id = second", text)
         self.assertIn("Opening title", text)
-        self.assertIn("257: 256", text)
+        self.assertIn("257: Title 256 — /music/256.wav", text)
         self.assertIn("deck", complete_line(self.cli, "track 1 ")["matches"])
         self.assertEqual(complete_line(self.cli, "track 1 deck ")["matches"],
-                         ["cue", "seek", "status"])
+                         ["cue", "remove", "seek", "status"])
         self.assertEqual(complete_line(self.cli, "track 1 deck cue ")["matches"], ["set"])
         self.assertEqual(complete_line(self.cli, "set 1 play ")["matches"], ["false", "true"])
         self.assertIn("sync", complete_line(self.cli, "set 1 ")["matches"])
         self.assertEqual(complete_line(self.cli, "set 1 sync ")["matches"], ["false", "true"])
         self.assertIn("257", complete_line(self.cli, "set 1 track_select ")["matches"])
+        self.assertIn("257", complete_line(self.cli, "track 1 deck remove ")["matches"])
         self.engine.request.assert_not_called()
         self.engine.deck_command.assert_not_called()
         self.host.load_deck.assert_not_called()
@@ -100,6 +103,7 @@ class DeckCLITests(unittest.TestCase):
         self.assertNotIn("native_state", saved)
         self.assertEqual(saved["deck"], {
             "bank_path": "/bank.json", "bank_id": "set", "track_id": "first",
+            "tracks": self.track.deck["tracks"],
             "cue": 2.0, "pitch": -1.25, "sync": False})
         self.assertEqual(base64.b64decode(saved["effects"][0]["native_state"]), b"effect-state")
 
@@ -199,3 +203,19 @@ class DeckMidiTests(unittest.TestCase):
         controller.on_midi(([0x80, MUTE_NOTES[0], 0], 0.0))
         self.assertEqual(len(self.engine.commands), count)
         self.assertFalse(any(command[1] == "nudge" for command in self.engine.commands))
+
+    def test_midimix_playlist_controls_and_live_seek_range(self):
+        controller = MidiMixController(self.engine)
+        self.addCleanup(controller.close)
+        for knob in (1, 2):
+            controller.on_midi(([0xB0, KNOB_CCS[0][knob], 127], 0.0))
+        self.assertEqual([command[1:3] for command in self.engine.commands],
+                         [("seek", 100), ("nudge", 1)])
+        track = self.engine.tracks[0]
+        metadata = {name: replace(parameter) for name, parameter in track.plugin.parameters.items()}
+        metadata["seek"].range = (0, 250)
+        apply_deck_status(track, {"duration": 250, "position": 25, "parameters": metadata})
+        controller.on_midi(([0xB0, KNOB_CCS[0][1], 127], 0.0))
+        self.assertEqual(self.engine.commands[-1][1:3], ("seek", 250))
+        self.assertEqual(track.plugin.values["seek"], 25)
+        self.assertAlmostEqual(track.plugin.parameters["seek"].raw_value, 0.1)

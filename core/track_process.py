@@ -182,7 +182,7 @@ def _execute(owner, index, operation, arguments):
     elif operation == "load_plugin_state":
         owner.engine.load_plugin_state(track_index=index, **arguments)
         result = None
-    elif operation in ("load_effect", "remove_effect"):
+    elif operation in ("load_effect", "remove_effect", "update_deck_catalog"):
         getattr(owner, operation)(track_index=index, **arguments)
         result = None
     elif operation == "shutdown":
@@ -250,6 +250,8 @@ def _run_track_owner(sample_rate, frames, index, operation, arguments,
         }, STATE_LIMIT))
         ready = True
         last_status = 0.0
+        deck_metadata_key = None
+        deck_parameters = None
         while True:
             now = time.monotonic()
             track = owner.engine.tracks[index]
@@ -257,7 +259,14 @@ def _run_track_owner(sample_rate, frames, index, operation, arguments,
                 last_status = now
                 current = dict(track.plugin.native.deck_status())
                 current["status_time"] = now
-                track.deck.update(current)
+                metadata_key = (current.get("track_id"), current.get("duration"),
+                                tuple(entry["id"] for entry in track.deck["tracks"]))
+                if metadata_key != deck_metadata_key:
+                    deck_parameters = capture_plugin(track.plugin, {}, {}).parameters
+                    deck_metadata_key = metadata_key
+                current["parameters"] = deck_parameters
+                track.deck.update((key, value) for key, value in current.items()
+                                  if key != "parameters")
                 # A single pending snapshot bounds memory and never stalls DSP
                 # or control if the output owner is busy staging another source.
                 try:
@@ -270,6 +279,8 @@ def _run_track_owner(sample_rate, frames, index, operation, arguments,
             operation = request["operation"]
             if operation == "load_plugin_state":
                 validate_native_message(request, CONTROL_LIMIT)
+            elif operation == "update_deck_catalog":
+                encode_deck_message(request, CONTROL_LIMIT)
             else:
                 _encode(request, CONTROL_LIMIT)
             try:
@@ -459,6 +470,7 @@ class TrackWorker:
                 # Gain, routing, generation and mute/solo are mixer-owned.
                 self.track.plugin = state["plugin"]
                 self.track.effects = state["effects"]
+                self.track.name = state["name"]
                 self.track.deck = state.get("deck", {})
         if reply.get("deck") is not None:
             apply_deck_status(self.track, reply["deck"])
@@ -486,7 +498,9 @@ class TrackWorker:
             raise RuntimeError("track requests cannot be nested")
         message = {"operation": operation, "arguments": arguments}
         data = (encode_native_message(message, CONTROL_LIMIT)
-                if operation == "load_plugin_state" else _encode(message, CONTROL_LIMIT))
+                if operation == "load_plugin_state" else
+                encode_deck_message(message, CONTROL_LIMIT)
+                if operation == "update_deck_catalog" else _encode(message, CONTROL_LIMIT))
         timeout = (PARAMETER_TIMEOUT if operation in {
             "set_parameter", "set_parameters", "sync_state"} else REQUEST_TIMEOUT)
         self._rpc_active = True

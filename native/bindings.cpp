@@ -174,6 +174,8 @@ PYBIND11_MODULE(_vcpi_native, module) {
         })
         .def("deck_command", &Plugin::deckCommand, py::arg("action"), py::arg("value") = 0.0,
              py::call_guard<py::gil_scoped_release>())
+        .def("update_deck_catalog", &Plugin::updateDeckCatalog, py::arg("catalog"),
+             py::call_guard<py::gil_scoped_release>())
         .def("load_preset", &Plugin::loadPreset, py::arg("path"), py::call_guard<py::gil_scoped_release>())
         .def("get_state", [](Plugin& plugin) {
             juce::MemoryBlock result;

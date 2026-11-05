@@ -350,7 +350,7 @@ hardware or empty plugin/effect lists may also yield no choices.
 |---|---|
 | `track <track> vst <path\|vst_name> [--name <label>]` | Load VST instrument into track |
 | `track <track> wav <pack> <sample> [--name <label>]` | Load `sampler/samples/<pack>/<sample>.wav` as one-shot sampler into track |
-| `track <track> deck <bank.json> [--name <label>]` | Prepare a native streaming deck, initially paused |
+| `track <track> deck <audio-file> [--name <label>]` | Create a paused streaming deck, or append to its session-owned playlist |
 | `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `patches/<patch_name>.vcv` |
 | `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `patches/` or an absolute path |
 | `track <track\|master> fx <path\|vst_name> [--name <label>]` | Load effect into track insert chain or master bus |
@@ -377,7 +377,7 @@ labels are not accepted. For example:
 
 ```text
 track 1 wav piano c4-soft --name "Soft Piano"
-track 2 deck "/music/live set.json" --name "Deck B"
+track 2 deck "/music/opening song.flac" --name "Deck B"
 track 3 vcv "Warm Pad" --name Atmosphere
 ```
 
@@ -475,34 +475,39 @@ using Ableton Link's timeline when enabled. Play/pause is still controlled per
 deck, independently of global transport start/stop. Create up to eight ordinary mixer tracks:
 
 ```text
-track 1 deck /music/live-set.json --name Deck-A
-track 2 deck /music/live-set.json --name Deck-B
+track 1 deck /music/opening.wav --name Deck-A
+track 1 deck /music/second.flac
+track 2 deck /music/other.mp3 --name Deck-B
 tempo 120
 audio start
 set 1 play true
 set 2 play true
 ```
 
-A music bank is a version-1 JSON manifest (separate from sequencer banks):
+Each deck owns an ordered playlist saved inside the session; no separate JSON
+bank file is required. The first audio-file command creates a paused deck.
+Repeating it appends another song without replacing the deck, interrupting the
+selected song, or losing mixer settings, routing or inserts. An existing name
+is preserved unless `--name` is supplied.
 
-```json
-{
-  "version": 1,
-  "id": "live-set",
-  "tracks": [
-    {"id": "opening", "path": "music/opening.wav", "title": "Opening"},
-    {"id": "second", "path": "music/second.wav", "title": "Second"}
-  ]
-}
+```text
+track 1 deck status
+set 1 track_select 2
+track 1 deck remove 1
+save live-set
 ```
 
-Manifest order supplies 1-based selection values; stable IDs identify saved
-tracks. Bank/track IDs must be nonempty, track IDs unique, and the bank nonempty.
-Titles default to the track ID. Relative asset paths resolve against the manifest
-directory; absolute paths are accepted. Only the selected asset is decoded.
-Reopening reloads the manifest; there is no automatic rescan. Manifest and resolved
-catalog each have a 512 KiB transfer budget, with 1024-byte text fields; there is
-no 128-track limit. Large catalogs use bounded multipart IPC, not larger frames.
+Status lists song titles, paths and 1-based selection indexes. Removing an
+unselected song preserves playback; indexes close up around the removed entry.
+Removing the selected song prepares the next song at that index (or the previous
+song when removing the last entry), paused at zero. The final song cannot be
+removed individually: use `track 1 clear` to remove the deck.
+
+Audio paths are expanded and saved as absolute paths. Stable song IDs preserve
+the selected identity independently of playlist indexes. Session files contain
+the playlist metadata, not copies of audio files; the audio must remain available.
+Catalogs have a 512 KiB transfer budget with 1024-byte text fields and no
+128-song limit. Large catalogs use bounded multipart IPC, not larger frames.
 
 Supported audio is mono (duplicated to stereo) or stereo AIFF (`.aif`, `.aiff`,
 `.aifc`, supported encodings), WAV (`.wav`, `.wave`, supported PCM/float encodings),
@@ -515,6 +520,9 @@ sinc resampling with an anti-alias prefilter, not loaded in full for playback.
 |---|---|
 | `get 1` / `track 1 deck status` | Cached catalog, identity, transport, detected grid, sync state and errors |
 | `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
+| `track 1 deck <audio-file> [--name <label>]` | Append a song, or create a paused one-song deck |
+| `track 1 deck remove 2` | Remove playlist entry 2; final-entry removal requires `track 1 clear` |
+| `set 1 seek 90` | Seek in source seconds, retaining play state; range follows selected song duration |
 | `set 1 play true` / `set 1 play false` | Resume / pause, preserving source position |
 | `set 1 sync true` / `set 1 sync false` | Follow global/Link tempo and beat phase / use manual pitch and nudge |
 | `set 1 pitch -1.25` | Vinyl-style speed and pitch, -16 to +16 percent |
@@ -523,8 +531,15 @@ sinc resampling with an anti-alias prefilter, not loaded in full for playback.
 | `track 1 deck cue set` | Store current source position without moving |
 | `track 1 deck cue` | Recall cue and pause |
 
+The first three exposed sound controls are **`track_select`, `seek`, `nudge`**,
+so MIDI Mix maps them automatically to the top, middle and bottom knobs of each
+track strip. Selection spans playlist entries 1..N; seek spans 0..song duration;
+nudge spans -1..+1. Playlist edits and committed song changes refresh those
+ranges. Nudge affects manual playback when sync is off or unavailable; return it
+to zero after nudging. Remaining controls are `play`, `pitch` and `sync`.
+
 Automatic analysis scans at most the first 60 seconds of the selected file,
-off the render thread, and caches the result while the bank is open. It targets
+off the render thread, and caches the result while the playlist is open. It targets
 steady 60–200 BPM material with at least eight usable transients. Status reports
 `bpm`, `beat_offset` (source seconds modulo a beat), `beat_confidence` (0–1),
 `sync`, `sync_active`, `sync_error`, `playback_speed` and `beat_phase_error`
@@ -577,12 +592,12 @@ Other source types retain their usual MIDI behaviour.
 | Note 63 press/release | Hold/release negative nudge |
 | Note 64 press/release | Hold/release positive nudge |
 | CC 20, value 0..127 | Pitch linearly -16..+16 percent |
-| CC 21, value 0..127 | Nearest bank selection 1..N (7-bit resolution) |
+| CC 21, value 0..127 | Nearest playlist selection 1..N (7-bit resolution) |
 
 Note-off and velocity-zero note-on both release; opposing nudge holds cancel.
 Closing the input, removing its channel route or replacing the deck clears held
 nudge. MIDI Mix mute/solo buttons are unchanged and are not nudge bindings.
-Use CLI integer selection to address every entry in banks larger than MIDI's
+Use CLI integer selection to address every entry in playlists larger than MIDI's
 7-bit selection resolution.
 
 Physical listening/manual-beatmatching acceptance on Linux and macOS and
@@ -947,14 +962,17 @@ helpers or action controls. WAV tracks remain path-based.
 Pure Data/plugdata tracks also use native chunks, embedding the main patch while
 retaining its original location for resolving external files. Abstractions and
 sample files must remain installed separately.
-Decks instead store an explicit `deck` payload with `bank_path`, `bank_id`,
+Decks instead store an explicit `deck` payload containing the full ordered
+`tracks` list (stable ID, absolute audio path and title), playlist identity,
 committed stable `track_id`, `cue` seconds, `pitch` and boolean `sync`. They do not
 store a VST3 chunk for the source; insert chunks are preserved normally. Restore
-resolves the selected ID even if the manifest order changed, prepares at cue
-paused, sets nudge to zero and reanalyzes the selected audio. Older deck payloads
-without `sync` default to automatic sync. Missing banks/IDs or a bank-ID mismatch are reported per track;
-unaffected tracks continue restoring. A pending selection is never persisted in
-place of the committed track.
+needs no external playlist manifest: it resolves the saved selection, prepares
+at cue paused, sets nudge to zero and reanalyzes the selected audio.
+Legacy bank-based deck sessions are still readable; their manifests are resolved
+on restore and subsequent saves embed the playlist. Older payloads without
+`sync` default to automatic sync. Missing audio, IDs or legacy banks are reported
+per track; unaffected tracks continue restoring. A pending selection is never
+persisted in place of the committed track.
 
 
 Format 3 stores mixer instruments under `tracks` and sequencer destinations

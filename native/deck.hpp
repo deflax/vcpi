@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
+#include "ownership.hpp"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -25,8 +26,9 @@ struct DeckStatus {
 
 // Readers, filters and ring storage belong to this object until its worker joins.
 // render() neither owns nor releases dynamically allocated resources.
-// Callers serialize setParameter()/command() against render(); Plugin uses its
-// short control ownership guard. No guard is held during preparation or joining.
+// Callers serialize control operations with each other; Plugin uses a control
+// mutex. Render-state mutations use its short ownership guard. Catalog edits
+// join/prepare off-render and acquire that guard only to publish the change.
 class Deck {
 public:
     explicit Deck(const std::string& catalog, double outputRate);
@@ -38,6 +40,7 @@ public:
     double parameter(const std::string& key) const;
     double setParameter(const std::string& key, double value);
     void command(const std::string& action, double value = 0);
+    void updateCatalog(const std::string& catalog, Ownership& ownership);
     int trackCount() const noexcept { return static_cast<int>(tracks.size()); }
     const std::string& bankId() const noexcept { return bank; }
     const std::string& bankPath() const noexcept { return locator; }
@@ -48,6 +51,8 @@ private:
     enum Mode { selection, seek, recall, restore };
     struct BeatGrid { double bpm = 0, offset = 0, confidence = 0; bool analyzed = false; };
     struct Track { std::string id, path, title; BeatGrid grid; };
+    struct Catalog { std::string bank, locator; std::vector<Track> tracks; };
+    static Catalog parseCatalog(const juce::var& catalog);
     struct Request { std::uint64_t id = 0; int track = 1; double seconds = 0; Mode mode = selection; };
     struct Stream {
         std::atomic<int> state{free};
@@ -64,7 +69,7 @@ private:
         std::atomic<bool> failed{false};
     };
     void request(int track, double seconds, Mode mode);
-    bool prepare(Stream& stream, const Request& request);
+    bool prepare(Stream& stream, const Request& request, Track& track);
     bool fill(Stream& stream);
     bool analyze(Stream& stream, BeatGrid& grid);
     void publishGrid(const Stream& stream) noexcept;

@@ -11,9 +11,11 @@ import wave
 from pathlib import Path
 from unittest.mock import patch
 
+from controllers.akai_midimix import MidiMixController
+
 from core.audio_process import RemoteAudioEngine
 from core.audio_state import PluginSnapshot
-from core.deck_bank import load_bank
+from core.deck_bank import load_bank, make_catalog
 from core.engine import AudioEngine
 from core.models import InstrumentTrack, NUM_TRACKS
 from core.track_process import TrackWorker
@@ -130,6 +132,69 @@ class DeckOwnerTests(unittest.TestCase):
         self.assertEqual(track.deck["track_id"], "1800")
         self.assertEqual(len(track.deck["tracks"]), 1801)
         self.assertFalse(track.deck["play"])
+        engine.set_parameter(0, "play", True)
+        self.write_bank(1900)
+        engine.request("update_deck_catalog", track_index=0, catalog=load_bank(self.bank))
+        updated = engine.tracks[0]
+        self.assertEqual((updated.worker_pid, updated.generation), (track.worker_pid, track.generation))
+        self.assertEqual(updated.plugin.token, track.plugin.token)
+        self.assertEqual(updated.deck["track_id"], "1800")
+        self.assertTrue(updated.deck["play"])
+        self.assertEqual(len(updated.deck["tracks"]), 1901)
+        self.assertEqual(updated.deck["tracks"][0]["path"], str(self.wav))
+        self.assertEqual(updated.plugin.parameters["track_select"].range, (1, 1901))
+
+    def test_playlist_edits_preserve_transport_and_mixer_then_remove_active(self):
+        worker, engine = self.worker(track_id="2", cue=0.25, pitch=-1.25)
+        engine.set_track_state(0, gain=0.375, muted=True, solo=True)
+        worker.request("set_parameter", name="play", value=True)
+        worker.request("set_parameter", name="nudge", value=1)
+        before = worker.request("sync_state")["state"]
+        entries = before["deck"]["tracks"]
+        worker.request("update_deck_catalog",
+                       catalog=make_catalog("set", entries[1:], bank_path=str(self.bank)))
+        track = worker.track
+        for key in ("track_id", "cue", "position", "play", "pitch", "nudge"):
+            self.assertEqual(track.deck[key], before["deck"][key])
+        self.assertEqual(track.plugin.token, before["plugin"].token)
+        self.assertEqual((track.gain, track.muted, track.solo), (0.375, True, True))
+        self.assertEqual(track.plugin.values["track_select"], 1)
+        worker.request("update_deck_catalog",
+                       catalog=make_catalog("set", entries[2:], bank_path=str(self.bank)))
+        self.assertEqual(track.deck["track_id"], "3")
+        self.assertFalse(track.deck["play"])
+        self.assertEqual(track.deck["position"], 0)
+        self.assertEqual(track.deck["cue"], 0)
+
+    def test_active_duration_refreshes_seek_metadata_without_sync_rpc(self):
+        longer = self.root / "longer.wav"
+        with wave.open(str(longer), "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(48000)
+            stream.writeframes(struct.pack("<h", 4096) * 120000)
+        self.bank.write_text(json.dumps({"version": 1, "id": "durations", "tracks": [
+            {"id": "short", "path": str(self.wav), "title": "Short"},
+            {"id": "long", "path": str(longer), "title": "Long"}]}))
+        worker, engine = self.worker()
+        self.assertEqual(worker.track.plugin.parameters["seek"].range, (0, 1))
+        worker.request("set_parameter", name="track_select", value=2)
+        self.await_status(
+            worker, lambda state: state["track_id"] == "long"
+            and worker.track.plugin.parameters["seek"].range == (0, 2.5), engine)
+        self.assertEqual(worker.track.deck["track_id"], "long")
+        self.assertEqual(list(worker.track.plugin.parameters)[:3], ["track_select", "seek", "nudge"])
+        controller = MidiMixController(engine)
+        self.addCleanup(controller.close)
+        self.assertEqual(controller._build_param_cache(0), [
+            ("track_select", (1, 2)), ("seek", (0, 2.5)), ("nudge", (-1, 1)),
+        ])
+        worker.request("set_parameter", name="seek", value=2.5)
+        worker.request("set_parameter", name="nudge", value=1)
+        status = self.await_status(
+            worker, lambda state: state["position"] == 2.5 and state["nudge"] == 1, engine)
+        self.assertFalse(status["play"])
+        self.assertEqual(worker.track.plugin.values["seek"], 2.5)
 
     def test_failed_initial_load_retains_previous_source_and_generation(self):
         engine = self.remote()
@@ -174,6 +239,9 @@ class DeckOwnerTests(unittest.TestCase):
         before = worker.request("sync_state")["state"]["effects"][0]
         worker.request("set_parameter", name="track_select", value=2)
         self.await_status(worker, lambda s: s["track_id"] == "2", engine)
+        entries = worker.track.deck["tracks"]
+        worker.request("update_deck_catalog",
+                       catalog=make_catalog("set", entries[1:], bank_path=str(self.bank)))
         after = worker.request("sync_state")["state"]["effects"][0]
         self.assertEqual(after.token, before.token)
         self.assertEqual(after.native_state, before.native_state)

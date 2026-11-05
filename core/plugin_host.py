@@ -352,7 +352,7 @@ class PluginHost:
 
     def load_deck(self, track_index: int, catalog: str,
                   name: Optional[str] = None) -> InstrumentTrack:
-        """Prepare the selected bank asset before publishing any replacement."""
+        """Prepare the selected playlist asset before publishing any replacement."""
         from core.deck_bank import validate_catalog
 
         if not 0 <= track_index < NUM_TRACKS:
@@ -363,12 +363,28 @@ class PluginHost:
         self._set_plugin_info_type(plugin, "Deck")
         deck = dict(plugin.native.deck_status())
         deck.update(bank_path=bank["bank_path"], bank_id=bank["id"],
-                    tracks=[{"id": item["id"], "title": item["title"]}
-                            for item in bank["tracks"]])
+                    tracks=[dict(item) for item in bank["tracks"]])
         track = InstrumentTrack(name=name or bank["id"], path=bank["bank_path"],
                                 plugin=plugin, source_type="deck", deck=deck)
         self.engine.tracks[track_index] = track
         return track
+
+    def update_deck_catalog(self, track_index: int, catalog: str,
+                            name: Optional[str] = None):
+        """Edit the existing native deck, leaving its owner and effects intact."""
+        from core.deck_bank import validate_catalog
+
+        track = self.engine.tracks[track_index]
+        if track is None or track.source_type != "deck":
+            raise ValueError(f"track {track_index + 1} is not a deck")
+        bank = json.loads(validate_catalog(catalog))
+        track.plugin.native.update_deck_catalog(catalog)
+        track.plugin._refresh_metadata()
+        track.deck.update(track.plugin.native.deck_status())
+        track.deck.update(bank_path=bank["bank_path"], bank_id=bank["id"],
+                          tracks=[dict(item) for item in bank["tracks"]])
+        if name is not None:
+            track.name = name
 
     def remove_instrument(self, track_index: int) -> InstrumentTrack:
         """Unload and clear one instrument track."""

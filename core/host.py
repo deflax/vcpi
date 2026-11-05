@@ -224,16 +224,62 @@ class VcpiCore:
         self.engine.request("load_wav", track_index=track_index, wav_path=wav_path, name=name)
         return self._loaded_track(track_index)
 
-    def load_deck(self, track_index: int, bank_path: str,
-                  name: Optional[str] = None, *, track_id=None, bank_id=None,
-                  cue=0, pitch=0, sync=True) -> InstrumentTrack:
-        """Validate a bank on the control side and stage its saved selection."""
-        from core.deck_bank import load_bank
+    def load_deck(self, track_index: int, audio_path: str,
+                  name: Optional[str] = None) -> InstrumentTrack:
+        """Create a paused playlist or append without replacing its audio owner."""
+        from uuid import uuid4
+        from core.deck_bank import audio_entry, make_catalog
 
         if not 0 <= track_index < NUM_TRACKS:
             raise ValueError(f"track must be 1-{NUM_TRACKS}")
-        catalog = load_bank(bank_path, track_id=track_id, bank_id=bank_id,
-                            cue=cue, pitch=pitch, sync=sync)
+        entry = audio_entry(audio_path)
+        track = self.engine.tracks[track_index]
+        if track is not None and track.source_type == "deck":
+            catalog = make_catalog(track.deck["bank_id"], [*track.deck["tracks"], entry],
+                                   bank_path=track.deck["bank_path"])
+            self.engine.request("update_deck_catalog", track_index=track_index,
+                                catalog=catalog, name=name)
+        else:
+            catalog = make_catalog(uuid4().hex, [entry])
+            self._clear_deck_holds(track_index=track_index)
+            self.engine.request("load_deck", track_index=track_index, catalog=catalog,
+                                name=name if name is not None else entry["title"])
+        return self._loaded_track(track_index)
+
+    def remove_deck_entry(self, track_index: int, ordinal: int) -> InstrumentTrack:
+        """Remove a one-based playlist entry while retaining the track and inserts."""
+        from core.deck_bank import make_catalog
+
+        if not 0 <= track_index < NUM_TRACKS:
+            raise ValueError(f"track must be 1-{NUM_TRACKS}")
+        track = self.engine.tracks[track_index]
+        if track is None or track.source_type != "deck":
+            raise ValueError(f"Track {track_index + 1} is not a deck")
+        entries = track.deck["tracks"]
+        if not 1 <= ordinal <= len(entries):
+            raise ValueError(f"deck entry must be 1-{len(entries)}")
+        if len(entries) == 1:
+            raise ValueError(f"Cannot remove the final deck entry; use track {track_index + 1} clear")
+        catalog = make_catalog(track.deck["bank_id"], entries[:ordinal - 1] + entries[ordinal:],
+                               bank_path=track.deck["bank_path"])
+        self.engine.request("update_deck_catalog", track_index=track_index, catalog=catalog)
+        return self._loaded_track(track_index)
+
+    def restore_deck(self, track_index: int, deck: dict,
+                     name: Optional[str] = None) -> InstrumentTrack:
+        """Restore embedded assets, resolving a legacy manifest only when required."""
+        from core.deck_bank import load_bank, make_catalog
+
+        for key in ("bank_id", "track_id"):
+            if not isinstance(deck.get(key), str) or not deck[key].strip():
+                raise ValueError(f"deck {key} is required")
+        settings = dict(track_id=deck["track_id"], cue=deck["cue"],
+                        pitch=deck["pitch"], sync=deck.get("sync", True))
+        if "tracks" in deck:
+            catalog = make_catalog(deck["bank_id"], deck["tracks"],
+                                   bank_path=deck.get("bank_path"), **settings)
+        else:
+            catalog = load_bank(deck["bank_path"], bank_id=deck["bank_id"], **settings)
         self._clear_deck_holds(track_index=track_index)
         self.engine.request("load_deck", track_index=track_index, catalog=catalog, name=name)
         return self._loaded_track(track_index)

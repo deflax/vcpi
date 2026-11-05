@@ -96,8 +96,6 @@ class PluginSnapshot:
             and self.name.casefold().replace(" ", "") in {"plugdata", "plugdata-fx"}
         )
         for name, parameter in self.parameter_items("controls"):
-            if self.info_type == "Deck" and name == "nudge":
-                continue
             if skip_volume and name == "volume":
                 continue
             yield name, parameter
@@ -186,12 +184,18 @@ def capture_plugin(plugin, values, readers, *, capture_native_state=False):
 
 def apply_deck_status(track, status):
     """Refresh transport and typed parameter caches from one applied snapshot."""
-    track.deck.update(status)
+    metadata = status.get("parameters")
+    track.deck.update((key, value) for key, value in status.items() if key != "parameters")
     plugin = track.plugin
-    for name in ("track_select", "play", "pitch", "nudge", "sync"):
-        if name not in status:
+    if metadata is not None and plugin.parameters != metadata:
+        plugin.parameters = metadata
+    values = dict(status)
+    if "position" in status:
+        values["seek"] = status["position"]
+    for name in ("track_select", "seek", "nudge", "play", "pitch", "sync"):
+        if name not in values:
             continue
-        value = status[name]
+        value = values[name]
         plugin.values[name] = value
         descriptor = plugin.parameters.get(name)
         if descriptor is not None:

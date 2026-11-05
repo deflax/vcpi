@@ -472,13 +472,18 @@ Plugin::ParameterInfo& Plugin::parameter(const std::string& key) {
     return parameterInfos[found->second];
 }
 PluginMetadata Plugin::metadata() {
+    std::lock_guard<std::mutex> deckLock(deckMutex);
     ControlOwnership lock(ownership);
     auto result = description;
     if (instance) result.latency = instance->getLatencySamples();
     return result;
 }
 std::vector<ParameterSnapshot> Plugin::parameters() {
-    if (deck) return {deckParameter("track_select"), deckParameter("play"), deckParameter("pitch"), deckParameter("nudge"), deckParameter("sync")};
+    if (deck) {
+        std::lock_guard<std::mutex> lock(deckMutex);
+        return {deckParameter("track_select"), deckParameter("seek"), deckParameter("nudge"),
+                deckParameter("play"), deckParameter("pitch"), deckParameter("sync")};
+    }
     ControlOwnership lock(ownership);
     std::vector<ParameterSnapshot> result;
     result.reserve(parameterInfos.size());
@@ -486,7 +491,10 @@ std::vector<ParameterSnapshot> Plugin::parameters() {
     return result;
 }
 ParameterSnapshot Plugin::parameterSnapshot(const std::string& key) {
-    if (deck) return deckParameter(key);
+    if (deck) {
+        std::lock_guard<std::mutex> lock(deckMutex);
+        return deckParameter(key);
+    }
     ControlOwnership lock(ownership);
     return snapshot(parameter(key));
 }
@@ -501,6 +509,7 @@ Scalar Plugin::parameterValue(const ParameterInfo& info) const {
 }
 Scalar Plugin::getParameter(const std::string& key) {
     if (deck) {
+        std::lock_guard<std::mutex> lock(deckMutex);
         const auto value = deck->parameter(key);
         return key == "play" || key == "sync" ? Scalar(value != 0) : Scalar(value);
     }
@@ -509,6 +518,7 @@ Scalar Plugin::getParameter(const std::string& key) {
 }
 Scalar Plugin::setParameter(const std::string& key, const Scalar& value) {
     if (deck) {
+        std::lock_guard<std::mutex> deckLock(deckMutex);
         ControlOwnership lock(ownership);
         const auto* number = std::get_if<double>(&value);
         const auto* boolean = std::get_if<bool>(&value);
@@ -738,7 +748,8 @@ ParameterSnapshot Plugin::deckParameter(const std::string& key) const {
     ParameterSnapshot result;
     result.key = result.label = key;
     result.automatable = true;
-    result.rawValue = deck->parameter(key);
+    const auto seekStatus = key == "seek" ? deck->status() : DeckStatus{};
+    result.rawValue = key == "seek" ? seekStatus.position : deck->parameter(key);
     result.value = result.rawValue;
     result.stringValue = juce::String(result.rawValue).toStdString();
     result.kind = "float";
@@ -747,6 +758,9 @@ ParameterSnapshot Plugin::deckParameter(const std::string& key) const {
         result.low = 1;
         result.high = deck->trackCount();
         result.discrete = true;
+    } else if (key == "seek") {
+        result.high = seekStatus.duration;
+        result.units = "s";
     } else if (key == "play" || key == "sync") {
         result.kind = "bool";
         result.boolean = result.discrete = true;
@@ -765,12 +779,23 @@ ParameterSnapshot Plugin::deckParameter(const std::string& key) const {
 }
 DeckStatus Plugin::deckStatus() const {
     if (!deck) throw std::invalid_argument("Source is not a deck");
+    std::lock_guard<std::mutex> lock(deckMutex);
     return deck->status();
 }
 void Plugin::deckCommand(const std::string& action, double value) {
     if (!deck) throw std::invalid_argument("Source is not a deck");
+    std::lock_guard<std::mutex> deckLock(deckMutex);
     ControlOwnership lock(ownership);
     deck->command(action, value);
+}
+void Plugin::updateDeckCatalog(const std::string& catalog) {
+    if (!deck) throw std::invalid_argument("Source is not a deck");
+    std::lock_guard<std::mutex> lock(deckMutex);
+    deck->updateCatalog(catalog, ownership);
+    description.path = deck->bankPath();
+    description.name = deck->bankId();
+    description.descriptiveName = description.name;
+    description.identifier = "deck:" + deck->bankId();
 }
 void Plugin::renderWav(float* left, float* right, const juce::MidiBuffer& midi) noexcept {
     std::fill_n(left, frames, 0.0f);

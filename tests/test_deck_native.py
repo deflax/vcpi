@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 import struct
 import tempfile
+import threading
 import time
 import unittest
 import wave
@@ -52,11 +53,15 @@ class NativeDeckTests(unittest.TestCase):
             output.write(b"\0")
         return path
 
+    def catalog(self, paths, ids=None, **initial):
+        ids = range(1, len(paths) + 1) if ids is None else ids
+        return json.dumps({
+            "version": 1, "id": "test-bank", "bank_path": "session:test-bank",
+            "tracks": [{"id": f"track-{i}", "path": str(path), "title": f"Title {i}"}
+                       for i, path in zip(ids, paths)], **initial})
+
     def deck(self, paths, rate=48000, frames=512, **initial):
-        catalog = {"version": 1, "id": "test-bank", "bank_path": str(self.root / "bank.json"),
-                   "tracks": [{"id": f"track-{i}", "path": str(path), "title": f"Title {i}"}
-                              for i, path in enumerate(paths, 1)], **initial}
-        plugin = self.backend.Plugin(json.dumps(catalog), rate, frames, "deck")
+        plugin = self.backend.Plugin(self.catalog(paths, **initial), rate, frames, "deck")
         self.serial += 1
         transport = self.backend.Transport(str(self.root / f"deck-{self.serial}.mmap"), frames, True)
         runner = self.backend.TrackRunner(transport, plugin, rate, frames)
@@ -105,6 +110,156 @@ class NativeDeckTests(unittest.TestCase):
             plugin.get_state()
         with self.assertRaisesRegex(ValueError, "explicit session"):
             plugin.load_state(b"not-a-plugin-state")
+
+    def test_seek_parameter_order_normalization_and_live_duration(self):
+        paths = [self.tone("short", seconds=2), self.tone("long", seconds=5)]
+        plugin, runner, _ = self.deck(paths, cue=0.5)
+        self.assertEqual(list(plugin.parameters()),
+                         ["track_select", "seek", "nudge", "play", "pitch", "sync"])
+        seek = plugin.parameter("seek")
+        self.assertEqual((seek["kind"], seek["range"], seek["units"]), ("float", (0, 2), "s"))
+        self.assertAlmostEqual(seek["raw_value"], 0.25)
+        self.assertEqual(plugin.get_parameter("seek"), 0.5)
+        self.assertEqual(plugin.set_parameter("seek", 1.25), 1.25)
+        status = self.await_state(plugin, runner, lambda s: not s["loading"])
+        self.assertEqual((status["position"], status["cue"], status["play"]), (1.25, 0.5, False))
+        self.assertEqual(plugin.set_parameter("seek", 10), 2)
+        self.await_state(plugin, runner, lambda s: not s["loading"])
+        self.assertEqual(plugin.parameter("seek")["raw_value"], 1)
+        plugin.set_parameter("track_select", 2)
+        self.await_state(plugin, runner, lambda s: not s["loading"])
+        self.assertEqual(plugin.parameter("seek")["range"], (0, 5))
+        self.assertEqual(plugin.parameter("seek")["raw_value"], 0)
+        plugin.set_parameter("play", True)
+        plugin.set_parameter("seek", 2.5)
+        status = self.await_state(plugin, runner, lambda s: not s["loading"])
+        self.assertTrue(status["play"])
+        self.assertGreaterEqual(plugin.get_parameter("seek"), 2.5)
+        for invalid in (float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                plugin.set_parameter("seek", invalid)
+
+    def test_append_and_nonactive_removal_preserve_exact_active_audio(self):
+        paths = [self.tone("first"), self.tone("active"), self.tone("appended")]
+        edited, runner, _ = self.deck(paths[:2], initial_track=2, cue=0.25, pitch=2, sync=0)
+        reference, reference_runner, _ = self.deck(paths[:2], initial_track=2, cue=0.25, pitch=2, sync=0)
+        for plugin, owner in ((edited, runner), (reference, reference_runner)):
+            plugin.set_parameter("nudge", 0.5)
+            plugin.set_parameter("play", True)
+            self.render(owner, 3)
+        for catalog, ordinal, count in ((self.catalog(paths), 2, 3),
+                                         (self.catalog(paths[1:], ids=[2, 3]), 1, 2)):
+            before = edited.deck_status()
+            edited.update_deck_catalog(catalog)
+            after = edited.deck_status()
+            for key in ("track_id", "position", "cue", "play", "pitch", "nudge", "sync"):
+                self.assertEqual(after[key], before[key], key)
+            self.assertEqual((after["track_select"], after["requested_track_select"]), (ordinal, ordinal))
+            self.assertFalse(after["loading"])
+            self.assertEqual(edited.parameter("track_select")["range"], (1, count))
+            np.testing.assert_array_equal(runner.render_once(), reference_runner.render_once())
+
+    def test_removing_active_entry_chooses_next_then_previous_paused_at_zero(self):
+        paths = [self.tone("first", seconds=2), self.tone("middle"), self.tone("last", seconds=6)]
+        plugin, runner, _ = self.deck(paths, initial_track=2, cue=0.4, pitch=3, sync=0)
+        plugin.set_parameter("nudge", 0.75)
+        plugin.set_parameter("play", True)
+        self.render(runner, 2)
+        plugin.update_deck_catalog(self.catalog([paths[0], paths[2]], ids=[1, 3]))
+        status = plugin.deck_status()
+        self.assertEqual((status["track_id"], status["track_select"]), ("track-3", 2))
+        self.assertEqual((status["position"], status["cue"], status["play"], status["nudge"]),
+                         (0, 0, False, 0))
+        self.assertEqual((status["pitch"], status["sync"], status["duration"]), (3, False, 6))
+        self.assertFalse(status["loading"])
+        np.testing.assert_array_equal(runner.render_once(), 0)
+        plugin.set_parameter("play", True)
+        runner.render_once()
+        plugin.update_deck_catalog(self.catalog(paths[:1]))
+        status = plugin.deck_status()
+        self.assertEqual((status["track_id"], status["track_select"], status["position"], status["play"]),
+                         ("track-1", 1, 0, False))
+        self.assertEqual(plugin.parameter("seek")["range"], (0, 2))
+
+    def test_playlist_edit_cancels_pending_selection_and_seek(self):
+        paths = [self.tone("active"), self.tone("pending", rate=96000)]
+        plugin, runner, _ = self.deck(paths, cue=0.2)
+        plugin.set_parameter("play", True)
+        runner.render_once()
+        plugin.set_parameter("track_select", 2)
+        plugin.update_deck_catalog(self.catalog(paths[:1]))
+        status = plugin.deck_status()
+        self.assertEqual((status["track_id"], status["requested_track_id"]), ("track-1", "track-1"))
+        self.assertEqual((status["track_select"], status["requested_track_select"]), (1, 1))
+        self.assertTrue(status["play"])
+        self.assertFalse(status["loading"])
+        plugin.set_parameter("seek", 3)
+        before = plugin.deck_status()["position"]
+        plugin.update_deck_catalog(self.catalog(paths))
+        status = plugin.deck_status()
+        self.assertEqual(status["position"], before)
+        self.assertFalse(status["loading"])
+        self.render(runner, 4)
+        self.assertEqual(plugin.deck_status()["track_id"], "track-1")
+        self.assertLess(plugin.deck_status()["position"], 1)
+        self.assertTrue(plugin.deck_status()["play"])
+
+    def test_invalid_catalog_and_failed_active_replacement_leave_audio_usable(self):
+        paths = [self.tone("active"), self.root / "missing.wav"]
+        plugin, runner, _ = self.deck(paths)
+        plugin.set_parameter("play", True)
+        runner.render_once()
+        before = plugin.deck_status()
+        for catalog in (self.catalog([]), self.catalog(paths, ids=[1, 1]),
+                        self.catalog(paths[::-1]), self.catalog(paths[1:], ids=[2])):
+            with self.assertRaises((ValueError, RuntimeError)):
+                plugin.update_deck_catalog(catalog)
+            status = plugin.deck_status()
+            self.assertEqual((status["track_id"], status["position"], status["play"]),
+                             (before["track_id"], before["position"], True))
+            self.assertEqual(plugin.parameter("track_select")["range"], (1, 2))
+        self.assertGreater(np.max(np.abs(runner.render_once())), 0.1)
+        plugin.update_deck_catalog(self.catalog(paths[:1]))
+        self.assertEqual(plugin.parameter("track_select")["range"], (1, 1))
+
+    def test_catalog_edits_while_native_rendering_preserve_running_transport(self):
+        paths = [self.tone("playing", seconds=12), self.tone("extra")]
+        plugin, runner, _ = self.deck(paths[:1], sync=0)
+        plugin.set_parameter("play", True)
+        self.render(runner, 2)
+        stop = threading.Event()
+        started = threading.Event()
+        errors, peaks = [], []
+
+        def render_audio():
+            try:
+                while not stop.is_set():
+                    peaks.append(float(np.max(np.abs(runner.render_once()))))
+                    started.set()
+                    stop.wait(0.001)
+            except BaseException as error:
+                errors.append(error)
+                started.set()
+
+        thread = threading.Thread(target=render_audio)
+        thread.start()
+        try:
+            self.assertTrue(started.wait(2))
+            for _ in range(12):
+                plugin.update_deck_catalog(self.catalog(paths))
+                plugin.update_deck_catalog(self.catalog(paths[:1]))
+                status = plugin.deck_status()
+                self.assertEqual((status["track_id"], status["track_select"]), ("track-1", 1))
+                self.assertTrue(status["play"])
+                self.assertFalse(status["loading"])
+                time.sleep(0.002)
+        finally:
+            stop.set()
+            thread.join(3)
+        self.assertFalse(thread.is_alive(), "Catalog updates must not deadlock the render owner")
+        self.assertEqual(errors, [])
+        self.assertGreater(len(peaks), 2)
+        self.assertGreater(min(peaks), 0.1)
 
     def test_generated_mono_stereo_and_different_sample_rates(self):
         for source_rate, stereo in ((32000, False), (44100, True), (96000, False)):

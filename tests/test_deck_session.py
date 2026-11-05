@@ -58,10 +58,19 @@ class DeckSessionTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"deck status did not converge: {host.engine.tracks[index].deck}")
 
-    def test_reordered_bank_restores_stable_identity_paused_at_cue(self):
+    def test_inline_playlist_restores_without_manifest_paused_at_cue(self):
         host = self.host()
-        host.load_deck(0, str(self.bank), "A", track_id="second", bank_id="live-set",
-                       cue=0.25, pitch=-1.25)
+        host.load_deck(0, str(self.root / "first.wav"), "A")
+        host.load_deck(0, str(self.root / "second.wav"))
+        selected = host.engine.tracks[0].deck["tracks"][1]["id"]
+        host.remove_deck_entry(0, 1)
+        host.load_deck(0, str(self.root / "first.wav"))
+        entries = [dict(entry) for entry in host.engine.tracks[0].deck["tracks"]]
+        self.assertEqual(entries[0]["id"], selected)
+        self.assertEqual(host.engine.tracks[0].deck["track_id"], selected)
+        host.restore_deck(0, {
+            **host.engine.tracks[0].deck, "cue": 0.25, "pitch": -1.25,
+        }, "A")
         host.route(3, 0)
         host.engine.set_track_state(0, gain=0.4, muted=True)
         host.engine.set_parameter(0, "play", True)
@@ -72,10 +81,12 @@ class DeckSessionTests(unittest.TestCase):
         entry = saved["tracks"][0]
         self.assertEqual(saved["version"], 3)
         self.assertNotIn("native_state", entry)
-        self.assertEqual(entry["deck"], {
-            "bank_path": str(self.bank.resolve()), "bank_id": "live-set",
-            "track_id": "second", "cue": 0.25, "pitch": -1.25, "sync": False})
-        self.write_bank(list(reversed(self.entries)))
+        self.assertEqual(entry["deck"]["tracks"], entries)
+        self.assertEqual(entry["deck"]["track_id"], selected)
+        self.assertEqual(entry["deck"]["cue"], 0.25)
+        self.assertEqual(entry["deck"]["pitch"], -1.25)
+        self.assertFalse(entry["deck"]["sync"])
+        self.bank.unlink()
         restored = self.host()
         restored.restore_session()
         track = restored.engine.tracks[0]
@@ -83,7 +94,7 @@ class DeckSessionTests(unittest.TestCase):
         self.assertAlmostEqual(track.gain, 0.4)
         self.assertTrue(track.muted)
         self.assertEqual(restored.channel_map, {3: 0})
-        status = self.await_status(restored, 0, lambda state: state.get("track_id") == "second")
+        status = self.await_status(restored, 0, lambda state: state.get("track_id") == selected)
         self.assertFalse(status["play"])
         self.assertFalse(status["sync"])
         self.assertFalse(track.plugin.values["sync"])
@@ -92,6 +103,7 @@ class DeckSessionTests(unittest.TestCase):
         self.assertAlmostEqual(status["cue"], 0.25)
         self.assertAlmostEqual(status["position"], 0.25, places=3)
         self.assertEqual(track.plugin.values["track_select"], 1)
+        self.assertEqual(status["tracks"], entries)
 
     def test_old_session_defaults_to_sync_and_restores_paused(self):
         self.session.write_text(json.dumps({
@@ -105,6 +117,15 @@ class DeckSessionTests(unittest.TestCase):
         status = self.await_status(host, 0, lambda state: state.get("state") == "ready")
         self.assertTrue(status["sync"])
         self.assertFalse(status["play"])
+        host.save_session()
+        self.assertEqual(json.loads(self.session.read_text())["tracks"][0]["deck"]["tracks"],
+                         [{"id": entry["id"], "title": entry["title"],
+                           "path": str((self.root / entry["path"]).resolve())}
+                          for entry in self.entries])
+        self.bank.unlink()
+        restored = self.host()
+        restored.restore_session(start_audio=False)
+        self.assertEqual(restored.engine.tracks[0].deck["track_id"], "first")
 
     def test_missing_id_and_bank_identity_report_errors_but_restore_other_tracks(self):
         for bank_id, track_id, bank_path in (
@@ -128,19 +149,20 @@ class DeckSessionTests(unittest.TestCase):
 
     def test_snapshot_persists_committed_selection_not_requested(self):
         host = self.host()
-        host.load_deck(0, str(self.bank))
+        host.load_deck(0, str(self.root / "first.wav"))
+        selected = host.engine.tracks[0].deck["track_id"]
         with host.engine.state_lock:
             host.engine.tracks[0].deck.update(requested_track_id="second", state="loading")
             saved = snapshot(host)
-        self.assertEqual(saved["tracks"][0]["deck"]["track_id"], "first")
+        self.assertEqual(saved["tracks"][0]["deck"]["track_id"], selected)
         self.assertNotIn("requested_track_id", saved["tracks"][0]["deck"])
         self.assertNotIn("native_state", saved["tracks"][0])
 
     @unittest.skipUnless(HAS_MIDO, "mido required for routed MIDI")
     def test_real_routed_midi_disconnect_unroute_and_replacement_clear_nudge(self):
         host = self.host()
-        host.load_deck(0, str(self.bank))
-        host.load_deck(1, str(self.bank))
+        host.load_deck(0, str(self.root / "first.wav"))
+        host.load_deck(1, str(self.root / "first.wav"))
         host.route(0, 0)
         host.route(1, 1)
         controller = MidiInputController(host.engine)
@@ -169,7 +191,8 @@ class DeckSessionTests(unittest.TestCase):
         self.await_status(host, 0, lambda state: state.get("nudge") == 0)
         send([0x90, 63, 127])
         old_generation = host.engine.tracks[0].generation
-        host.load_deck(0, str(self.bank))
+        host.remove_instrument(0)
+        host.load_deck(0, str(self.root / "first.wav"))
         self.assertNotEqual(host.engine.tracks[0].generation, old_generation)
         self.assertEqual(host.engine.tracks[0].deck["nudge"], 0)
         send([0x90, 64, 127])
@@ -199,16 +222,43 @@ class DeckSessionTests(unittest.TestCase):
                 server._drain_commands()
                 return "\n".join(_read_response_lines(reader))
 
-            self.assertIn("track 1 = A", command(f'track 1 deck "{self.bank}" --name A'))
+            self.assertIn("track 1 = A", command(f'track 1 deck "{self.root / "first.wav"}" --name A'))
+            first = host.engine.tracks[0]
+            generation, pid = first.generation, first.worker_pid
+            first_id = first.deck["track_id"]
+            self.assertFalse(first.deck["play"])
+            self.assertNotIn("Error:", command("set 1 play true"))
+            self.assertNotIn("Error:", command(f'track 1 deck "{self.root / "second.wav"}"'))
+            track = host.engine.tracks[0]
+            self.assertEqual((track.generation, track.worker_pid), (generation, pid))
+            self.assertEqual(track.name, "A")
+            self.assertTrue(track.deck["play"])
+            self.assertEqual(track.deck["track_id"], first_id)
+            self.assertEqual(len(track.deck["tracks"]), 2)
+            self.assertEqual(track.plugin.parameters["track_select"].range, (1, 2))
+            self.assertEqual(list(track.plugin.parameters)[:3], ["track_select", "seek", "nudge"])
+            self.assertNotIn("Error:", command("track 1 deck remove 2"))
+            self.assertTrue(host.engine.tracks[0].deck["play"])
+            self.assertIn("track 1 clear", command("track 1 deck remove 1"))
+            self.assertNotIn("Error:", command(f'track 1 deck "{self.root / "second.wav"}" --name Renamed'))
+            self.assertEqual(host.engine.tracks[0].name, "Renamed")
             self.assertIn("pitch =", command("set 1 pitch -1.25"))
             self.assertIn("seek accepted", command("track 1 deck seek 0.5"))
             self.assertIn("cue_set accepted", command("track 1 deck cue set"))
             self.assertIn("cue accepted", command("track 1 deck cue"))
-            self.assertIn("bank_id = live-set", command("track 1 deck status"))
+            status_text = command("track 1 deck status")
+            self.assertIn(str(self.root / "first.wav"), status_text)
+            self.assertIn(str(self.root / "second.wav"), status_text)
             self.assertIn("track_select", command("get 1"))
             self.assertIn("request accepted", command("set 1 track_select 2"))
-            reply = json.loads(command('\x01' + json.dumps("track 1 deck ")))
-            self.assertEqual(reply["matches"], ["cue", "seek", "status"])
+            selected = host.engine.tracks[0].deck["tracks"][1]["id"]
+            status = self.await_status(host, 0, lambda state: state.get("requested_track_id") == selected)
+            self.assertEqual(status["track_id"], first_id)
+            self.assertNotIn("Error:", command("track 1 deck remove 1"))
+            status = self.await_status(host, 0, lambda state: state.get("track_id") == selected)
+            self.assertFalse(status["play"])
+            self.assertEqual(status["position"], 0)
+            self.assertEqual(host.engine.tracks[0].plugin.parameters["track_select"].range, (1, 1))
         finally:
             sock.shutdown(socket.SHUT_RDWR)
             writer.close()

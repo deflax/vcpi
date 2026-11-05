@@ -1,11 +1,11 @@
-"""Music-bank validation and multipart catalog regression coverage."""
+"""Inline playlist validation, legacy migration and multipart catalog coverage."""
 
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from core.deck_bank import CATALOG_LIMIT, encode_deck_message, load_bank
+from core.deck_bank import CATALOG_LIMIT, audio_entry, encode_deck_message, load_bank, make_catalog
 from core.state_transport import receive_frame, send_frame
 
 
@@ -99,3 +99,36 @@ class DeckBankTests(unittest.TestCase):
         self.path.write_bytes(b" " * (CATALOG_LIMIT + 1))
         with self.assertRaisesRegex(ValueError, "exceeds"):
             load_bank(self.path)
+
+    def test_audio_entries_have_unique_stable_ids_and_absolute_paths(self):
+        audio = self.root / "song.WAV"
+        audio.write_bytes(b"audio validation belongs to the native loader")
+        first, second = audio_entry(audio), audio_entry(audio)
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(first["path"], str(audio.resolve()))
+        self.assertEqual(first["title"], "song")
+        encoded = make_catalog("playlist", [first, second], track_id=second["id"])
+        catalog = json.loads(encoded)
+        self.assertEqual(catalog["tracks"], [first, second])
+        self.assertEqual(catalog["initial_track"], 2)
+        self.assertEqual(catalog["bank_path"], "session:playlist")
+
+    def test_inline_playlist_rejects_empty_duplicate_and_relative_entries(self):
+        valid = {"id": "entry", "path": str(self.root / "song.wav")}
+        for entries in ([], [valid, valid], [{"id": "entry", "path": "song.wav"}]):
+            with self.subTest(entries=entries), self.assertRaises(ValueError):
+                make_catalog("playlist", entries)
+        self.bank()
+        with self.assertRaises(ValueError):
+            audio_entry(self.path)
+        with self.assertRaises(FileNotFoundError):
+            audio_entry(self.root / "absent.wav")
+
+    def test_updates_retain_catalog_and_metadata_bounds(self):
+        catalog = load_bank(self.bank())
+        with self.assertRaisesRegex(ValueError, "metadata"):
+            encode_deck_message({"operation": "update_deck_catalog", "arguments": {
+                "catalog": catalog, "name": "x" * 65536}}, 65536)
+        with self.assertRaisesRegex(ValueError, "exceeds"):
+            encode_deck_message({"operation": "update_deck_catalog", "arguments": {
+                "catalog": "x" * (CATALOG_LIMIT + 1)}}, 65536)

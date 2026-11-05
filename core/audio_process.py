@@ -292,7 +292,7 @@ class _OwnerRuntime:
             worker.poll_failure()
             status = worker.poll_deck_status() if track.source_type == "deck" else None
             if status is not None:
-                track.deck.update(status)
+                apply_deck_status(track, status)
                 self.engine._applied_updates.append(
                     ("deck", index, self.generations[index], status))
             fields = {"worker_pid": worker.pid, "worker_failure": worker.failure,
@@ -419,6 +419,11 @@ class _OwnerRuntime:
             retired.render_owner.shutdown()
             return self.state_reply()
         if operation in {"load_effect", "remove_effect"} and arguments.get("track_index") is not None:
+            index = arguments["track_index"]
+            forwarded = {key: value for key, value in arguments.items() if key != "track_index"}
+            self.track_request(index, operation, **forwarded)
+            return self.state_reply()
+        if operation == "update_deck_catalog":
             index = arguments["track_index"]
             forwarded = {key: value for key, value in arguments.items() if key != "track_index"}
             self.track_request(index, operation, **forwarded)
@@ -557,7 +562,7 @@ class _OwnerRuntime:
                 operation = request["operation"]
                 if operation == "load_plugin_state":
                     validate_native_message(request, CONTROL_LIMIT)
-                elif operation == "load_deck":
+                elif operation in {"load_deck", "update_deck_catalog"}:
                     encode_deck_message(request, CONTROL_LIMIT)
                 else:
                     _encode(request, CONTROL_LIMIT)
@@ -996,9 +1001,9 @@ class RemoteAudioEngine:
         message = (encode_native_message(request, CONTROL_LIMIT)
                    if operation == "load_plugin_state" else
                    encode_deck_message(request, CONTROL_LIMIT)
-                   if operation == "load_deck" else _encode(request, CONTROL_LIMIT))
+                   if operation in {"load_deck", "update_deck_catalog"} else _encode(request, CONTROL_LIMIT))
         try:
-            if operation in {"sync_state", "load_plugin_state", "load_deck"}:
+            if operation in {"sync_state", "load_plugin_state", "load_deck", "update_deck_catalog"}:
                 reply = self._exchange_native(message, operation, timeout)
             else:
                 send_frame(self._control, message, CONTROL_LIMIT)

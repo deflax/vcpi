@@ -108,16 +108,19 @@ Loading or replacing a track does not stop unrelated tracks; read-only plugin
 commands use cached snapshots.
 
 Sessions save native VST3 state chunks for instruments, track inserts, and master
-effects; WAV tracks remain path-based, while decks save bank/track identity, cue,
-pitch and sync mode and restore paused. See [session commands](USAGE.md#session-commands)
+effects; WAV tracks remain path-based, while decks embed their playlists, selected
+song identity, cue, pitch and sync mode and restore paused. See [session commands](USAGE.md#session-commands)
 for save/restore behavior and legacy session compatibility.
 
-Native decks stream mono/stereo AIFF, WAV, MP3 and FLAC tracks from JSON music
-banks. Automatic beat detection supplies a tempo and beat grid; decks follow the
-global tempo and beat phase by default, or Ableton Link when enabled. Each has
-play/pause, vinyl-style speed/pitch, momentary nudge, seek and one cue point.
+Native decks stream mono/stereo AIFF, WAV, MP3 and FLAC tracks from session-owned
+playlists. Load an audio file with `track 1 deck song.wav`; repeat with another
+file to append, or use `track 1 deck remove <index>` to remove a song. Automatic
+beat detection supplies a tempo and beat grid; decks follow global tempo and
+beat phase by default, or Ableton Link when enabled. Each has play/pause,
+vinyl-style speed/pitch, momentary nudge, seek and one cue point. The first three
+parameters—track selection, seek and nudge—map automatically to MIDI Mix knobs.
 Use `set 1 sync false` for manual beatmatching. See
-[deck commands and MIDI bindings](USAGE.md#deck-commands) for the manifest format,
+[deck commands and MIDI bindings](USAGE.md#deck-commands) for playlist editing,
 analysis limits and controls. There is no key lock, looping or crossfader.
 
 ## Repository Layout
@@ -452,8 +455,9 @@ You can include or omit the `.wav` extension in `<sample>`.
 For continuous deck playback instead of MIDI-triggered sample voices:
 
 ```text
-vcpi> track 1 deck /music/live-set.json --name Deck-A
-vcpi> track 2 deck /music/live-set.json --name Deck-B
+vcpi> track 1 deck /music/opening.wav --name Deck-A
+vcpi> track 1 deck /music/second.flac
+vcpi> track 2 deck /music/other.mp3 --name Deck-B
 vcpi> tempo 120
 vcpi> audio start
 vcpi> set 1 play true
@@ -461,8 +465,9 @@ vcpi> set 2 play true
 vcpi> track 2 deck status
 ```
 
-Both decks initially load paused. Select bank entries with
-`set 1 track_select 2`; selection is asynchronous and commits paused without
+Both decks initially load paused; the second command appends to Deck A without
+changing its selected song. Select playlist entries with `set 1 track_select 2`;
+selection is asynchronous and commits paused without
 replacing the worker or inserts. Inspect `track 1 deck status` for requested
 versus applied identity, detected BPM, confidence, sync state and errors.
 Automatic analysis targets steady 60–200 BPM material; uncertain grids remain

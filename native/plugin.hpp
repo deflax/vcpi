@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "deck.hpp"
+#include "ownership.hpp"
 #include <array>
 #include <atomic>
 #include <map>
@@ -17,27 +18,6 @@ constexpr std::size_t midiStorageBytes = midiCapacity * (midiMaxBytes + 32);
 constexpr std::size_t maxEffects = 64;
 using Scalar = std::variant<double, bool, std::string>;
 
-// A single bounded acquire attempt on the render side; only control threads wait.
-class Ownership {
-public:
-    bool tryAcquire() noexcept {
-        std::uint32_t expected = 0;
-        return state.compare_exchange_strong(expected, 1, std::memory_order_acquire, std::memory_order_relaxed);
-    }
-    void acquire();
-    void release() noexcept { state.store(0, std::memory_order_release); }
-private:
-    std::atomic<std::uint32_t> state{0};
-};
-class ControlOwnership {
-public:
-    explicit ControlOwnership(Ownership& value) : owner(value) { owner.acquire(); }
-    ~ControlOwnership() { owner.release(); }
-    ControlOwnership(const ControlOwnership&) = delete;
-    ControlOwnership& operator=(const ControlOwnership&) = delete;
-private:
-    Ownership& owner;
-};
 struct ParameterSnapshot {
     std::string key, kind, label, units, stringValue;
     std::vector<std::string> validValues;
@@ -65,6 +45,7 @@ public:
     bool isEffect() const noexcept { return effect; }
     DeckStatus deckStatus() const;
     void deckCommand(const std::string& action, double value = 0);
+    void updateDeckCatalog(const std::string& catalog);
     bool compatible(double rate, int size) const noexcept { return sampleRate == rate && frames == size; }
     bool tryAcquire() noexcept { return ownership.tryAcquire(); }
     void release() noexcept { ownership.release(); }
@@ -92,6 +73,8 @@ private:
     // then shuts it down on the owner's control thread, not during C++ atexit.
     juce::ScopedJuceInitialiser_GUI juceLifetime;
     Ownership ownership;
+    // Control-only serialization; never acquired by the audio callback.
+    mutable std::mutex deckMutex;
     const double sampleRate;
     const int frames;
     bool effect = false, wav = false;
