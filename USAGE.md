@@ -47,6 +47,16 @@ $XDG_RUNTIME_DIR/vcpi/vcpi.sock
 # root fallback: /run/vcpi/vcpi.sock
 ```
 
+### Command history
+
+The interactive client saves commands to `~/.config/vcpi/history` as you enter
+them. History survives client disconnects and `vcpid` restarts and is shared by
+clients running as the same user. Use **Up/Down** to browse previous commands or
+**Ctrl-R** to search them. Piped/non-interactive commands are not saved.
+
+History is separate from saved sessions, so `--no-restore` does not clear it.
+To clear it, close your clients and delete `~/.config/vcpi/history`.
+
 ## Host Startup Flags
 
 These flags apply when starting the host server (`python main.py serve`).

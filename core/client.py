@@ -25,7 +25,7 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion, CompleteEvent
 from prompt_toolkit.document import Document
-from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.history import FileHistory
 from rich.console import Console
 
 from core.client_display import display_response
@@ -63,10 +63,13 @@ def connect(sock_path: str | Path | None = None):
         # Keep socket cleanup active during banner and completion requests too.
         if not _read_response(rfile, console):
             return
+        if interactive:
+            history_path = Path("~/.config/vcpi/history").expanduser()
+            history_path.parent.mkdir(parents=True, exist_ok=True)
         session = (
             PromptSession(
                 completer=CommandCompleter(rfile, wfile),
-                history=InMemoryHistory(),
+                history=FileHistory(history_path),
                 complete_while_typing=False,
             )
             if interactive else None
