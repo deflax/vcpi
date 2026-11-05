@@ -230,6 +230,34 @@ class ParameterDisplayTests(unittest.TestCase):
         self.assertEqual(table.row_count, 8)
         self.assertIsNone(_get_table(["Controls:", "Error: failed"]))
 
+    def test_empty_parameter_value_preserves_following_parameters(self):
+        self.instrument.values["mode"] = ""
+        rendered = io.StringIO()
+        display_response(Console(file=rendered, width=140, color_system=None),
+                         "get 1", self.execute("get 1").splitlines())
+        text = rendered.getvalue()
+        self.assertIn("mode", text)
+        self.assertIn("cutoff", text)
+        self.assertIn("1200.0 Hz", text)
+        self.assertIn("midi_depth", text)
+
+    def test_deck_status_with_empty_errors_preserves_playlist_and_parameters(self):
+        track = self.cli.host.engine.tracks[0]
+        track.source_type = "deck"
+        track.deck = {
+            "bank_id": "playlist", "track_id": "song", "track_title": "Opening",
+            "error": "", "sync_error": "",
+            "tracks": [{"id": "song", "title": "Opening", "path": "/music/opening.wav"}],
+        }
+        rendered = io.StringIO()
+        display_response(Console(file=rendered, width=140, color_system=None),
+                         "get 1", self.execute("get 1").splitlines())
+        text = rendered.getvalue()
+        self.assertIn("track_title = Opening", text)
+        self.assertIn("1: Opening", text)
+        self.assertIn("/music/opening.wav", text)
+        self.assertIn("cutoff = 1200.0 Hz", text)
+
 
 if __name__ == "__main__":
     unittest.main()

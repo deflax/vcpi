@@ -538,6 +538,10 @@ nudge spans -1..+1. Playlist edits and committed song changes refresh those
 ranges. Nudge affects manual playback when sync is off or unavailable; return it
 to zero after nudging. Remaining controls are `play`, `pitch` and `sync`.
 
+`get <track>` includes deck status and the indexed playlist before the parameter
+listing. Empty `error` or `sync_error` fields are normal when no error is present;
+the client preserves these blank values when displaying the response.
+
 Automatic analysis scans at most the first 60 seconds of the selected file,
 off the render thread, and caches the result while the playlist is open. It targets
 steady 60–200 BPM material with at least eight usable transients. Status reports

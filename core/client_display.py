@@ -110,7 +110,7 @@ def _get_table(lines: list[str]) -> Table | None:
             continue
         if not line.startswith("  ") or " = " not in line:
             return None
-        name, value = line.strip().split(" = ", 1)
+        name, value = line.lstrip().split(" = ", 1)
         range_text = ""
         match = re.search(r"  \((?:range|choices) (.*)\)$", value)
         if match:
