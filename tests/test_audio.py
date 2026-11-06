@@ -319,6 +319,67 @@ class NativeAudioTests(unittest.TestCase):
             self.assertEqual(demoted["policy"], "SCHED_OTHER")
             self.assertEqual(demoted["priority"], 0)
 
+    @unittest.skipUnless(sys.platform == "darwin", "macOS thread scheduling")
+    def test_macos_track_uses_audio_deadline_without_promoting_control(self):
+        import ctypes as ct
+
+        # Query the actual Mach thread, not just vcpi's startup report.
+        system = ct.CDLL("/usr/lib/libSystem.B.dylib")
+        uint = ct.c_uint32
+        system.pthread_self.restype = ct.c_void_p
+        system.pthread_mach_thread_np.argtypes = [ct.c_void_p]
+        system.pthread_mach_thread_np.restype = uint
+        system.thread_policy_get.argtypes = [
+            uint, uint, ct.c_void_p, ct.POINTER(uint), ct.POINTER(ct.c_int)]
+        system.task_threads.argtypes = [
+            uint, ct.POINTER(ct.POINTER(uint)), ct.POINTER(uint)]
+        system.thread_info.argtypes = [uint, uint, ct.c_void_p, ct.POINTER(uint)]
+        system.mach_port_deallocate.argtypes = [uint, uint]
+        system.vm_deallocate.argtypes = [uint, ct.c_size_t, ct.c_size_t]
+        task = uint.in_dll(system, "mach_task_self_").value
+        caller = system.pthread_mach_thread_np(system.pthread_self())
+
+        def policy(port):
+            values = (uint * 4)()
+            count, default = uint(4), ct.c_int(0)
+            self.assertEqual(system.thread_policy_get(
+                port, 2, values, ct.byref(count), ct.byref(default)), 0)
+            return tuple(values), default.value
+
+        before = policy(caller)
+        track = self.track(0)
+        self.block()
+        np.testing.assert_allclose(self.block(), 0.25, atol=1e-6)
+        realtime = track.render_owner.transport.stats()["realtime"]
+        self.assertEqual(realtime["state"], "configured", realtime)
+        self.assertEqual(policy(caller), before)
+
+        ports, count = ct.POINTER(uint)(), uint()
+        self.assertEqual(system.task_threads(task, ct.byref(ports), ct.byref(count)), 0)
+        try:
+            worker_policy = None
+            for port in ports[:count.value]:
+                identity, size = (ct.c_uint64 * 3)(), uint(6)
+                if system.thread_info(port, 4, identity, ct.byref(size)) == 0:
+                    if identity[0] == realtime["thread_id"]:
+                        worker_policy = policy(port)
+                        break
+            self.assertIsNotNone(worker_policy, "Reported track thread must exist")
+            values, default = worker_policy
+            self.assertEqual(default, 0, "Track must have an actual time constraint")
+            timebase = (uint * 2)()
+            system.mach_timebase_info.argtypes = [ct.c_void_p]
+            self.assertEqual(system.mach_timebase_info(timebase), 0)
+            expected = int(64 / 44100 * 1e9 * timebase[1] / timebase[0])
+            self.assertAlmostEqual(values[0], expected, delta=1)
+            self.assertAlmostEqual(values[1], expected / 2, delta=1)
+            self.assertEqual(values[2], values[0])
+        finally:
+            for port in ports[:count.value]:
+                system.mach_port_deallocate(task, port)
+            system.vm_deallocate(task, ct.cast(ports, ct.c_void_p).value,
+                                 count.value * ct.sizeof(uint))
+
 
 if __name__ == "__main__":
     unittest.main()

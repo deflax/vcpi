@@ -72,7 +72,7 @@ void TrackRunner::process() {
 }
 void TrackRunner::run() noexcept {
     // Complete promotion (including a nonterminal denial) before any barrier ACK.
-    transport->shared().realtime.promote(trackRealtimePriority);
+    transport->shared().realtime.promote(trackRealtimePriority, frames / sampleRate);
     while (!stopping.load(std::memory_order_acquire)) {
         if (!gate.tryAcquire()) {
             std::this_thread::sleep_for(std::chrono::microseconds(100));

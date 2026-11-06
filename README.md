@@ -108,6 +108,19 @@ or acquires the GIL. Shared-memory track transport adds one block of buffering.
 Loading or replacing a track does not stop unrelated tracks; read-only plugin
 commands use cached snapshots.
 
+Selective scheduling targets only native audio threads. Linux requests
+`SCHED_FIFO` for output and track rendering. macOS requests Mach
+`THREAD_TIME_CONSTRAINT_POLICY` for track threads at startup while leaving
+output callback scheduling to CoreAudio (`backend-managed` in diagnostics).
+A macOS track's `configured` state means the startup request was accepted, not
+that its live policy is continuously verified; the kernel can later demote it.
+The one-block buffering and track polling/wakeup mechanism are unchanged, and
+dropout-free audio is not guaranteed. Under desktop CPU contention, late track
+blocks can be replaced by silence even with no callback underruns: inspect
+missing track blocks as well as output timing and underruns. See
+[selective realtime scheduling](USAGE.md#selective-realtime-scheduling) for
+platform-specific states and Linux permissions.
+
 Sessions save native VST3 state chunks for instruments, track inserts, and master
 effects; WAV tracks remain path-based, while decks embed their playlists, selected
 song identity, cue, pitch, sync mode and phase correction and restore paused. See [session commands](USAGE.md#session-commands)

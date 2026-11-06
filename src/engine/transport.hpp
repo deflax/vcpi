@@ -13,7 +13,7 @@
 #include <string>
 
 namespace vcpi {
-constexpr std::uint32_t transportVersion = 3;
+constexpr std::uint32_t transportVersion = 4;
 namespace detail {
 static_assert(sizeof(float) == sizeof(std::uint32_t) && std::numeric_limits<float>::is_iec559,
               "Audio peaks require 32-bit IEEE-754 floats");

@@ -194,14 +194,20 @@ starting `./vcpid` manually may still report `denied`. `ulimit -r` shows the
 shell's realtime-priority limit. Any manual-launch permission setup must allow
 the native child threads to request priority 20 without globally promoting
 Python/control threads. Do not use whole-process `chrt` as a substitute.
-This Linux-only feature reports `unsupported` on macOS and makes no macOS
-scheduling-policy changes.
+These FIFO priorities and systemd permissions are Linux-specific. On macOS,
+native track threads instead request Mach `THREAD_TIME_CONSTRAINT_POLICY` at
+startup; `configured` records acceptance of that request, not continued live
+policy (the kernel can later demote the thread). Output callback scheduling is
+left to CoreAudio and reported as `backend-managed`; vcpi does not change it.
 
-Scheduling does not change the buffer size or the existing one-block track
-handoff latency, and does not guarantee dropout-free audio under overload.
-Measure callback deadlines, underruns, and missing track blocks before further
-tuning; global realtime promotion, wakeup changes, memory locking, affinity,
-governor changes, and kernel tuning are not part of this setup.
+Scheduling does not change the buffer size, existing one-block track handoff
+latency, or track polling/wakeup mechanism, and does not guarantee dropout-free
+audio under overload. Desktop CPU contention can make track blocks arrive late
+even when the output callback meets its deadline: missing blocks silence that
+track and can increase without callback underruns. Measure callback deadlines,
+underruns, and missing track blocks separately before further tuning; global
+realtime promotion, wakeup changes, memory locking, affinity, governor changes,
+and kernel tuning are not part of this setup.
 
 Verification scope: the native extension and a daemon/CLI smoke run were
 exercised on Linux aarch64 with CPython 3.13, an ALSA null sink, and a spawned WAV

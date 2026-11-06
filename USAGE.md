@@ -883,37 +883,61 @@ callback thread and **10** for each track DSP thread by default. Promotion is
 attempted once per render-thread lifetime: at the output's first actual callback
 after stream startup, and at track-runner startup. Python and process-control
 threads retain normal `SCHED_OTHER` scheduling; process isolation is unchanged.
-There is no whole-daemon realtime-priority flag. On macOS and other non-Linux
-platforms, this feature reports `unsupported` and changes no scheduling policy.
-Build the extension on each platform as described in `README.md`.
+
+On macOS, each native track DSP thread requests Mach
+`THREAD_TIME_CONSTRAINT_POLICY` once at track-runner startup. Diagnostics call
+this policy `THREAD_TIME_CONSTRAINT`, not FIFO: it has no numeric FIFO priority.
+The period and constraint are one audio block (`buffer_size / sample_rate`),
+with a nominal computation budget of half that period and preemption enabled.
+The output callback remains **CoreAudio-managed**;
+vcpi does not change its scheduling policy. Python and process-control threads
+are not promoted.
+
+There is no whole-daemon realtime-priority flag. Other platforms report
+`unsupported` and change no scheduling policy. Build the extension on each
+platform as described in `README.md`.
 
 `status` displays cached output/track scheduling health, without RPC to native
 owners. `audio diagnose` requests fresh native stats through the control
-channel. Live OS policy/priority queries happen on the control side, not in the
-render callback. Both show the scheduling state, observed policy/priority,
-requested priority, native Linux thread ID (TID), and any errno for running
-threads:
+channel. On Linux, live OS policy/priority queries happen on the control side,
+not in the render callback. Both commands show the scheduling state, policy,
+requested policy, native thread ID (TID), and any platform-specific error;
+Linux also shows actual/requested FIFO priority. On macOS, track diagnostics
+report the **startup request result**, not a live-policy query. `configured`
+means Mach accepted the request at startup; the kernel can subsequently demote
+the thread, so this state does not establish continued realtime scheduling.
 
 | State | Meaning |
 |---|---|
-| `inactive` | No output stream is active; TID is 0. |
-| `pending` | The output stream is starting, but its first callback has not attempted promotion yet. |
-| `active` | The live thread has `SCHED_FIFO` at exactly the requested priority. |
-| `denied` | The initial promotion failed; the observed policy/priority and errno show the actual result. |
-| `degraded` | Promotion succeeded initially, but the live policy/priority no longer matches the request. |
-| `unavailable` | The live thread's scheduling policy/priority cannot be queried. |
-| `unsupported` | This selective scheduling feature is Linux-only. |
+| `inactive` | No output stream or track runner is active; TID is 0. The requested policy is still shown. |
+| `pending` | Scheduling setup has not completed; on Linux output, the first callback has not attempted promotion yet. |
+| `active` | Linux: the live thread has `SCHED_FIFO` at exactly the requested priority. |
+| `configured` | macOS track: Mach accepted the time-constraint request at startup; continued live policy is not monitored. |
+| `backend-managed` | macOS output: the stream is started and scheduling is managed by CoreAudio, not changed or verified by vcpi. |
+| `denied` | The initial scheduling request failed. Linux reports actual policy/priority and errno; macOS reports the Mach error code and message. Rendering continues. |
+| `degraded` | Linux: promotion succeeded initially, but the live policy/priority no longer matches the request. |
+| `unavailable` | Scheduling information for the live thread is unavailable. |
+| `unsupported` | Selective scheduling is supported on Linux and macOS, not this platform. |
 
 An output stop resets scheduling health to `inactive`; restarting attempts
-promotion again on the new callback thread. Track promotion health remains
-associated with that track's runner lifetime even while output is stopped.
-`denied` is nonterminal: rendering continues at the actual policy, commonly
+Linux promotion again on the new callback thread, or reports `backend-managed`
+for CoreAudio. Track scheduling health remains associated with that track's
+runner lifetime even while output is stopped. `denied` is nonterminal:
+rendering continues without the requested policy. On Linux this is commonly
 `SCHED_OTHER priority 0`, with e.g. `errno=1 (Operation not permitted)`.
 Check the reported result rather than assuming requested priority means success.
 
 Native `Engine.stats()` and `Transport.stats()` expose a `realtime` dictionary
-with `state`, `policy`, `priority` (actual), `requested_priority`, `error` (integer
-errno, 0 on success), and `thread_id` (native Linux TID, 0 before startup).
+with `state`, `policy`, `priority`, `requested_policy`, `requested_priority`,
+`error` (integer code, 0 on success), `error_domain`, `error_message`, and
+`thread_id`. Linux uses `requested_policy=SCHED_FIFO`, `error_domain=errno`,
+actual/requested numeric priorities, and the native Linux TID. macOS tracks use
+`policy=requested_policy=THREAD_TIME_CONSTRAINT`, priority fields of 0 (not FIFO
+priorities), `error_domain=mach`, a Mach `kern_return_t` error and its
+`mach_error_string` message, and the 64-bit native pthread thread ID. CoreAudio
+output uses `policy=requested_policy=CoreAudio`, priority fields of 0, error 0
+and TID 0: those values do not describe its actual callback scheduling policy.
+Before track startup, TID is 0.
 The control facade carries output health as `RemoteAudioEngine.output_realtime`
 and track health as `InstrumentTrack.worker_realtime` in initial state and through
 its existing periodic update channel.
@@ -926,11 +950,17 @@ does not inherit the service's allowance, so manual startup may report `denied`;
 inspect the shell's limit with `ulimit -r`. Do not run the whole daemon under
 `chrt` or as root to bypass this distinction.
 
-This scheduling change does **not** change buffers or one-block handoff latency,
-or guarantee that overloaded plugins, device backends, or the OS meet deadlines.
-Measure callback timing, underruns, and missing track blocks before tuning;
-global realtime promotion, wakeup replacement, memory locking, affinity,
-governor changes, and kernel tuning are outside this feature.
+This scheduling change does **not** change buffers, the one-block track handoff
+latency, or the existing track polling/wakeup mechanism. It does not guarantee
+dropout-free audio or that overloaded plugins, device backends, or the OS meet
+deadlines. Under desktop CPU contention, a track renderer can miss its handoff
+even when the output callback runs on time: the callback mixes silence for that
+track and increments its missing-block counter. Callback underruns instead
+reflect the output backend running short of audio; zero underruns do not mean
+that every track block arrived. Measure callback timing, underruns, and missing
+track blocks separately before tuning; global realtime promotion, wakeup
+replacement, memory locking, affinity, governor changes, and kernel tuning are
+outside this feature.
 
 ### MIDI Commands
 

@@ -24,21 +24,47 @@ def format_output_device(name, index) -> str:
 
 
 def format_realtime(info: dict) -> str:
-    """Describe observed native scheduling, not merely the requested policy."""
+    """Describe native scheduling observations with platform-specific semantics."""
     if not info:
         return "not reported"
     state = info["state"]
     if state == "unsupported":
-        return "unsupported (Linux-only)"
+        return "unsupported"
+    policy = info.get("policy", "unknown")
+    requested_policy = info.get("requested_policy") or (
+        policy if policy in {"THREAD_TIME_CONSTRAINT", "CoreAudio"} else "SCHED_FIFO"
+    )
     requested = info["requested_priority"]
     if state in {"inactive", "pending"}:
-        return f"{state} (requested SCHED_FIFO priority {requested})"
-    text = (
-        f"{state}: {info['policy']} priority {info['priority']}"
-        f" (requested {requested}), TID {info['thread_id']}"
-    )
+        request = requested_policy
+        if requested_policy == "SCHED_FIFO":
+            request += f" priority {requested}"
+        return f"{state} (requested {request})"
+    if requested_policy == "CoreAudio":
+        text = f"{state}: {policy}"
+    elif requested_policy == "THREAD_TIME_CONSTRAINT":
+        text = (
+            f"{state}: {policy} (requested {requested_policy}), TID {info['thread_id']}"
+        )
+        if state == "configured":
+            text += " (startup accepted; live policy not monitored)"
+    else:
+        text = (
+            f"{state}: {policy} priority {info['priority']}"
+            f" (requested {requested}), TID {info['thread_id']}"
+        )
     if info["error"]:
-        text += f", errno={info['error']} ({os.strerror(info['error'])})"
+        domain = info.get("error_domain") or (
+            "mach" if requested_policy == "THREAD_TIME_CONSTRAINT" else "errno"
+        )
+        message = (
+            os.strerror(info["error"])
+            if domain == "errno"
+            else info.get("error_message")
+        )
+        text += f", {domain}={info['error']}"
+        if message:
+            text += f" ({message})"
     return text
 
 

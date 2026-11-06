@@ -88,6 +88,9 @@ py::dict realtimeDict(const RealtimeStats& info) {
     result["policy"] = info.policy;
     result["priority"] = info.priority;
     result["requested_priority"] = info.requestedPriority;
+    result["requested_policy"] = info.requestedPolicy;
+    result["error_domain"] = info.errorDomain;
+    result["error_message"] = info.errorMessage;
     result["error"] = info.error;
     result["thread_id"] = info.threadId;
     return result;
