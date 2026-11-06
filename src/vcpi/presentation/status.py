@@ -124,6 +124,7 @@ def render_status(host: VcpiCore) -> str:
 
     rows.append(("MIDIMix IN", host.mixer_midi_name or "closed"))
     rows.append(("MIDIMix OUT", host.mixer_midi_out_name or "closed"))
+    rows.append(("BeatStep Pro IN", host.beatstep.input_port_name or "closed"))
 
     rows.append(("", ""))  # spacer
 
@@ -132,6 +133,13 @@ def render_status(host: VcpiCore) -> str:
         rows.append(("Link", f"{link.bpm:.1f} BPM  ({link.num_peers} peers)"))
     else:
         rows.append(("Link", "disabled"))
+    timeline = host.timeline
+    sample = timeline.snapshot()
+    rows.append(("Clock", f"{sample.bpm:.2f} BPM | selected={sample.source} "
+                 f"active={sample.active_source} | {sample.status}"))
+    rows.append(("Transport", f"{'running' if sample.running else 'stopped'} | "
+                 f"beat {sample.beat:.3f} | bar phase {sample.beat % timeline.BAR:.3f}/{timeline.BAR:g} | "
+                 f"position {'confirmed' if sample.position_confirmed else 'unconfirmed'}"))
 
     # -- Session -------------------------------------------------------------
     if host.loaded_session_path:

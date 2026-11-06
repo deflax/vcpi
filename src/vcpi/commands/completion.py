@@ -229,6 +229,12 @@ def _complete_midi(ctx):
         if len(args) == 1 and args[0] in ("input", "output"):
             return choices(_port_choices(args[0], prefix))
         return empty
+    if command == "beatstep":
+        if not args:
+            return choices(("input", "close"))
+        if args == ["input"]:
+            return choices(_port_choices("input", prefix))
+        return empty
     return empty
 
 
@@ -236,6 +242,12 @@ def _complete_sequencing(ctx):
     command, args = ctx.command, ctx.args
     choices = ctx.choices
     empty = {"start_position": 0, "matches": []}
+    if command == "clock":
+        if not args:
+            return choices(("source",))
+        return choices(("auto", "internal", "link", "beatstep")) if args == ["source"] else empty
+    if command == "transport":
+        return choices(("start", "stop", "continue", "align")) if not args else empty
     if command == "ableton":
         return choices(("link", "cut")) if not args else empty
     if command == "seq":
@@ -388,8 +400,8 @@ _GROUP_HANDLERS = {
     **dict.fromkeys(("save", "load", "help", "debug", "ps"), _complete_general),
     **dict.fromkeys(("mute", "solo", "note", "gain"), _complete_mixer),
     **dict.fromkeys(("show", "audio"), _complete_inspection),
-    **dict.fromkeys(("midi", "midimix"), _complete_midi),
-    **dict.fromkeys(("seq", "ableton"), _complete_sequencing),
+    **dict.fromkeys(("midi", "midimix", "beatstep"), _complete_midi),
+    **dict.fromkeys(("seq", "ableton", "clock", "transport"), _complete_sequencing),
     "track": _complete_track,
     **dict.fromkeys(("get", "set"), _complete_parameters),
 }

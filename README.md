@@ -119,7 +119,7 @@ playlists. Load an audio file with `track 1 deck song.wav`, or a directory with
 order without scanning subdirectories. Repeat either command to append new files;
 already-listed resolved paths are skipped. Use `track 1 deck remove <index>` to
 remove a song. Queen Mary DSP analyzes the whole selected file for tempo and a stable beat grid; decks
-follow global tempo and beat phase by default, or Ableton Link when enabled.
+follow the shared musical timeline's tempo and beat phase by default.
 Each has play/pause,
 vinyl-style speed/pitch, momentary nudge, seek and one cue point. The first three
 parameters—track selection, seek and nudge—map automatically to MIDI Mix knobs.
@@ -150,6 +150,7 @@ not audio or session playlists; see [deck commands](USAGE.md#deck-commands).
       client.py         # Unix-socket CLI client
       server.py         # Headless Unix-socket server
       link.py           # Ableton Link wrapper
+      timeline.py       # Shared clock authority, bar grid and transport
       sequencer.py      # Internal step sequencer
     engine/             # C++ hosting, sampler, decks, transport and mixer
       CMakeLists.txt    # Native extension build
@@ -365,23 +366,52 @@ Port indexes can change after reboot/replug, so always re-check with
 
 ### MIDI inputs (any keyboard, sequencer, etc.)
 
-All MIDI input devices are handled identically. Open any device with
+Generic MIDI inputs share a channel map. Open a keyboard with
 `midi input <port_index>` and route its MIDI channels to tracks:
 
 ```text
 vcpi> midi ports input
-vcpi> midi input 0       # e.g. BeatStep Pro
 vcpi> midi input 1       # e.g. keyboard
-vcpi> midi link 1 1      # BSP ch 1 -> track 1
-vcpi> midi link 2 2      # BSP ch 2 -> track 2
-vcpi> midi link 10 3     # BSP ch 10 -> track 3
 vcpi> midi link 5 1      # keyboard ch 5 -> track 1
 ```
 
-- Generic note inputs use the same commands; MIDI Mix has a separate control input.
+- Generic note inputs use the same commands; MIDI Mix and BeatStep Pro have dedicated integrations.
 - Routing is channel-based: `midi link <ch> <track>` maps a MIDI channel to a track.
 - Each device sends on its own channel(s); configure channels on the hardware.
 - Use `midi input close <index>` to close an open input.
+
+### Arturia BeatStep Pro
+
+The dedicated integration automatically identifies one unambiguous BeatStep Pro
+input after startup and reconnects it after replug. Use `beatstep input [port]`
+to select a port explicitly; `beatstep close` disables automatic reconnection.
+Do not open the same port as a generic MIDI input.
+
+- SEQUENCER 1 -> track 3; SEQUENCER 2 -> track 4; DRUM -> track 5.
+- CONTROL buttons 1–8 operate the deck on track 1; buttons 9–16 operate track 2.
+- Rotaries 1–4 and 9–12 target track 1; 5–8 and 13–16 target track 2.
+- Mappings live in `controllers/beatstep_pro.py`; vcpi never rewrites hardware
+  templates or requires per-session MIDI learn.
+
+The explicit application profile expects CONTROL channel 16, sequence channels
+1/2/10, Gate button CCs 36–51 and absolute rotary CCs 20–35. **These are not
+verified Arturia factory CC assignments.** Adapt the code profile to the
+controller's existing template once; CONTROL and sequencer channels must be
+distinct. See [BeatStep Pro setup](USAGE.md#beatstep-pro-controller) for details.
+
+### Shared clock and transport
+
+`clock` shows timing authority, BPM and position confidence. Select it with
+`clock source auto|internal|link|beatstep`. Auto prefers stable received BeatStep
+clock, then Link peers, then internal timing; USB presence alone never restarts
+playback. Clock loss continues internally without resetting position.
+
+Built-in sequences use a shared four-beat bar grid and launch at the next bar.
+`transport start` resets to beat one; `transport stop` pauses sequences;
+`transport continue` resumes; `transport align` declares the current downbeat.
+Decks keep independent play/pause and a continuously advancing beat-phase clock.
+Deck beat detection still does not identify the recording's musical downbeat.
+
 
 ### Akai MIDI Mix (hardware mixer)
 

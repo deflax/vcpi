@@ -187,8 +187,49 @@ def tempo(ctx, arg):
         return
     if parts:
         try:
-            ctx.host.link.bpm = validate_bpm(parts[0])
-        except ValueError as error:
+            ctx.host.timeline.bpm = validate_bpm(parts[0])
+        except (ValueError, RuntimeError) as error:
             ctx.emit(f"Error: {error}")
             return
-    ctx.emit(f"  {ctx.host.link.bpm:.1f} BPM")
+    ctx.emit(f"  {ctx.host.timeline.bpm:.1f} BPM")
+
+
+def clock(ctx, arg):
+    """Inspect timing authority or select auto, internal, Link, or BeatStep Pro."""
+    usage = "clock [source auto|internal|link|beatstep]"
+    parts = ctx.tokens(arg, usage)
+    if parts is None:
+        return
+    try:
+        if parts:
+            if len(parts) != 2 or parts[0] != "source":
+                raise ValueError(usage)
+            ctx.host.timeline.select_source(parts[1])
+        timeline = ctx.host.timeline
+        sample = timeline.snapshot()
+        ctx.emit(f"  Clock: selected={sample.source} active={sample.active_source} "
+                 f"status={sample.status} tempo={sample.bpm:.2f} BPM")
+        ctx.emit(f"  Beat={sample.beat:.3f} bar phase={sample.beat % timeline.BAR:.3f}/{timeline.BAR:g} "
+                 f"position={'confirmed' if sample.position_confirmed else 'unconfirmed'}")
+    except (ValueError, RuntimeError) as error:
+        ctx.emit(f"Error: {error}")
+
+
+def transport(ctx, arg):
+    """Read or change the shared sequencer transport, independently of decks."""
+    usage = "transport [start|stop|continue|align]"
+    parts = ctx.tokens(arg, usage)
+    if parts is None:
+        return
+    actions = {"start": ctx.host.timeline.start, "stop": ctx.host.timeline.stop,
+               "continue": ctx.host.timeline.resume, "align": ctx.host.timeline.align}
+    try:
+        if parts:
+            if len(parts) != 1 or parts[0] not in actions:
+                raise ValueError(usage)
+            actions[parts[0]]()
+        sample = ctx.host.timeline.snapshot()
+        ctx.emit(f"  Transport: {'running' if sample.running else 'stopped'} "
+                 f"beat={sample.beat:.3f}")
+    except (ValueError, RuntimeError) as error:
+        ctx.emit(f"Error: {error}")

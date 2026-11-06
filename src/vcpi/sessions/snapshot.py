@@ -86,14 +86,16 @@ def _snapshot_cached(host: VcpiCore) -> dict:
         "midi_inputs": host.midi_input_names,
         "midi_mix_in": host.mixer_midi_name,
         "midi_mix_out": host.mixer_midi_out_name,
+        "beatstep_in": host.preferred_beatstep_input,
     }
 
     return {
         "version": 3,
         "sample_rate": host.sample_rate,
         "buffer_size": host.buffer_size,
-        "bpm": host.link.bpm,
+        "bpm": host.timeline.bpm,
         "link_enabled": host.link.enabled,
+        "clock_source": host.timeline.source,
         "master_gain": host.engine.master_gain,
         "routing": routing,
         "tracks": tracks_data,

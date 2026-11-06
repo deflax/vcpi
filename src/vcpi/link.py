@@ -1,18 +1,13 @@
-"""Ableton Link synchronisation (aalink wrapper).
+"""Ableton Link adapter used by the shared musical timeline.
 
-LinkSync wraps the ``aalink`` library to provide:
-
-* Shared tempo (``bpm`` property, bidirectional with Link peers).
-* Beat-grid synchronisation via :meth:`sync` -- blocks the calling
-  thread until the shared Link timeline reaches the next *n*-th beat
-  boundary.  This is the mechanism the internal sequencer uses to
-  align its bar start/end with Ableton Live and other Link peers.
+The installed aalink binding exposes tempo, beat, playing, force_beat and
+start_stop_sync_enabled. External-clock phase is committed only when the
+timeline explicitly publishes it; Link remains collaborative between commits.
 """
 
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import logging
 import math
 import threading
@@ -35,13 +30,7 @@ def validate_bpm(value) -> float:
 
 
 class LinkSync:
-    """Minimal wrapper around aalink for tempo sync.
-
-    The async ``aalink.Link.sync(quantum)`` call is bridged to a
-    blocking :meth:`sync` that any thread can call.  Internally it
-    schedules the coroutine on the dedicated aalink event loop and
-    waits on a :class:`concurrent.futures.Future`.
-    """
+    """Thread-safe tempo, phase and transport access to aalink."""
 
     def __init__(self, bpm: float = 120.0):
         self._link = None
@@ -107,6 +96,8 @@ class LinkSync:
         try:
             link = self._make_link()
             link.enabled = True
+            link.quantum = 4.0
+            link.start_stop_sync_enabled = True
             with self._clock_lock:
                 self._link = link
                 self._enabled = True
@@ -170,40 +161,45 @@ class LinkSync:
     def beat(self) -> float:
         return self.timeline()[1]
 
-    # -- beat-grid sync (thread-safe) ----------------------------------------
+    @property
+    def playing(self) -> bool | None:
+        with self._clock_lock:
+            return bool(self._link.playing) if self._link is not None else None
 
-    def sync(self, beats: float, timeout: float = 4.0) -> float:
-        """Block until the Link timeline reaches the next *beats* boundary.
+    def publish(self, bpm: float, beat: float, running: bool, *,
+                phase: bool = False, transport: bool = False):
+        """Commit external timing using aalink's actual pybind API.
 
-        This is a thread-safe wrapper around ``await link.sync(beats)``.
-        It schedules the coroutine on the aalink event loop and waits
-        for the result.
-
-        Args:
-            beats:   Quantum value -- e.g. 4 for a full bar, 1 for a
-                     quarter-note, 0.5 for an eighth-note.
-            timeout: Maximum seconds to wait (safety net).
-
-        Returns:
-            The beat number at which the sync resolved (from aalink).
-
-        Raises:
-            RuntimeError: If Link is not enabled or the event loop is
-                not running.
+        ``request_beat`` preserves existing peers' phase, so it cannot bridge
+        an external clock. ``force_beat`` is used only on explicit alignment
+        or a bounded phase correction, never on every sampling tick.
         """
-        link = self._link
-        loop = self._loop
-        if link is None or loop is None or not self._enabled:
-            raise RuntimeError("Link is not enabled")
+        bpm = validate_bpm(bpm)
+        if not math.isfinite(beat):
+            raise ValueError("Link beat must be finite")
+        with self._clock_lock:
+            if self._link is None:
+                return
+            if abs(self._link.tempo - bpm) > 0.01:
+                self._link.tempo = bpm
+            if phase:
+                self._link.force_beat(beat)
+            if transport:
+                self._link.playing = running
 
-        fut: concurrent.futures.Future[float] = concurrent.futures.Future()
+    def seed(self, bpm: float, beat: float, running: bool):
+        """Offer the existing local clock to a newly enabled Link session.
 
-        async def _sync():
-            try:
-                beat = await link.sync(beats)
-                fut.set_result(beat)
-            except Exception as exc:
-                fut.set_exception(exc)
-
-        loop.call_soon_threadsafe(asyncio.ensure_future, _sync())
-        return fut.result(timeout=timeout)
+        request_beat is cooperative: joining an existing session does not
+        force its peers onto our previous local phase.
+        """
+        bpm = validate_bpm(bpm)
+        if not math.isfinite(beat):
+            raise ValueError("Link beat must be finite")
+        with self._clock_lock:
+            if self._link is None:
+                return
+            if not self._link.num_peers:
+                self._link.tempo = bpm
+                self._link.playing = running
+            self._link.request_beat(beat)

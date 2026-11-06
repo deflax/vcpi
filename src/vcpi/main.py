@@ -66,6 +66,8 @@ def _add_host_args(parser: argparse.ArgumentParser):
     link.add_argument("--no-link", dest="link", action="store_false",
                       help="Disable Ableton Link, overriding saved state")
     parser.set_defaults(link=None)
+    tempo.add_argument("--clock-source", choices=("auto", "internal", "link", "beatstep"),
+                       help="Timing authority (default: saved selection or auto)")
 
     midi = parser.add_argument_group("MIDI connections (zero-based hardware indexes or names)")
     midi.add_argument("--midi-input", nargs="+", action="extend", type=_device_selector,
@@ -76,6 +78,8 @@ def _add_host_args(parser: argparse.ArgumentParser):
                       help="MIDI Mix input (default: saved connection)")
     midi.add_argument("--midimix-output", type=_device_selector, metavar="INDEX_OR_NAME",
                       help="MIDI Mix LED-feedback output (default: saved connection)")
+    midi.add_argument("--beatstep-input", type=_device_selector, metavar="INDEX_OR_NAME",
+                      help="BeatStep Pro input (default: saved connection or automatic discovery)")
 
     session = parser.add_argument_group("Session restoration")
     session.add_argument("--session", metavar="PATH",
@@ -93,11 +97,12 @@ def _boot_host(args) -> "VcpiCore":
     try:
         overridden = {
             name for name in (
-                "bpm", "link", "midi_input", "midimix_input", "midimix_output", "output"
+                "bpm", "link", "clock_source", "midi_input", "midimix_input",
+                "midimix_output", "beatstep_input", "output"
             ) if getattr(args, name) is not None
         }
         if args.bpm is not None:
-            host.link.bpm = args.bpm
+            host.timeline.bpm = args.bpm
         if not args.no_restore:
             try:
                 host.restore_session(skip_settings=overridden)
@@ -136,6 +141,17 @@ def _boot_host(args) -> "VcpiCore":
                 host.open_mixer_midi_out(args.midimix_output)
             except Exception as e:
                 logger.warning("MIDI Mix OUT startup failed: %s", e)
+
+        if args.clock_source is not None:
+            host.timeline.select_source(args.clock_source)
+        if args.beatstep_input is not None:
+            try:
+                host.open_beatstep_midi(args.beatstep_input)
+            except Exception as e:
+                host.preferred_beatstep_input = args.beatstep_input
+                logger.warning("BeatStep Pro startup failed: %s", e)
+        host.controller_discovery_enabled = True
+        host._discover_beatstep()
 
         return host
     except BaseException:

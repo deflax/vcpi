@@ -194,6 +194,13 @@ def _restore_connections(
         _restore_port("MIDI mix in", connections.get("midi_mix_in"), host.open_mixer_midi)
     if "midimix_output" not in skip_settings:
         _restore_port("MIDI mix out", connections.get("midi_mix_out"), host.open_mixer_midi_out)
+    if "beatstep_input" not in skip_settings:
+        target = connections.get("beatstep_in")
+        host.preferred_beatstep_input = target
+        if target == "":
+            host.close_beatstep_midi()
+        elif target:
+            _restore_port("BeatStep Pro in", target, host.open_beatstep_midi, retries=1)
     if start_audio:
         if audio_selected:
             _restore_audio(audio_output)

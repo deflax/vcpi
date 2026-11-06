@@ -7,7 +7,7 @@ Saved state includes:
   - Decks: full inline playlist, stable active ID, cue, pitch and sync; no VST chunk
   - Master gain
   - MIDI channel -> track routing
-  - Link BPM and enabled state
+  - Shared timeline BPM and source selection, Link enabled state
   - Audio/MIDI device connection targets
 
 The session file is human-readable JSON so it can be hand-edited if needed.
@@ -68,6 +68,9 @@ def restore(host: VcpiCore, path: Optional[Path] = None, *,
     bpm = None
     if "bpm" in data and "bpm" not in skip_settings:
         bpm = validate_bpm(data["bpm"])
+    clock_source = data.get("clock_source", "auto")
+    if "clock_source" not in skip_settings and clock_source not in ("auto", "internal", "link", "beatstep"):
+        raise ValueError("clock_source must be auto, internal, link, or beatstep")
 
     # Native loading and every restored control happen while audio is paused.
     was_running = host.engine.running
@@ -79,7 +82,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None, *,
 
     # -- BPM / Link ----------------------------------------------------------
     if bpm is not None:
-        host.link.bpm = bpm
+        host.timeline.bpm = bpm
 
     if "link" not in skip_settings:
         try:
@@ -89,6 +92,8 @@ def restore(host: VcpiCore, path: Optional[Path] = None, *,
                 host.stop_link()
         except Exception as exc:
             errors.append(f"link state: {exc}")
+    if "clock_source" not in skip_settings:
+        host.timeline.select_source(clock_source)
 
     # -- Master gain ---------------------------------------------------------
     mg = data.get("master_gain")

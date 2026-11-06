@@ -70,9 +70,11 @@ These flags apply when starting the host server (`python -m vcpi serve`).
 | `--buffer-size <frames>` | `512` | Positive integer buffer size in frames; startup-only |
 | `--bpm <value>` | restored, otherwise `120.0` | Positive finite tempo in beats per minute |
 | `--link` / `--no-link` | restored, otherwise off | Explicitly enable or disable Ableton Link |
+| `--clock-source <source>` | restored, otherwise `auto` | Timing authority: `auto`, `internal`, `link`, or `beatstep` |
 | `--midi-input <port> [port ...]` | restored | MIDI input indexes or quoted names; repeatable, occurrences accumulate |
 | `--midimix-input <port>` | restored | MIDI Mix input index or quoted name |
 | `--midimix-output <port>` | restored | MIDI Mix output index or quoted name (LED feedback) |
+| `--beatstep-input <port>` | restored, otherwise discovered | Dedicated BeatStep Pro input index or quoted name |
 | `--output <device>` | restored, otherwise unopened | Start audio on this output index or quoted name, overriding the saved output |
 | `--session <path>` | `~/.config/vcpi/session.json` | Automatic session file path |
 | `--no-restore` | off | Skip restoring the automatic session at startup |
@@ -84,7 +86,7 @@ without a saved or explicit output stays stopped; use `audio start [device]`.
 This restores the previous saved-output behavior: no separate running/stopped
 flag is stored, so even an output stopped before saving is reopened on restart.
 
-Precedence for tempo, Link, and device connections is **defaults → restored
+Precedence for tempo, timing source, Link, and device connections is **defaults → restored
 session → explicit startup options**. Overridden saved connections are not
 opened first. Explicit `--midi-input` replaces the saved input selection; use
 multiple values or repeated occurrences to open several inputs. Sample rate and
@@ -306,8 +308,8 @@ audio devices & output; MIDI ports & routing; and sequencing, tempo & Link.
 The separator appears in both plain and interactive output.
 Commands follow an explicit order within each group: `save`, `load`; `status`,
 `ps`, `deps`, `debug`; `help`, `about`, `quit`, `shutdown`; `show`; `track`, `get`,
-`set`; `gain`, `solo`, `mute`; `audio`; `midi`, `midimix`, `note`; and `tempo`,
-`ableton`, `seq`. The `exit` alias appears in the description of `quit`, not as a
+`set`; `gain`, `solo`, `mute`; `audio`; `midi`, `midimix`, `beatstep`, `note`; and
+`tempo`, `clock`, `transport`, `ableton`, `seq`. The `exit` alias appears in the description of `quit`, not as a
 separate row; it remains available as a command and completion.
 Use `help <command>` for detailed syntax, defaults, and usage. Nested topics
 such as `help track wav`, `help audio start`, and `help midi input close`
@@ -338,10 +340,11 @@ parameters.
 |---|---|
 | Command name / `help` | Available commands and help topics |
 | `audio` / `audio start` | Subcommands and cached output-device indexes |
-| `midi` / `midimix` | Subcommands, port directions, current hardware indexes, and opened-input close indexes |
+| `midi` / `midimix` / `beatstep` | Subcommands, port directions, current hardware indexes, and opened-input close indexes |
 | `midi link` / `midi cut` | MIDI channels and routing tracks |
 | `seq` | Actions, sequence banks, and target tracks |
 | `ableton` / `debug` | Link actions and debug on/off |
+| `clock` / `transport` | Timing authority and transport actions |
 | `gain` / `mute` / `solo` / `note` | Track targets, mixer states, and note option flags; `gain` also offers `master` |
 | `track` | Track types, installed plugins, patch names, sample packs/samples, and loaded effect indexes for `fx clear` |
 | `show` / `get` / `set` | View or plugin targets and actual loaded effect indexes |
@@ -485,8 +488,9 @@ volume remains accessible through `get`/`set` but does not consume a knob.
 
 Decks play continuous tracks, not MIDI-triggered `wav` sampler voices. They detect
 a beat grid automatically and follow the global tempo and beat phase by default,
-using Ableton Link's timeline when enabled. Play/pause is still controlled per
-deck, independently of global transport start/stop. Create up to eight ordinary mixer tracks:
+using the selected timing authority (internal, BeatStep Pro MIDI, or Ableton Link).
+Play/pause is still controlled per deck, independently of global transport
+start/stop. Create up to eight ordinary mixer tracks:
 
 ```text
 track 1 deck /music/opening.wav --name Deck-A
@@ -883,7 +887,7 @@ governor changes, and kernel tuning are outside this feature.
 
 ### MIDI Commands
 
-All MIDI operations are subcommands of `midi`:
+Generic discovery/routing uses `midi`; supported controllers have dedicated commands:
 
 | Command | Description |
 |---|---|
@@ -895,6 +899,9 @@ All MIDI operations are subcommands of `midi`:
 | `midi cut <ch>` | Remove MIDI channel route |
 | `midimix input <port>` | Open Akai MIDI Mix input by index or quoted name |
 | `midimix output <port>` | Open Akai MIDI Mix output by index or quoted name (LED feedback) |
+| `beatstep` | Show the dedicated controller input |
+| `beatstep input [port]` | Open a BeatStep Pro input, or discover one unambiguous device |
+| `beatstep close` | Close and disable automatic reconnection |
 | `note <track> <note> [--velocity <value>] [--duration-ms <value>]` | Send a test MIDI note (0–127); velocity defaults to 100, duration to 300 ms |
 
 Index discovery:
@@ -909,16 +916,17 @@ vcpi> midi ports output
   [0] MIDI Mix MIDI 1
 ```
 
-Use the numeric value in `[]` from `midi ports input` with `midi input`
-and `midimix input`. Use indexes from `midi ports output` with `midimix output`.
+Use the numeric value in `[]` from `midi ports input` with `midi input`,
+`midimix input`, or `beatstep input`. Use output indexes with `midimix output`.
 Indexes may change after reboot or replug.
 Quoted full port names are accepted too, for example `midi input "Keyboard MIDI"`.
 `midi input close 1` closes the first active input shown by `show midi`, not
 hardware port 1. Active-input numbers shift when an input is closed.
 Note velocity must be 0–127 and duration must be positive and finite.
 
-You can open multiple MIDI inputs simultaneously. All MIDI inputs share the
-same channel routing table (`midi link <ch> <track>`).
+You can open multiple generic MIDI inputs simultaneously. Generic inputs share
+the channel routing table (`midi link <ch> <track>`); BeatStep Pro uses fixed
+per-device routing instead.
 
 Important: `midi link <ch> <track>` only maps MIDI channels internally. It does
 not open hardware ports; `midi input` and `midimix input` do.
@@ -944,14 +952,76 @@ vcpi> track 4 wav synth-pads c4-warm
 vcpi> track 5 wav synth-leads c4-mono-saw
 ```
 
+### BeatStep Pro Controller
+
+The dedicated controller is automatically discovered after startup when exactly
+one matching input is present. `--beatstep-input` or `beatstep input <port>`
+selects a specific input; `beatstep input` discovers it explicitly. Saved targets
+reconnect by name after replug, not by unstable hardware index. `beatstep close`
+releases held notes/nudges and disables reconnection until explicitly opened.
+Do not open the same port as generic MIDI input.
+
+The code profile in `src/vcpi/controllers/beatstep_pro.py` describes the existing
+hardware template. No MIDI learn, template upload or hardware rewriting occurs.
+Its explicit application defaults are:
+
+| Section | Expected MIDI channel / messages | Destination |
+|---|---|---|
+| SEQUENCER 1 | Channel 1 | Track 3 |
+| SEQUENCER 2 | Channel 2 | Track 4 |
+| DRUM | Channel 10 | Track 5 |
+| CONTROL step buttons | Channel 16, Gate CCs 36–51 in button order | Decks on tracks 1/2 |
+| CONTROL rotaries | Channel 16, absolute CCs 20–35 in rotary order, range 0–127 | Decks on tracks 1/2 |
+
+**These numerical assignments are not claimed to be Arturia factory defaults.**
+The [Arturia 2.0 manual](https://dl.arturia.net/products/beatstep-pro/manual/beatstep-pro_Manual_2_0_EN.pdf),
+sections 2.2, 9 and 11, lists controller CC numbers as “Varies” and the default
+USER channel as 1. Match `BeatStepProProfile` to the existing template once in
+code. CONTROL must have a distinct channel from the sequencers; controls using
+USER follow the channel chosen with CONTROL → hold CHAN → step number. Step
+buttons must transmit MIDI rather than recall Scenes. The profile supports
+Gate note buttons and explicit relative encoder wire formats as alternatives.
+No software can distinguish identical channel/message combinations.
+
+| Deck on track 1 | Deck on track 2 | Button function |
+|---|---|---|
+| 1 | 9 | Play/pause |
+| 2 | 10 | Return to cue, paused |
+| 3 | 11 | Set cue |
+| 4 | 12 | Toggle sync |
+| 5 | 13 | Previous playlist entry, paused |
+| 6 | 14 | Next playlist entry, paused |
+| 7 | 15 | Nudge slower while held |
+| 8 | 16 | Nudge faster while held |
+
+| Track 1 rotary | Track 2 rotary | Function |
+|---|---|---|
+| 1 | 5 | Track volume |
+| 2 | 6 | Pitch, −16% to +16% |
+| 3 | 7 | Coarse seek; absolute mode spans the song |
+| 4 | 8 | Fine seek; 0.1 seconds per value increment after initial sample |
+| 9–12 | 13–16 | First four exposed insert-effect controls, in chain order |
+
+Deck-only controls are inactive on empty/non-deck tracks. `show controls` lists
+the active profile bindings. Hardware sequencers route directly, independently
+of generic `midi link` routes, and do not control vcpi sequence banks.
+Numeric effect controls without a finite, ordered range remain inactive and are
+identified in `show controls`; vcpi does not invent bounds or send NaN values.
+
+Use the BeatStep Pro's INT sync mode to supply its own clock. Received MIDI
+Clock/Start/Continue/Stop/SPP and MMC Play/Stop/Pause feed the selected timeline
+authority. Transport output depends on the existing device settings; MMC Play
+alone carries no bar position. See [shared timing](#shared-clock-and-transport).
+
+
 ### Sequencer Commands
 
 vcpi has a built-in step sequencer with up to 16 sequence banks. Notes in
 a bank loop over one bar at the current tempo. Notes are evenly spaced:
 1 note plays once per bar, 4 notes play as quarter notes, etc.
-Without Ableton Link, playback fires once per position on a shared timing grid,
-including banks with different pattern lengths. Late wake-ups skip missed
-positions rather than retriggering notes or emitting a catch-up burst.
+Playback follows the shared musical timeline and transport, with or without
+Link. Mixed pattern lengths share the same bar grid. Late wake-ups skip expired
+positions instead of retriggering notes or emitting a catch-up burst.
 
 | Command | Description |
 |---|---|
@@ -959,7 +1029,7 @@ positions rather than retriggering notes or emitting a catch-up burst.
 | `seq <bank>` | Show a single bank |
 | `seq <bank> <note> [note ...]` | Set notes in a bank (e.g. `seq 1 d c b a`) |
 | `seq clear <bank>` | Clear a bank |
-| `seq link <bank> <track>` | Attach sequence bank to a track (starts playback) |
+| `seq link <bank> <track>` | Attach a bank; first step launches on the next shared bar while transport runs |
 | `seq cut <track>` | Remove all sequence links from a track |
 
 Note names are case-insensitive. Sharps (`C#`), flats (`Bb`), and octave
@@ -977,11 +1047,11 @@ vcpi> seq cut 5             # stop sequence on track 5
 vcpi> seq clear 1           # remove bank 1
 ```
 
-The sequencer follows the current BPM (set via `tempo` or Ableton Link).
-When Ableton Link is enabled, the sequencer phase-locks to the shared
-Link beat grid -- bar boundaries align with Ableton Live and any other
-Link peers on the network. Without Link the sequencer still follows
-tempo but free-runs from the moment playback starts.
+Linking a bank does not start a stopped transport. All banks obey `transport`:
+Stop releases held notes, Continue resumes without replaying a played step,
+and Start resets to beat one. A Start after linking launches linked banks from
+their first step. Source handover does not turn pending launches into mid-bar
+starts. There is no separate sequencer freewheel clock.
 
 ### Ableton Link Commands
 
@@ -996,6 +1066,43 @@ All Ableton Link operations are subcommands of `ableton`:
 Tempo must be positive and finite for startup, `tempo`, and `ableton link`.
 Omitting BPM reads the current tempo with `tempo`, or preserves it when enabling
 Link with `ableton link`.
+
+### Shared Clock and Transport
+
+| Command | Meaning |
+|---|---|
+| `clock` | Show selected/active authority, BPM, sync status and position confidence |
+| `clock source auto|internal|link|beatstep` | Select timing authority |
+| `transport` | Show running/stopped state and musical beat position |
+| `transport start` | Reset shared position to beat one and run |
+| `transport stop` | Freeze built-in sequence position and release held notes |
+| `transport continue` | Resume from the stopped sequence position |
+| `transport align` | Declare the current instant beat one without changing running/stopped state |
+
+The shared timeline defines a four-quarter-note bar. It runs internally on a
+fresh startup. Source choice and tempo are saved; live position and transport
+state are not restored. Deck play/pause remains independent, and their phase
+clock continues while sequence transport is stopped.
+
+Auto prioritizes stable BeatStep Pro MIDI clock, then enabled Link with peers,
+then internal timing. Explicit Link selection also works without peers.
+External acquisition waits for a bar boundary when running. Clock loss holds
+over at the last tempo and position; an explicit Stop stays stopped even if the
+device disconnects. Merely connecting USB never resets or starts transport.
+
+MIDI Clock supplies 24 pulses per quarter note, not a downbeat. Connecting to
+an already-playing device can acquire tempo with **position unconfirmed**.
+Received MIDI Start resets to beat one; Continue resumes; Song Position Pointer
+sets location in sixteenth-note units. `transport align` supplies a manual
+downbeat when no position message is available. MMC Play/Deferred Play resumes
+without claiming a known downbeat; MMC Stop/Pause stops the shared transport.
+
+Link is a collaborative tempo/phase session, not a hardware master/slave bus.
+With Link selected, vcpi follows peer phase and shared transport changes. With
+BeatStep Pro selected and Link enabled, vcpi publishes received tempo, phase and
+transport to Link. `tempo` changes the timeline, but an external authority may
+subsequently replace that tempo; select `internal` for independent tempo control.
+
 
 ### Session Commands
 
@@ -1021,9 +1128,9 @@ Saved/restored session state includes:
 - Per-track instruments, native VST3 state, effects, gain, mute/solo
 - Native master-effect state and master gain
 - MIDI channel routing
-- BPM and Ableton Link state
+- BPM, timing-source selection and Ableton Link enabled state (not live position/transport)
 - Sequencer banks and links
-- Audio output device and MIDI connections
+- Audio output and MIDI connections, including BeatStep Pro target or explicit disabled state
 
 New saves use session format **3**: each VST3 instrument, track insert, and master
 effect stores a base64-encoded native state chunk. This preserves plugin-owned

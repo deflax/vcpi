@@ -28,9 +28,11 @@ def list_midi_output_ports() -> list[str]:
 class MidiInPort:
     """Open one hardware or virtual MIDI input port and dispatch callbacks."""
 
-    def __init__(self):
+    def __init__(self, *, receive_clock: bool = False, receive_sysex: bool = False):
         self._port = None
         self._name: Optional[str] = None
+        self._receive_clock = receive_clock
+        self._receive_sysex = receive_sysex
 
     @staticmethod
     def list_ports() -> list[str]:
@@ -41,6 +43,9 @@ class MidiInPort:
         if not HAS_RTMIDI:
             raise RuntimeError("python-rtmidi not installed")
         self._port = rtmidi.MidiIn()
+        if self._receive_clock or self._receive_sysex:
+            self._port.ignore_types(timing=not self._receive_clock,
+                                    sysex=not self._receive_sysex)
         self._port.open_port(port_index)
         self._name = self._port.get_port_name(port_index) or f"midi-in-{port_index}"
         self._port.set_callback(callback)
@@ -51,6 +56,9 @@ class MidiInPort:
         if not HAS_RTMIDI:
             raise RuntimeError("python-rtmidi not installed")
         self._port = rtmidi.MidiIn()
+        if self._receive_clock or self._receive_sysex:
+            self._port.ignore_types(timing=not self._receive_clock,
+                                    sysex=not self._receive_sysex)
         self._port.open_virtual_port(name)
         self._name = name
         self._port.set_callback(callback)

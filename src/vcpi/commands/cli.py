@@ -142,6 +142,18 @@ class HostCLI(cmd.Cmd):
         """Open MIDI Mix control input or LED feedback output."""
         return devices.midimix(CommandContext(self.host, self._print), arg)
 
+    def do_beatstep(self, arg):
+        """Connect or disconnect the supported BeatStep Pro controller."""
+        return devices.beatstep(CommandContext(self.host, self._print), arg)
+
+    def do_clock(self, arg):
+        """Inspect or select the shared musical timing source."""
+        return sequencing.clock(CommandContext(self.host, self._print), arg)
+
+    def do_transport(self, arg):
+        """Control built-in sequencer transport independently of deck playback."""
+        return sequencing.transport(CommandContext(self.host, self._print), arg)
+
     def do_note(self, arg):
         """Send a timed MIDI test note."""
         return devices.note(CommandContext(self.host, self._print), arg)

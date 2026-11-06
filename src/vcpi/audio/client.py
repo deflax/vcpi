@@ -323,8 +323,9 @@ class RemoteAudioEngine:
     def enqueue_midi(self, track_index, message, generation=None):
         self._enqueue("midi", track_index, message.dict(), generation)
 
-    def enqueue_param_change(self, track_index, name, value, generation=None):
-        self._enqueue("parameter", track_index, (name, value), generation)
+    def enqueue_param_change(self, track_index, name, value, generation=None, *,
+                             fx_index=None, fx_token=None):
+        self._enqueue("parameter", track_index, (name, value, fx_index, fx_token), generation)
 
     def enqueue_deck_command(self, track_index, action, value=0, generation=None):
         return self._enqueue("deck", track_index, (action, value), generation)

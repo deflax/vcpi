@@ -98,12 +98,20 @@ class _OwnerRuntime:
             self.engine.enqueue_midi(index, self.mido.Message.from_dict(payload),
                                      generation=generation)
         elif kind == "parameter":
+            name, value, fx_index, fx_token = payload
             if index is None:
-                self.engine.enqueue_param_change(index, payload[0], payload[1])
+                if fx_token is not None:
+                    effects = self.engine.master_effects
+                    if (not isinstance(fx_index, int) or not 0 <= fx_index < len(effects)
+                            or id(effects[fx_index]) != fx_token):
+                        return
+                self.engine.enqueue_param_change(index, name, value, fx_index=fx_index)
             else:
-                self.pending_parameters.append((index, generation, payload[0], payload[1]))
+                self.pending_parameters.append((index, generation, name, value,
+                                                "parameter", fx_index, fx_token))
         elif kind == "deck":
-            self.pending_parameters.append((index, generation, payload[0], payload[1], "deck"))
+            self.pending_parameters.append(
+                (index, generation, payload[0], payload[1], "deck", None, None))
         elif kind == "track":
             self.engine.enqueue_track_change(index, **payload)
         elif kind == "master_gain":
@@ -214,15 +222,25 @@ class _OwnerRuntime:
         # mixer callback or inspect a processing plugin from the output owner.
         count = min(64, len(self.pending_parameters))
         for _ in range(count):
-            index, generation, name, value, *kind = self.pending_parameters.popleft()
+            index, generation, name, value, kind, fx_index, fx_token = self.pending_parameters.popleft()
             if generation != self.generations[index]:
                 continue
+            if fx_token is not None:
+                # A lifecycle request can receive inputs in service_wait before
+                # refreshing the chain. Check identity here, after that refresh,
+                # not when the input first arrives or against a stale index.
+                track = self.engine.tracks[index]
+                if (track is None or not isinstance(fx_index, int)
+                        or not 0 <= fx_index < len(track.effects)
+                        or track.effects[fx_index].token != fx_token):
+                    continue
             try:
-                if kind:
+                if kind == "deck":
                     self.track_request(index, "deck_command", action=name, value=value)
                     continue
-                actual = self.track_request(index, "set_parameter", name=name, value=value)
-                self._pending_parameter_logs[index, name] = (
+                actual = self.track_request(index, "set_parameter", name=name, value=value,
+                                            fx_index=fx_index)
+                self._pending_parameter_logs[index, fx_index, name] = (
                     generation, actual, time.monotonic() + self._parameter_log_quiet_seconds)
             except Exception as error:
                 worker = self._track_worker(index)
@@ -232,15 +250,16 @@ class _OwnerRuntime:
 
     def _flush_parameter_logs(self, *, force=False):
         now = time.monotonic()
-        for (index, name), (generation, actual, deadline) in tuple(
+        for (index, fx_index, name), (generation, actual, deadline) in tuple(
                 self._pending_parameter_logs.items()):
             if generation != self.generations[index]:
-                del self._pending_parameter_logs[index, name]
+                del self._pending_parameter_logs[index, fx_index, name]
                 continue
             if not force and now < deadline:
                 continue
-            logger.info("track %d %s -> %s (applied)", index + 1, name, actual)
-            del self._pending_parameter_logs[index, name]
+            target = f"track {index + 1}" + (f" fx {fx_index + 1}" if fx_index is not None else "")
+            logger.info("%s %s -> %s (applied)", target, name, actual)
+            del self._pending_parameter_logs[index, fx_index, name]
 
     def publish_track_health(self):
         now = time.monotonic()

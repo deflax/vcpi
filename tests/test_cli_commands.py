@@ -11,6 +11,8 @@ from unittest.mock import patch
 from vcpi.commands.cli import HostCLI
 from vcpi.commands.context import parse_named_source, source_args
 from vcpi.commands.help import HELP_TOPICS
+from vcpi.link import LinkSync
+from vcpi.timeline import MusicalTimeline
 
 
 class MixerState:
@@ -33,9 +35,10 @@ class CLICommandTests(unittest.TestCase):
         self.engine = MixerState()
         self.notes = []
         self.host = SimpleNamespace(
-            engine=self.engine, link=SimpleNamespace(bpm=120.0), midi_inputs=[],
+            engine=self.engine, link=LinkSync(), midi_inputs=[],
             refresh_mixer_leds=lambda indexes: None,
             send_note=lambda *event: self.notes.append(event))
+        self.host.timeline = MusicalTimeline(self.host.link)
         self.output = io.StringIO()
         self.cli = HostCLI(self.host, stdout=self.output, owns_host=False)
 
@@ -86,15 +89,15 @@ class CLICommandTests(unittest.TestCase):
 
     def test_tempo_rejects_nonfinite_and_nonpositive_without_changing_state(self):
         self.execute("tempo 240.5")
-        self.assertEqual(self.host.link.bpm, 240.5)
+        self.assertEqual(self.host.timeline.bpm, 240.5)
         for value in ("0", "-1", "nan", "inf", "-inf", "1e999", "not-a-number"):
             for command in ("tempo ", "ableton link "):
                 with self.subTest(command=command, value=value):
                     _, text = self.execute(command + value)
                     self.assertIn("Error:", text)
-                    self.assertEqual(self.host.link.bpm, 240.5)
+                    self.assertEqual(self.host.timeline.bpm, 240.5)
         self.execute("tempo 100000")
-        self.assertEqual(self.host.link.bpm, 100000)
+        self.assertEqual(self.host.timeline.bpm, 100000)
 
     def test_fixed_arity_commands_reject_trailing_words_before_host_access(self):
         commands = (

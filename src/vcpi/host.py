@@ -13,9 +13,11 @@ from typing import Optional
 from vcpi import deps
 from vcpi.controllers.akai_midimix import MidiMixController
 from vcpi.controllers.midi_input import MidiInputController
+from vcpi.controllers.beatstep_pro import BeatStepProController
 from vcpi.audio.client import RemoteAudioEngine
 from vcpi.audio.protocol import AudioProcessError
 from vcpi.link import LinkSync
+from vcpi.timeline import MusicalTimeline
 from vcpi.midi import list_midi_input_ports, list_midi_output_ports
 from vcpi.models import InstrumentTrack, NUM_TRACKS
 from vcpi.resources import configured_patches_root
@@ -37,6 +39,10 @@ class VcpiCore:
         self.loaded_session_path: Optional[Path] = None
         self.patches_dir = configured_patches_root()
         self.midi_inputs: list[MidiInputController] = []
+        self.preferred_beatstep_input: str | None = None
+        self._beatstep_discovery_at = 0.0
+        self.controller_discovery_enabled = False
+        self._controller_lock = threading.RLock()
         self._shutdown_lock = threading.Lock()
         self._shutdown = False
         self._note_lock = threading.Lock()
@@ -46,6 +52,8 @@ class VcpiCore:
         self.engine = RemoteAudioEngine(sample_rate, buffer_size)
         try:
             self.link = LinkSync()
+            self.timeline = MusicalTimeline(self.link)
+            self.beatstep = BeatStepProController(self.engine, self.timeline)
             self.midimix = MidiMixController(self.engine)
             self.engine.add_state_listener(self.midimix.refresh_leds)
             sequencer_module = importlib.import_module("vcpi.sequencer")
@@ -59,12 +67,10 @@ class VcpiCore:
             raise
 
     def _feed_deck_clock(self):
+        bpm, beat, sampled_at = self.timeline.clock_timeline()
         decks = [(index, track.generation)
                  for index, track in enumerate(self.engine.tracks)
                  if track is not None and track.source_type == "deck"]
-        if not decks:
-            return
-        bpm, beat, sampled_at = self.link.timeline()
         for index, generation in decks:
             if self._deck_clock_stop.is_set():
                 return
@@ -78,15 +84,23 @@ class VcpiCore:
 
     def _run_deck_clock(self):
         failed = False
+        next_feed = 0.0
         while not self._deck_clock_stop.is_set():
             try:
-                self._feed_deck_clock()
+                now = time.monotonic()
+                self.timeline.timeline()
+                if now >= next_feed:
+                    self._feed_deck_clock()
+                    next_feed = now + 0.1
+                if now >= self._beatstep_discovery_at:
+                    self._discover_beatstep()
+                    self._beatstep_discovery_at = now + 2.0
                 failed = False
             except Exception:
                 if not failed:
-                    logger.warning("[Deck] Timing feed unavailable", exc_info=True)
+                    logger.warning("[Timing] Timing service unavailable", exc_info=True)
                 failed = True
-            self._deck_clock_stop.wait(1.0 if failed else 0.1)
+            self._deck_clock_stop.wait(1.0 if failed else 0.01)
 
     def _stop_deck_clock(self):
         self._deck_clock_stop.set()
@@ -198,6 +212,8 @@ class VcpiCore:
     def _clear_deck_holds(self, *, track_index=None, channel=None):
         for controller in self.midi_inputs:
             controller.clear_deck_holds(track_index=track_index, channel=channel)
+        if channel is None:
+            self.beatstep.clear_deck_holds(track_index=track_index)
 
     def _loaded_track(self, track_index: int) -> InstrumentTrack:
         track = self.engine.tracks[track_index]
@@ -385,7 +401,14 @@ class VcpiCore:
 
     def open_midi_input(self, port_index: int | str) -> MidiInputController:
         """Open any MIDI input port and add it to the active inputs list."""
+        with self._controller_lock:
+            return self._open_midi_input(port_index)
+
+    def _open_midi_input(self, port_index):
+        ports = list_midi_input_ports()
         port_index = self._resolve_midi_input_port(port_index)
+        if self.beatstep.input_port_name == ports[port_index]:
+            raise ValueError("BeatStep Pro input is already owned by its controller integration")
         ctrl = MidiInputController(self.engine)
         name = ctrl.open(port_index)
         self.midi_inputs.append(ctrl)
@@ -417,6 +440,77 @@ class VcpiCore:
 
     def refresh_mixer_leds(self, track_indices: Optional[list[int]] = None):
         self.midimix.refresh_leds(track_indices)
+
+    def open_beatstep_midi(self, port: int | str | None = None):
+        """Open the dedicated controller, optionally identifying its USB port."""
+        with self._controller_lock:
+            return self._open_beatstep_midi(port)
+
+    def _open_beatstep_midi(self, port):
+        ports = list_midi_input_ports()
+        if port is None:
+            matches = [index for index, name in enumerate(ports)
+                       if "beatstep" in name.lower().replace(" ", "")]
+            if len(matches) != 1:
+                raise ValueError("Expected one BeatStep Pro input; select a port explicitly")
+            index = matches[0]
+        else:
+            index = self._resolve_midi_input_port(port)
+        name = ports[index]
+        if name in self.midi_input_names:
+            raise ValueError("Close this generic MIDI input before opening BeatStep Pro")
+        if self.beatstep.input_port_name != name:
+            self.beatstep.open_input(index)
+        self.preferred_beatstep_input = name
+        logger.info("[BeatStep Pro] Opened: %s", name)
+
+    def close_beatstep_midi(self):
+        with self._controller_lock:
+            self.preferred_beatstep_input = ""
+            self.beatstep.close()
+
+    def _discover_beatstep(self):
+        """Reconnect the selected device, or identify one unambiguous USB device."""
+        with self._controller_lock:
+            self._discover_beatstep_locked()
+
+    def _discover_beatstep_locked(self):
+        if not self.controller_discovery_enabled:
+            return
+        if self.preferred_beatstep_input == "":
+            return
+        try:
+            ports = list_midi_input_ports()
+        except Exception:
+            return  # MIDI can be unavailable on a headless machine.
+        current = self.beatstep.input_port_name
+        if current is not None:
+            if current in ports:
+                return
+            self.beatstep.close()
+        target = self.preferred_beatstep_input
+        if target:
+            if isinstance(target, int) or target.strip().isdigit():
+                index = int(target)
+                if not 0 <= index < len(ports):
+                    return
+            else:
+                try:
+                    index = self._resolve_port_index_by_name(target, ports, "BeatStep Pro input")
+                except ValueError:
+                    return
+        else:
+            matches = [index for index, name in enumerate(ports)
+                       if "beatstep" in name.lower().replace(" ", "")
+                       and name not in self.midi_input_names]
+            if len(matches) != 1:
+                return
+            index = matches[0]
+        try:
+            self.open_beatstep_midi(index)
+        except Exception:
+            logger.debug("[BeatStep Pro] Input not available", exc_info=True)
+
 
     # -- convenience ---------------------------------------------------------
 
@@ -467,8 +561,12 @@ class VcpiCore:
 
     def start_link(self, bpm: Optional[float] = None):
         if bpm is not None:
-            self.link.bpm = bpm
+            self.timeline.bpm = bpm
+        bpm_now, beat, sampled_at = self.timeline.clock_timeline()
         self.link.enable()
+        if self.timeline.active_source == "internal":
+            beat += (time.monotonic() - sampled_at) * bpm_now / 60.0
+            self.link.seed(bpm_now, beat, self.timeline.running)
         logger.info("[Link] Enabled at %.1f BPM", self.link.bpm)
 
     def stop_link(self):
@@ -520,6 +618,9 @@ class VcpiCore:
         self.midi_inputs.clear()
         if midimix is not None:
             actions.append(midimix.close)
+        beatstep = getattr(self, "beatstep", None)
+        if beatstep is not None:
+            actions.append(beatstep.close)
         link = getattr(self, "link", None)
         if link is not None:
             actions.append(link.disable)

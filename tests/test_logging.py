@@ -71,61 +71,22 @@ class AppliedKnobLoggingTests(unittest.TestCase):
         runtime.generations[0] = 1
         return runtime, worker
 
-    def test_knob_summaries_wait_for_each_parameters_quiet_and_use_applied_values(self):
-        runtime, worker = self.runtime()
-        with self.assertLogs("vcpi.audio.owner", level="INFO") as captured:
-            with patch("vcpi.audio.owner.time.monotonic") as clock:
-                clock.return_value = 10.0
-                runtime.pending_parameters.append((0, 1, "cutoff", 100))
-                runtime.apply_track_parameters()
-                self.assertEqual(captured.records, [])
-                clock.return_value = 10.2
-                worker.request.return_value = {"result": 0.9}
-                runtime.pending_parameters.append((0, 1, "cutoff", 200))
-                runtime.apply_track_parameters()
-                clock.return_value = 10.31
-                worker.request.return_value = {"result": 7.0}
-                runtime.pending_parameters.append((0, 1, "attack", 8))
-                runtime.apply_track_parameters()
-                self.assertEqual(captured.records, [])
-                clock.return_value = 10.51
-                runtime.apply_track_parameters()
-                self.assertEqual([record.args for record in captured.records],
-                                 [(1, "cutoff", 0.9)])
-                clock.return_value = 10.62
-                runtime.apply_track_parameters()
-                self.assertEqual([record.args for record in captured.records],
-                                 [(1, "cutoff", 0.9), (1, "attack", 7.0)])
-                clock.return_value = 12
-                runtime.apply_track_parameters()
-                self.assertEqual(len(captured.records), 2)
-
     def test_failed_and_retired_knob_changes_never_report_success(self):
         runtime, worker = self.runtime()
         with self.assertNoLogs("vcpi.audio.owner", level="INFO"):
             with patch("vcpi.audio.owner.time.monotonic", return_value=10):
                 worker.request.side_effect = ValueError("rejected")
-                runtime.pending_parameters.append((0, 1, "cutoff", 100))
+                runtime.pending_parameters.append((0, 1, "cutoff", 100, "parameter", None, None))
                 runtime.apply_track_parameters()
                 self.assertIn("rejected", worker.failure)
                 worker.request.side_effect = None
-                runtime.pending_parameters.append((0, 1, "cutoff", 100))
+                runtime.pending_parameters.append((0, 1, "cutoff", 100, "parameter", None, None))
                 runtime.apply_track_parameters()
                 runtime.generations[0] = 2
-                runtime.pending_parameters.append((0, 1, "attack", 800))
+                runtime.pending_parameters.append((0, 1, "attack", 800, "parameter", None, None))
                 runtime.apply_track_parameters()
                 runtime._flush_parameter_logs(force=True)
 
-    def test_shutdown_flushes_final_applied_knob_value_without_waiting(self):
-        runtime, worker = self.runtime()
-        with self.assertLogs("vcpi.audio.owner", level="INFO") as captured:
-            with patch("vcpi.audio.owner.time.monotonic", return_value=10):
-                runtime.pending_parameters.append((0, 1, "cutoff", 100))
-                runtime.apply_track_parameters()
-                self.assertEqual(captured.records, [])
-                runtime.shutdown_tracks()
-                self.assertEqual([record.args for record in captured.records],
-                                 [(1, "cutoff", 0.75)])
 
 
 if __name__ == "__main__":

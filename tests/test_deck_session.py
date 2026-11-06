@@ -202,6 +202,24 @@ class DeckSessionTests(unittest.TestCase):
         send([0x80, 64, 0])
         self.await_status(host, 0, lambda state: state.get("nudge") == 0)
 
+    @unittest.skipUnless(HAS_MIDO, "mido required for controller MIDI")
+    def test_generic_reroute_preserves_dedicated_controller_nudge(self):
+        host = self.host()
+        host.load_deck(0, str(self.root / "first.wav"))
+        profile = host.beatstep.profile
+        status = 0xB0 | profile.control_channel
+        host.beatstep.on_midi(([status, profile.button_numbers[6], 127], 0))
+        host.engine.sync_state()
+        self.await_status(host, 0, lambda state: state.get("nudge") == -1)
+        host.route(profile.control_channel, 1)
+        host.unroute(profile.control_channel)
+        host.engine.sync_state()
+        self.assertEqual(host.engine.tracks[0].deck["nudge"], -1)
+        host.beatstep.on_midi(([status, profile.button_numbers[6], 0], 0))
+        host.engine.sync_state()
+        self.await_status(host, 0, lambda state: state.get("nudge") == 0)
+
+
     def test_commands_use_real_daemon_client_framing(self):
         host = self.host()
         server = VcpiServer(host)

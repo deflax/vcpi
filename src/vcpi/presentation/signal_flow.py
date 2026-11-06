@@ -191,14 +191,13 @@ def _build_flow_snapshot(host, engine) -> dict:
     input_name = host.midimix.input_port_name
     output_name = host.midimix.output_port_name
     banks = list(host.sequencer.banks)
-    sequencer_running = host.sequencer._running
-    link_enabled = host.link.enabled
-    # Link.bpm / num_peers may inspect the native Link object. Flow deliberately
-    # uses the configured cached tempo, not a fresh native query.
-    tempo = host.link._bpm
-    clock = (f"Ableton Link {'enabled' if link_enabled else 'disabled'}; "
-             f"configured tempo {_value(tempo)} BPM (cached)")
-    timing = "Link beat-grid" if link_enabled else "local wall clock"
+    sample = host.timeline.cached_snapshot
+    sequencer_running = host.sequencer._running and sample.running
+    tempo = sample.bpm
+    clock = (f"{sample.active_source}; {_value(tempo)} BPM; {sample.status}; "
+             f"position {'confirmed' if sample.position_confirmed else 'unconfirmed'} (cached)")
+    timing = "shared four-beat bar grid"
+    beatstep_name = host.beatstep.input_port_name
     output_name_audio = format_output_device(engine.audio_output_name, engine.audio_output_index)
     backend = engine.backend_label or "(not opened)"
     sample_rate = engine.sample_rate
@@ -225,6 +224,8 @@ def _build_flow_snapshot(host, engine) -> dict:
          "all generic inputs share the channel map"],
         ["MIDI Mix", f"input: {input_name or '(disconnected)'}; LED output: {output_name or '(disconnected)'}",
          "faders -> gains; knobs -> first 3 instrument sound controls; buttons -> mute/solo"],
+        ["BeatStep Pro", beatstep_name or "(disconnected)",
+         "SEQ1 -> track 3; SEQ2 -> track 4; DRUM -> track 5; CONTROL -> tracks 1/2"],
         ["Sequencer / clock", clock,
          f"{'running' if sequencer_running else 'stopped'}; {timing}; bank links below"],
     ]
@@ -249,6 +250,11 @@ def _build_flow_snapshot(host, engine) -> dict:
         midi_rows.append(["Generic MIDI inputs", "(none connected)", "no hardware discovery performed"])
     midi_rows.append(["Shared input messages", "note on/off, CC, pitch bend, channel aftertouch",
                       "each open generic input uses the same 16-channel map"])
+    midi_rows.append(["BeatStep Pro", beatstep_name or "(disconnected)",
+                      "dedicated device routing, independent of generic channel map"])
+    for section, track_index in zip(("SEQ1", "SEQ2", "DRUM"), (2, 3, 4)):
+        midi_rows.append([f"BeatStep Pro {section}", _target(tracks, track_index),
+                          states[track_index] + ("; connected" if beatstep_name else "; disconnected")])
     for channel in range(16):
         target = channel_map.get(channel)
         state = ("unlinked; messages dropped" if target is None else
@@ -292,7 +298,11 @@ def _build_flow_snapshot(host, engine) -> dict:
     for rows in control_rows:
         controls.extend(rows)
     controls.append(master_control)
-    sections.append(_section("controls", "Akai MIDI Mix controls", ["Control", "Binding", "Target", "Cached value / range", "State"], controls))
+    controls.append(["BeatStep Pro input", beatstep_name or "(disconnected)",
+                     "CONTROL -> tracks 1/2", "dedicated device profile",
+                     "connected" if beatstep_name else "disconnected"])
+    controls.extend(host.beatstep.control_bindings())
+    sections.append(_section("controls", "Hardware controls", ["Control", "Binding", "Target", "Cached value / range", "State"], controls))
 
     audio_rows = [
         ["Track audio", "instrument -> ordered track FX -> track gain / mute / solo -> sum", "internal sources only; no external audio input path"],

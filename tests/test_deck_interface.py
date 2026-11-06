@@ -116,12 +116,14 @@ class DeckCLITests(unittest.TestCase):
         self.host.channel_map = {0: 0}
         self.host.audio_output_name = None
         self.host.preferred_output_device = None
+        self.host.preferred_beatstep_input = None
         self.host.midi_input_names = []
         self.host.mixer_midi_name = None
         self.host.mixer_midi_out_name = None
         self.host.sample_rate = 44100
         self.host.buffer_size = 256
         self.host.link = SimpleNamespace(bpm=120, enabled=False)
+        self.host.timeline = SimpleNamespace(bpm=120, source="auto")
         self.host.sequencer = SimpleNamespace(snapshot=lambda: [])
         saved = snapshot(self.host)["tracks"][0]
         self.assertNotIn("native_state", saved)

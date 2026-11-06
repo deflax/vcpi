@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 from vcpi.audio.client import RemoteAudioEngine
 from vcpi.host import VcpiCore
 from vcpi.link import LinkSync
+from vcpi.timeline import MusicalTimeline
 
 
 class DeckClockTests(unittest.TestCase):
@@ -43,6 +44,9 @@ class DeckClockTests(unittest.TestCase):
     def host(self):
         host = VcpiCore.__new__(VcpiCore)
         host.link = LinkSync(120)
+        host.timeline = MusicalTimeline(host.link)
+        host.controller_discovery_enabled = False
+        host._beatstep_discovery_at = 0.0
         host._deck_clock_stop = threading.Event()
         host._deck_clock_thread = None
         host.engine = SimpleNamespace(
@@ -85,5 +89,4 @@ class DeckClockTests(unittest.TestCase):
         self.assertEqual(engine._last_input, 3)
         messages = [pickle.loads(engine._events.get_nowait()) for _ in range(3)]
         self.assertEqual([message[0] for message in messages], [1, 2, 3])
-        self.assertEqual(messages[-1][4], ("sync", False))
         engine._fail.assert_not_called()

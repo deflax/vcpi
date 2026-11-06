@@ -69,6 +69,9 @@ class MidiHardware:
 
     def set_callback(self, callback):
         self.callback = callback
+    def ignore_types(self, **kwargs):
+        pass
+
 
     def send_message(self, data):
         pass
@@ -88,7 +91,14 @@ class LinkHardware:
         self.beat = 0.0
         self.enabled = False
         self.num_peers = 0
+        self.playing = False
         self.created_tempos.append(bpm)
+
+    def request_beat(self, beat):
+        self.beat = beat
+
+    def force_beat(self, beat):
+        self.beat = beat
 
 
 class StartupTests(unittest.TestCase):
@@ -173,6 +183,55 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(explicit.link.bpm, 142)
         self.assertTrue(explicit.engine.running)
         self.assertEqual(explicit.engine.opened_outputs, ["Built-in"])
+    def test_clock_source_persists_but_transport_position_does_not(self):
+        host = self.boot("--no-restore", "--clock-source", "internal")
+        host.timeline.stop()
+        host.save_session()
+        saved = json.loads(self.path.read_text())
+        self.assertEqual(saved["clock_source"], "internal")
+        restored = self.boot()
+        self.assertEqual(restored.timeline.source, "internal")
+        self.assertTrue(restored.timeline.running)
+        override = self.boot("--clock-source", "beatstep")
+        self.assertEqual(override.timeline.source, "beatstep")
+        self.assertEqual(override.timeline.active_source, "internal")
+
+    def test_auto_controller_connection_is_dedicated_and_close_stays_closed(self):
+        with patch.object(MidiHardware, "names", (*MidiHardware.names, "Arturia BeatStep Pro")):
+            host = self.boot("--no-restore")
+            self.assertEqual(host.beatstep.input_port_name, "Arturia BeatStep Pro")
+            self.assertEqual(host.midi_input_names, [])
+            with self.assertRaises(ValueError):
+                host.open_midi_input("Arturia BeatStep Pro")
+            host.close_beatstep_midi()
+            host._discover_beatstep()
+            self.assertIsNone(host.beatstep.input_port_name)
+            host.save_session()
+            restored = self.boot()
+            self.assertIsNone(restored.beatstep.input_port_name)
+            host.open_beatstep_midi()
+            self.assertEqual(host.beatstep.input_port_name, "Arturia BeatStep Pro")
+
+    def test_loading_disabled_controller_session_closes_current_input(self):
+        with patch.object(MidiHardware, "names", (*MidiHardware.names, "Arturia BeatStep Pro")):
+            host = self.boot("--no-restore")
+            self.assertIsNotNone(host.beatstep.input_port_name)
+            self.session(connections={"beatstep_in": ""})
+            host.restore_session(start_audio=False)
+            self.assertIsNone(host.beatstep.input_port_name)
+            host._discover_beatstep()
+            self.assertIsNone(host.beatstep.input_port_name)
+
+    def test_deferred_numeric_controller_selection_resolves_after_device_arrives(self):
+        with self.assertLogs("vcpi.main", level="WARNING"):
+            host = self.boot("--no-restore", "--beatstep-input", "3")
+        self.assertIsNone(host.beatstep.input_port_name)
+        with patch.object(MidiHardware, "names", (*MidiHardware.names, "Arturia BeatStep Pro")):
+            host._discover_beatstep()
+        self.assertEqual(host.beatstep.input_port_name, "Arturia BeatStep Pro")
+        self.assertEqual(host.preferred_beatstep_input, "Arturia BeatStep Pro")
+
+
 
     def test_numeric_preference_round_trips_and_reopens_on_restart(self):
         host = self.boot("--no-restore")

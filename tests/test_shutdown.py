@@ -16,7 +16,6 @@ from vcpi.audio.control import AudioEngine
 from vcpi.models import InstrumentTrack
 from vcpi.host import VcpiCore
 from vcpi.main import _boot_host
-from vcpi.sequencer import Sequencer
 
 
 class _ControlEngine(AudioEngine):
@@ -78,10 +77,13 @@ class HostShutdownTests(unittest.TestCase):
             "incomplete", "/tmp/incomplete.wav", None, source_type="wav",
         )
         host.send_note(0, 60, duration=60.0)
+        host.sequencer.set_bank(0, ["E4"])
+        with patch.object(host.sequencer, "start"):
+            host.sequencer.link(0, 0)
+        host.timeline.start()
+        host.sequencer._tick(host.timeline.snapshot(), deps.mido)
         host.sequencer.start()
-        host.sequencer._schedule_note_offs([(0, 64, 60.0, 0)], deps.mido)
         self.host_timers = list(host._note_timers)
-        self.sequence_timers = list(host.sequencer._note_off_timers)
         self.sequence_thread = host.sequencer._thread
         host.link._start_loop_thread()
         self.link_thread = host.link._loop_thread
@@ -104,11 +106,10 @@ class HostShutdownTests(unittest.TestCase):
     def _assert_closed(self, host):
         self.assertTrue(host._shutdown)
         self.assertEqual(host._note_timers, {})
-        self.assertEqual(host.sequencer._note_off_timers, [])
         self.assertFalse(host.sequencer._running)
         self.assertTrue(all(
             not timer.is_alive()
-            for timer in self.host_timers + self.sequence_timers
+            for timer in self.host_timers
         ))
         self.assertFalse(self.sequence_thread.is_alive())
         self.assertFalse(self.link_thread.is_alive())
@@ -222,6 +223,7 @@ class HostShutdownTests(unittest.TestCase):
                         sample_rate=44100, buffer_size=512, session=str(path), bpm=None,
                         no_restore=False, link=None, midi_input=None,
                         midimix_input=None, midimix_output=None, output=None,
+                        clock_source=None, beatstep_input=None,
                     )
                     with patch("vcpi.host.RemoteAudioEngine", _ControlEngine), \
                             patch("vcpi.host.VcpiCore", StartupHost):
@@ -286,70 +288,6 @@ class ShutdownTests(unittest.TestCase):
             self.assertEqual(len(released_on), 3)
         finally:
             engine.shutdown()
-
-    def test_stopping_sequence_delivers_pending_note_off_once(self):
-        host = SimpleNamespace(engine=AudioEngine())
-        seq = Sequencer(host)
-        seq._running = True
-        seq._schedule_note_offs([(0, 60, 60.0, 0)], deps.mido)
-        timers = list(seq._note_off_timers)
-        try:
-            seq.stop()
-            messages = list(host.engine._midi_queue)
-            self.assertEqual(
-                [(track, message.type, message.note) for track, message in messages],
-                [(0, "note_off", 60)],
-            )
-            self.assertTrue(all(not timer.is_alive() for timer in timers))
-            seq.stop()
-            self.assertEqual(list(host.engine._midi_queue), messages)
-        finally:
-            seq.stop()
-            for timer in timers:
-                timer.cancel()
-                timer.join()
-            host.engine.shutdown()
-
-    def test_stopping_failed_sequence_still_releases_pending_notes(self):
-        host = SimpleNamespace(engine=AudioEngine())
-        seq = Sequencer(host)
-        seq._schedule_note_offs([(0, 60, 60.0, 0)], deps.mido)
-        timers = list(seq._note_off_timers)
-        try:
-            seq.stop()  # The playback thread has already marked itself stopped.
-            self.assertEqual(
-                [(track, message.type, message.note) for track, message in host.engine._midi_queue],
-                [(0, "note_off", 60)],
-            )
-            self.assertTrue(all(not timer.is_alive() for timer in timers))
-        finally:
-            for timer in timers:
-                timer.cancel()
-                timer.join()
-            host.engine.shutdown()
-
-    def test_stopping_sequence_does_not_repeat_completed_note_off(self):
-        host = SimpleNamespace(engine=AudioEngine())
-        seq = Sequencer(host)
-        seq._running = True
-        seq._schedule_note_offs([(0, 60, 0.0, 0)], deps.mido)
-        timers = list(seq._note_off_timers)
-        try:
-            for timer in timers:
-                timer.join(timeout=2.0)
-            self.assertTrue(all(not timer.is_alive() for timer in timers))
-            seq.stop()
-            self.assertEqual(
-                [(track, message.type, message.note)
-                 for track, message in host.engine._midi_queue],
-                [(0, "note_off", 60)],
-            )
-        finally:
-            seq.stop()
-            for timer in timers:
-                timer.cancel()
-                timer.join()
-            host.engine.shutdown()
 
 
 if __name__ == "__main__":

@@ -9,6 +9,9 @@ from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
 from vcpi.models import InstrumentTrack
 from vcpi.sequencer import SequenceBank
 from vcpi.presentation.signal_flow import build_flow_snapshot, render_flow_snapshot, show_view
+from vcpi.link import LinkSync
+from vcpi.timeline import MusicalTimeline
+from vcpi.controllers.beatstep_pro import BeatStepProController
 
 
 class FlowTests(unittest.TestCase):
@@ -55,8 +58,10 @@ class FlowTests(unittest.TestCase):
             midimix=SimpleNamespace(input_port_name="Mixer", output_port_name=None),
             sequencer=SimpleNamespace(banks=[SequenceBank([60], linked_track=7)] + [None]*15,
                                       _running=True),
-            link=SimpleNamespace(enabled=False, _bpm=120),
+            link=LinkSync(),
         )
+        self.host.timeline = MusicalTimeline(self.host.link)
+        self.host.beatstep = BeatStepProController(self.engine, self.host.timeline)
 
     def rows(self, section):
         return next(s['rows'] for s in build_flow_snapshot(self.host)['sections']

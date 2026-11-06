@@ -233,6 +233,27 @@ def midimix(ctx, arg):
         ctx.emit(f"Error: {error}")
 
 
+def beatstep(ctx, arg):
+    """Connect the supported BeatStep Pro controller without MIDI learn."""
+    usage = "beatstep [input [port index|name]|close]"
+    parts = ctx.tokens(arg, usage)
+    if parts is None:
+        return
+    try:
+        if not parts:
+            ctx.emit(f"  BeatStep Pro: {ctx.host.beatstep.input_port_name or 'closed'}")
+        elif parts == ["close"]:
+            ctx.host.close_beatstep_midi()
+            ctx.emit("  BeatStep Pro closed; automatic reconnection disabled.")
+        elif parts[0] == "input" and len(parts) <= 2:
+            ctx.host.open_beatstep_midi(parts[1] if len(parts) == 2 else None)
+            ctx.emit(f"  BeatStep Pro opened: {ctx.host.beatstep.input_port_name}")
+        else:
+            raise ValueError(usage)
+    except Exception as error:
+        ctx.emit(f"Error: {error}")
+
+
 def note(ctx, arg):
     """Send a timed MIDI test note."""
     usage = "note <track 1-8> <midi_note> [--velocity <0..127>] [--duration-ms <milliseconds>]"

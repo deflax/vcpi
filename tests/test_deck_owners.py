@@ -12,6 +12,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from vcpi.controllers.akai_midimix import MidiMixController
+from vcpi.controllers.beatstep_pro import BeatStepProController
+from vcpi.link import LinkSync
+from vcpi.timeline import MusicalTimeline
 
 from vcpi.audio.client import RemoteAudioEngine
 from vcpi.audio_state import PluginSnapshot
@@ -83,6 +86,9 @@ class DeckOwnerTests(unittest.TestCase):
         host.engine = engine
         host.midi_inputs = []
         host.midimix = MidiMixController(engine)
+        host.timeline = MusicalTimeline(LinkSync())
+        host.beatstep = BeatStepProController(engine, host.timeline)
+        self.addCleanup(host.beatstep.close)
         self.addCleanup(host.midimix.close)
         folder = self.root / "playlist"
         folder.mkdir()
