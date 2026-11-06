@@ -234,6 +234,17 @@ class AudioEngine:
                 return track.render_owner.request(
                     "deck_command", action=action, value=value).get("result")
             return track.plugin.native.deck_command(action, value)
+        if operation == "deck_clock":
+            index, bpm, beat, sampled_at, generation = arguments
+            track = self._control_track(index)
+            if generation is not None and generation != track.generation:
+                return
+            if track.source_type != "deck":
+                raise ValueError(f"track {index + 1} is not a deck")
+            if track.render_owner is not None:
+                return track.render_owner.request(
+                    "set_deck_clock", bpm=bpm, beat=beat, sampled_at=sampled_at).get("result")
+            return track.plugin.native.set_deck_clock(bpm, beat, sampled_at)
         if operation == "barrier":
             if self.control_error is not None:
                 raise self.control_error
@@ -361,6 +372,14 @@ class AudioEngine:
 
     def enqueue_deck_command(self, track_index, action, value=0, generation=None):
         self._submit_control("deck", (track_index, action, value, generation), False)
+
+    def set_deck_clock(self, track_index, bpm, beat, sampled_at):
+        return self._submit_control(
+            "deck_clock", (track_index, bpm, beat, sampled_at, None), True)
+
+    def enqueue_deck_clock(self, track_index, bpm, beat, sampled_at, generation=None):
+        self._submit_control(
+            "deck_clock", (track_index, bpm, beat, sampled_at, generation), False)
 
     def load_plugin_state(self, track_index, state, fx_index=None):
         """Restore an opaque chunk on its native control owner."""

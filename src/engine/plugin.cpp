@@ -603,6 +603,12 @@ void Plugin::deckCommand(const std::string& action, double value) {
     ControlOwnership lock(ownership);
     deck->command(action, value);
 }
+void Plugin::setDeckClock(double bpm, double beat, double sampledAtSeconds) {
+    if (!deck) throw std::invalid_argument("Source is not a deck");
+    std::lock_guard<std::mutex> deckLock(deckMutex);
+    ControlOwnership lock(ownership);
+    deck->setClock(bpm, beat, sampledAtSeconds);
+}
 void Plugin::updateDeckCatalog(const std::string& catalog) {
     if (!deck) throw std::invalid_argument("Source is not a deck");
     std::lock_guard<std::mutex> lock(deckMutex);

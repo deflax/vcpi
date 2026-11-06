@@ -69,9 +69,9 @@ class NativeDeckSyncTests(unittest.TestCase):
         return [np.concatenate(chunks) for chunks in audio]
 
     def clock(self, decks, bpm, beat=0):
+        sampled_at = time.monotonic()
         for plugin, _ in decks:
-            plugin.deck_command("sync_tempo", bpm)
-            plugin.deck_command("sync_beat", beat)
+            plugin.set_deck_clock(bpm, beat, sampled_at)
 
     def settle_request(self, deck):
         plugin, runner = deck
@@ -213,6 +213,25 @@ class NativeDeckSyncTests(unittest.TestCase):
             status = plugin.deck_status()
             self.assertAlmostEqual(status["bpm"] * status["playback_speed"], 135, delta=0.3)
             self.assertLess(abs(status["beat_phase_error"]), 0.01)
+
+    def test_delayed_clock_delivery_does_not_pull_decks_apart(self):
+        path = self.percussion("delayed-clock")
+        decks = [self.deck([path]), self.deck([path])]
+        self.clock(decks, 120)
+        for plugin, _ in decks:
+            plugin.set_parameter("play", True)
+        self.render(decks, 8)
+        sampled_at = time.monotonic()
+        decks[0][0].set_deck_clock(120, 16, sampled_at)
+        # Model a backed-up worker queue, retaining the original sampled beat.
+        time.sleep(0.08)
+        decks[1][0].set_deck_clock(120, 16, sampled_at)
+        audio = self.render(decks, 3)
+        positions = [plugin.deck_status()["position"] for plugin, _ in decks]
+        self.assertLess(abs(positions[0] - positions[1]), 0.012)
+        pulses = [self.pulse_times(samples) for samples in audio]
+        for pulse in pulses[0][1:-1]:
+            self.assertLess(float(np.min(np.abs(pulses[1] - pulse))), 0.012)
 
     def test_synced_nudge_retains_opposite_acoustic_offsets_without_changing_tempo(self):
         path = self.percussion("phase", seconds=60)
@@ -392,4 +411,4 @@ class NativeDeckSyncTests(unittest.TestCase):
         self.assertAlmostEqual(status["position"], 0.4 * 0.98 + 0.0002, delta=0.0001)
         self.assertEqual(status["phase_offset"], 0)
         with self.assertRaises(ValueError):
-            plugin.deck_command("sync_tempo", 0)
+            plugin.set_deck_clock(0, 0, time.monotonic())

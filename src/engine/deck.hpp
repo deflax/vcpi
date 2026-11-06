@@ -41,6 +41,7 @@ public:
     double parameter(const std::string& key) const;
     double setParameter(const std::string& key, double value);
     void command(const std::string& action, double value = 0);
+    void setClock(double bpm, double beat, double sampledAtSeconds);
     void updateCatalog(const std::string& catalog, Ownership& ownership);
     int trackCount() const noexcept { return static_cast<int>(tracks.size()); }
     const std::string& bankId() const noexcept { return bank; }

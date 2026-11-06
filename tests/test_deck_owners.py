@@ -11,6 +11,8 @@ import wave
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 from vcpi.controllers.akai_midimix import MidiMixController
 from vcpi.controllers.beatstep_pro import BeatStepProController
 from vcpi.link import LinkSync
@@ -79,6 +81,73 @@ class DeckOwnerTests(unittest.TestCase):
                 return dict(worker.track.deck)
             time.sleep(0.005)
         self.fail(f"deck status deadline expired: {worker.track.deck}")
+
+    def test_delayed_queued_clock_keeps_spawned_decks_aligned(self):
+        rate, frames = 16000, 256
+        audio = np.zeros(rate * 40)
+        t = np.arange(round(rate * 0.025)) / rate
+        pulse = 0.7 * np.exp(-t * 180) * np.cos(2 * np.pi * 800 * t)
+        for beat in np.arange(0.137, 39.975, 0.5):
+            start = round(beat * rate)
+            audio[start:start + len(pulse)] += pulse
+        percussion = self.root / "percussion.wav"
+        with wave.open(str(percussion), "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(rate)
+            stream.writeframes((audio * 32767).astype("<i2").tobytes())
+        catalog = make_catalog("clock", [{"id": "pulse", "path": str(percussion),
+                                          "title": "Pulse"}], bank_path=str(self.bank))
+        engine = AudioEngine(sample_rate=rate, buffer_size=frames)
+        self.addCleanup(engine.shutdown)
+        workers = []
+
+        def close_workers():
+            for index, worker in enumerate(workers):
+                engine.clear_track(index)
+                worker.shutdown()
+
+        self.addCleanup(close_workers)
+        for index in range(2):
+            worker = TrackWorker(rate, frames, index, "load_deck", {"catalog": catalog})
+            workers.append(worker)
+            engine.publish_track(index, worker.track)
+            self.assertGreater(worker.track.deck["beat_confidence"], 0.65)
+
+        def render(seconds):
+            for _ in range(round(seconds * rate / frames)):
+                engine.render_block()
+                deadline = time.monotonic() + 5
+                for worker in workers:
+                    sequence = worker.transport.stats()["sequence"]
+                    while worker.transport.stats()["submitted"] < sequence:
+                        self.assertLess(time.monotonic(), deadline,
+                                        "deck render deadline expired")
+                        time.sleep(0.001)
+
+        sampled_at = time.monotonic()
+        for index in range(2):
+            engine.enqueue_deck_clock(index, 120, 0, sampled_at,
+                                      generation=workers[index].track.generation)
+        engine.apply_pending_controls()
+        for worker in workers:
+            worker.request("set_parameter", name="play", value=True)
+        render(8)
+
+        sampled_at = time.monotonic()
+        engine.enqueue_deck_clock(0, 120, 16, sampled_at,
+                                  generation=workers[0].track.generation)
+        engine.apply_pending_controls()
+        # Simulate different queue/IPC latency without changing the sampled beat.
+        time.sleep(0.08)
+        engine.enqueue_deck_clock(1, 120, 16, sampled_at,
+                                  generation=workers[1].track.generation)
+        engine.apply_pending_controls()
+        render(3)
+        statuses = [worker.request("set_parameter", name="play", value=False)["deck"]
+                    for worker in workers]
+        self.assertGreater(statuses[0]["position"], 10)
+        self.assertAlmostEqual(statuses[0]["position"], statuses[1]["position"], delta=0.012)
 
     def test_directory_playlist_is_shallow_ordered_and_deduplicated(self):
         engine = self.remote()

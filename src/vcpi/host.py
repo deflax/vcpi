@@ -74,13 +74,8 @@ class VcpiCore:
         for index, generation in decks:
             if self._deck_clock_stop.is_set():
                 return
-            accepted = self.engine.enqueue_deck_command(
-                index, "sync_tempo", bpm, generation=generation)
-            if accepted is False:
-                continue
-            current_beat = beat + (time.monotonic() - sampled_at) * bpm / 60.0
-            self.engine.enqueue_deck_command(
-                index, "sync_beat", current_beat, generation=generation)
+            self.engine.enqueue_deck_clock(
+                index, bpm, beat, sampled_at, generation=generation)
 
     def _run_deck_clock(self):
         failed = False

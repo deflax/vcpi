@@ -2,6 +2,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <chrono>
 #include <type_traits>
 
 namespace py = pybind11;
@@ -178,6 +179,16 @@ PYBIND11_MODULE(_vcpi_native, module) {
         })
         .def("deck_command", &Plugin::deckCommand, py::arg("action"), py::arg("value") = 0.0,
              py::call_guard<py::gil_scoped_release>())
+        .def("set_deck_clock",
+             [monotonic = py::object(py::module_::import("time").attr("monotonic"))](
+                 Plugin& plugin, double bpm, double beat, double sampledAt) {
+                 const double pythonNow = monotonic().cast<double>();
+                 const double nativeNow = std::chrono::duration<double>(
+                     std::chrono::steady_clock::now().time_since_epoch()).count();
+                 const double nativeSampledAt = nativeNow - (pythonNow - sampledAt);
+                 py::gil_scoped_release release;
+                 plugin.setDeckClock(bpm, beat, nativeSampledAt);
+             }, py::arg("bpm"), py::arg("beat"), py::arg("sampled_at"))
         .def("update_deck_catalog", &Plugin::updateDeckCatalog, py::arg("catalog"),
              py::call_guard<py::gil_scoped_release>())
         .def("load_preset", &Plugin::loadPreset, py::arg("path"), py::call_guard<py::gil_scoped_release>())

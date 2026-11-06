@@ -53,7 +53,7 @@ class DeckClockTests(unittest.TestCase):
             tracks=[SimpleNamespace(source_type="deck", generation=7), None,
                     SimpleNamespace(source_type="wav", generation=8),
                     SimpleNamespace(source_type="deck", generation=9)],
-            enqueue_deck_command=Mock(return_value=True))
+            enqueue_deck_clock=Mock(return_value=True))
         return host
 
     def test_failed_feeder_is_stoppable_and_logs_once_per_failure_run(self):
@@ -74,19 +74,21 @@ class DeckClockTests(unittest.TestCase):
         self.assertFalse(host._deck_clock_thread.is_alive())
         self.assertEqual(len(logs.output), 1)
 
-    def test_clock_backpressure_preserves_input_sequence_and_midi_capacity(self):
+    def test_clock_backpressure_preserves_input_sequence_and_user_midi_capacity(self):
         engine = RemoteAudioEngine.__new__(RemoteAudioEngine)
         engine._check_owner = Mock()
         engine._input_lock = threading.Lock()
         engine._events = queue.Queue(maxsize=4)
         engine._last_input = 0
         engine._fail = Mock(side_effect=AssertionError("must not kill audio"))
-        self.assertTrue(engine.enqueue_deck_command(0, "sync_tempo", 120, generation=7))
-        self.assertTrue(engine.enqueue_deck_command(0, "sync_beat", 4, generation=7))
-        self.assertFalse(engine.enqueue_deck_command(0, "sync_tempo", 130, generation=7))
+        self.assertTrue(engine.enqueue_deck_clock(0, 120, 4, 10, generation=7))
+        self.assertTrue(engine.enqueue_deck_clock(0, 130, 5, 11, generation=7))
+        self.assertFalse(engine.enqueue_deck_clock(0, 140, 6, 12, generation=7))
         self.assertEqual(engine._last_input, 2)
-        engine.enqueue_param_change(0, "sync", False, generation=7)
-        self.assertEqual(engine._last_input, 3)
-        messages = [pickle.loads(engine._events.get_nowait()) for _ in range(3)]
-        self.assertEqual([message[0] for message in messages], [1, 2, 3])
+        self.assertTrue(engine.enqueue_deck_command(0, "cue", generation=7))
+        midi = SimpleNamespace(dict=lambda: {"type": "note_on", "note": 60, "velocity": 100})
+        engine.enqueue_midi(0, midi, generation=7)
+        self.assertEqual(engine._last_input, 4)
+        messages = [pickle.loads(engine._events.get_nowait()) for _ in range(4)]
+        self.assertEqual([message[0] for message in messages], [1, 2, 3, 4])
         engine._fail.assert_not_called()

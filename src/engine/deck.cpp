@@ -412,8 +412,8 @@ void Deck::render(float* left, float* right, int frames) noexcept {
     }
     const auto now = monotonicSeconds();
     // Sample-time continuity supports both hardware callbacks and offline
-    // rendering. Re-anchor after a stopped device; periodic clock commands
-    // re-project their reception time, without assuming Python's clock epoch.
+    // rendering. Clock snapshots retain their original sample time, so delayed
+    // delivery does not shift the shared beat reference to the reception time.
     if (clockReset || nextClockTime == 0 || now > nextClockTime + 0.1) nextClockTime = now;
     clockReset = false;
     const auto tempo = targetTempo.load(std::memory_order_relaxed);
@@ -519,6 +519,15 @@ double Deck::setParameter(const std::string& key, double value) {
     } else throw std::invalid_argument("Unknown deck parameter: " + key);
     return value;
 }
+void Deck::setClock(double bpm, double beat, double sampledAtSeconds) {
+    if (!std::isfinite(bpm) || bpm <= 0 || !std::isfinite(beat) || !std::isfinite(sampledAtSeconds))
+        throw std::invalid_argument("Deck clock requires positive finite tempo and finite beat/time");
+    clockAnchorBeat = beat;
+    clockAnchorTime = sampledAtSeconds;
+    targetTempo.store(bpm, std::memory_order_release);
+    clockReset = true;
+    clockReceived.store(true, std::memory_order_release);
+}
 void Deck::command(const std::string& action, double value) {
     if (!std::isfinite(value)) throw std::invalid_argument("Deck command value must be finite");
     if (action == "phase_reset") {
@@ -527,18 +536,6 @@ void Deck::command(const std::string& action, double value) {
         playing.store(false, std::memory_order_release);
         request(appliedTrack.load(std::memory_order_acquire),
                 positionSeconds.load(std::memory_order_acquire), reanalysis);
-    } else if (action == "sync_tempo") {
-        if (value <= 0) throw std::invalid_argument("Deck sync_tempo must be positive");
-        const auto now = monotonicSeconds();
-        if (clockReceived.load(std::memory_order_relaxed))
-            clockAnchorBeat += (now - clockAnchorTime) * targetTempo.load(std::memory_order_relaxed) / 60;
-        clockAnchorTime = now;
-        targetTempo.store(value, std::memory_order_release);
-    } else if (action == "sync_beat") {
-        clockAnchorBeat = value;
-        clockAnchorTime = monotonicSeconds();
-        clockReset = true;
-        clockReceived.store(true, std::memory_order_release);
     } else if (action == "cue_set") cueSeconds.store(positionSeconds.load(std::memory_order_acquire), std::memory_order_release);
     else if (action == "play_toggle") {
         // Controls are serialized by the native owner; CAS also makes rapid

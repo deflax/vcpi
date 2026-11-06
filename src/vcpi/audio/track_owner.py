@@ -143,6 +143,8 @@ def _execute(owner, index, operation, arguments):
         result = None
     elif operation == "deck_command":
         result = owner.engine.deck_command(index, **arguments)
+    elif operation == "set_deck_clock":
+        result = owner.engine.set_deck_clock(index, **arguments)
     elif operation == "load_plugin_state":
         owner.engine.load_plugin_state(track_index=index, **arguments)
         result = None
@@ -163,7 +165,7 @@ def _execute(owner, index, operation, arguments):
     if track.source_type == "deck" and operation in {"set_parameter", "set_parameters", "deck_command"}:
         reply["deck"] = dict(track.plugin.native.deck_status())
         reply["deck"]["status_time"] = time.monotonic()
-    if operation not in {"set_parameter", "set_parameters", "deck_command"}:
+    if operation not in {"set_parameter", "set_parameters", "deck_command", "set_deck_clock"}:
         reply["state"] = _track_state(
             owner, index, capture_native_state=operation == "sync_state")
         if operation == "load_plugin_state":

@@ -112,6 +112,9 @@ class _OwnerRuntime:
         elif kind == "deck":
             self.pending_parameters.append(
                 (index, generation, payload[0], payload[1], "deck", None, None))
+        elif kind == "deck_clock":
+            self.pending_parameters.append(
+                (index, generation, None, payload, "deck_clock", None, None))
         elif kind == "track":
             self.engine.enqueue_track_change(index, **payload)
         elif kind == "master_gain":
@@ -237,6 +240,11 @@ class _OwnerRuntime:
             try:
                 if kind == "deck":
                     self.track_request(index, "deck_command", action=name, value=value)
+                    continue
+                if kind == "deck_clock":
+                    bpm, beat, sampled_at = value
+                    self.track_request(index, "set_deck_clock",
+                                       bpm=bpm, beat=beat, sampled_at=sampled_at)
                     continue
                 actual = self.track_request(index, "set_parameter", name=name, value=value,
                                             fx_index=fx_index)
@@ -476,6 +484,10 @@ class _OwnerRuntime:
             result = self.track_request(arguments["track_index"], operation,
                                         action=arguments["action"],
                                         value=arguments.get("value", 0))
+        elif operation == "set_deck_clock":
+            result = self.track_request(arguments["track_index"], operation,
+                                        bpm=arguments["bpm"], beat=arguments["beat"],
+                                        sampled_at=arguments["sampled_at"])
         elif operation == "set_parameters":
             index = arguments.get("track_index")
             if index is not None:

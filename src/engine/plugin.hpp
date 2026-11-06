@@ -45,6 +45,7 @@ public:
     bool isEffect() const noexcept { return effect; }
     DeckStatus deckStatus() const;
     void deckCommand(const std::string& action, double value = 0);
+    void setDeckClock(double bpm, double beat, double sampledAtSeconds);
     void updateDeckCatalog(const std::string& catalog);
     bool compatible(double rate, int size) const noexcept { return sampleRate == rate && frames == size; }
     bool tryAcquire() noexcept { return ownership.tryAcquire(); }

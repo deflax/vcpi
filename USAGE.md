@@ -603,6 +603,13 @@ not a probability or the
 fraction of the entire song with beats. Unreliable analysis reports
 `No reliable beat grid` and leaves playback manual.
 
+Shared clock refreshes carry tempo, beat and the original monotonic sample time
+as one snapshot through the audio and track workers. Each deck extrapolates from
+that sample time, rather than treating a delayed beat value as current on receipt.
+Different queue/IPC delays therefore do not become different beat-phase targets.
+This applies on Linux and macOS; it does not prevent late audio blocks or
+read-ahead starvation when the system cannot keep up.
+
 Analysis is cached persistently as small per-file JSON records:
 
 | Platform / setting | Cache directory |

@@ -300,7 +300,7 @@ class RemoteAudioEngine:
     def _enqueue(self, kind, index, payload, generation=None):
         self._check_owner()
         with self._input_lock:
-            timing = kind == "deck" and payload[0] in {"sync_tempo", "sync_beat"}
+            timing = kind == "deck_clock"
             # Clock refreshes are replaceable. Reserve input capacity for MIDI
             # and user commands instead of failing the owner on timing backlog.
             if timing and self._events.qsize() >= self._events.maxsize // 2:
@@ -329,6 +329,9 @@ class RemoteAudioEngine:
 
     def enqueue_deck_command(self, track_index, action, value=0, generation=None):
         return self._enqueue("deck", track_index, (action, value), generation)
+
+    def enqueue_deck_clock(self, track_index, bpm, beat, sampled_at, generation=None):
+        return self._enqueue("deck_clock", track_index, (bpm, beat, sampled_at), generation)
 
     def enqueue_track_change(self, track_index, generation=None, **fields):
         self._enqueue("track", track_index, fields, generation)
@@ -445,6 +448,10 @@ class RemoteAudioEngine:
     def deck_command(self, track_index, action, value=0):
         return self.request("deck_command", track_index=track_index,
                             action=action, value=value)
+
+    def set_deck_clock(self, track_index, bpm, beat, sampled_at):
+        return self.request("set_deck_clock", track_index=track_index,
+                            bpm=bpm, beat=beat, sampled_at=sampled_at)
 
     def load_plugin_state(self, track_index, state, fx_index=None):
         """Load one saved native chunk and return refreshed lightweight metadata."""
