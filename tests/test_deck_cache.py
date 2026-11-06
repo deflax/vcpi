@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import wave
@@ -87,6 +88,123 @@ print(json.dumps(plugin.deck_status()))
         self.assertEqual(status["bpm"], data["bpm"])
         self.assertEqual(status["beat_offset"], data["offset"])
         self.assertEqual(status["beat_confidence"], data["confidence"])
+
+    def live_deck(self):
+        plugin = self.backend.Plugin(self.catalog(self.song), 48000, 512, "deck")
+        transport = self.backend.Transport(str(self.root / "reanalyze.mmap"), 512, True)
+        runner = self.backend.TrackRunner(transport, plugin, 48000, 512)
+        self.addCleanup(runner.shutdown)
+        return plugin, runner, transport
+
+    def await_status(self, plugin, runner, predicate):
+        deadline = time.monotonic() + 5
+        while True:
+            status = plugin.deck_status()
+            if predicate(status):
+                return status
+            self.assertLess(time.monotonic(), deadline, status)
+            runner.render_once()
+            time.sleep(0.001)
+
+    def test_reanalyze_replaces_live_and_disk_grid_without_resetting_deck(self):
+        self.load()
+        entry, data = self.entry()
+        seeded = self.seed_valid_grid(entry, data)
+        other = self.tone("other")
+        self.load(other)
+        other_entry = next(path for path in self.entries() if path != entry)
+        other_bytes = other_entry.read_bytes()
+        song_before = self.song.stat()
+
+        plugin, runner, transport = self.live_deck()
+        self.assert_grid(plugin.deck_status(), seeded)
+        plugin.set_parameter("sync", False)
+        plugin.set_parameter("pitch", 2.5)
+        plugin.set_parameter("nudge", -0.25)
+        plugin.deck_command("seek", 0.125)
+        self.await_status(plugin, runner, lambda status: not status["loading"])
+        plugin.deck_command("cue_set")
+        plugin.set_parameter("play", True)
+        for _ in range(8):
+            runner.render_once()
+        before = plugin.deck_status()
+        self.assertTrue(before["play"])
+        plugin.deck_command("reanalyze")
+        accepted = plugin.deck_status()
+        self.assertFalse(accepted["play"])
+        self.assertGreater(accepted["request_id"], before["request_id"])
+        after = self.await_status(plugin, runner, lambda status: not status["loading"])
+        self.assertEqual((after["bpm"], after["beat_offset"], after["beat_confidence"]), (0, 0, 0))
+        self.assertEqual(after["error"], "")
+        self.assertFalse(after["play"])
+        self.assertAlmostEqual(after["position"], before["position"])
+        for key in ("track_id", "cue", "pitch", "nudge", "sync"):
+            self.assertEqual(after[key], before[key], key)
+        fresh = json.loads(entry.read_text())
+        self.assertEqual((fresh["bpm"], fresh["offset"], fresh["confidence"]), (0, 0, 0))
+        self.assertEqual(fresh["source"], data["source"])
+        self.assertEqual(other_entry.read_bytes(), other_bytes)
+        song_after = self.song.stat()
+        self.assertEqual((song_after.st_mtime_ns, song_after.st_ctime_ns),
+                         (song_before.st_mtime_ns, song_before.st_ctime_ns))
+        self.assert_grid(self.subprocess_status(), fresh)
+
+    def test_reanalyze_recovers_from_a_cached_no_grid_result(self):
+        rate = 16000
+        audio = np.zeros(rate * 40, dtype=np.float64)
+        t = np.arange(int(0.025 * rate)) / rate
+        pulse = 0.7 * np.exp(-t * 180) * np.cos(2 * np.pi * 800 * t)
+        for beat in np.arange(0.137, 40 - 0.025, 0.5):
+            begin = round(beat * rate)
+            audio[begin:begin + len(pulse)] += pulse
+        with wave.open(str(self.song), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(rate)
+            output.writeframes((audio * 32767).astype("<i2").tobytes())
+        self.assertAlmostEqual(self.load()["bpm"], 120, delta=0.15)
+        entry, data = self.entry()
+        data.update(bpm=0, offset=0, confidence=0)
+        entry.write_text(json.dumps(data))
+        plugin, runner, transport = self.live_deck()
+        self.assertEqual(plugin.deck_status()["bpm"], 0)
+        plugin.deck_command("reanalyze")
+        after = self.await_status(plugin, runner, lambda status: not status["loading"])
+        self.assertAlmostEqual(after["bpm"], 120, delta=0.15)
+        self.assertGreater(after["beat_confidence"], 0.65)
+        self.assertFalse(after["play"])
+        self.assertAlmostEqual(json.loads(entry.read_text())["bpm"], 120, delta=0.15)
+
+    def test_reanalyze_without_disk_entry_still_invalidates_live_grid(self):
+        self.load()
+        entry, data = self.entry()
+        seeded = self.seed_valid_grid(entry, data)
+        plugin, runner, transport = self.live_deck()
+        self.assert_grid(plugin.deck_status(), seeded)
+        entry.unlink()
+        plugin.deck_command("reanalyze")
+        after = self.await_status(plugin, runner, lambda status: not status["loading"])
+        self.assertEqual(after["bpm"], 0)
+        self.assertEqual(after["error"], "")
+        self.assertEqual(json.loads(entry.read_text())["bpm"], 0)
+
+    def test_reanalyze_reports_cache_removal_failure_without_losing_selected_song(self):
+        self.load()
+        entry, data = self.entry()
+        self.seed_valid_grid(entry, data)
+        plugin, runner, transport = self.live_deck()
+        entry.unlink()
+        entry.mkdir()
+        before = plugin.deck_status()
+        plugin.set_parameter("play", True)
+        plugin.deck_command("reanalyze")
+        after = self.await_status(plugin, runner, lambda status: not status["loading"])
+        self.assertIn("cache", after["error"])
+        self.assertFalse(after["play"])
+        self.assertEqual(after["track_id"], before["track_id"])
+        self.assertEqual(after["position"], before["position"])
+        self.assertTrue(entry.is_dir())
+
 
     def test_no_grid_is_persisted_and_reused_across_processes(self):
         cold = self.load()

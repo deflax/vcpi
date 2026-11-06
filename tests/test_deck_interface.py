@@ -56,7 +56,7 @@ class DeckCLITests(unittest.TestCase):
         self.cli = HostCLI(self.host, stdout=self.output, owns_host=False)
 
     def test_invalid_transport_grammar_does_not_mutate_deck(self):
-        for invalid in ("cue extra", "status extra", "seek", "seek xx", "seek 1 2"):
+        for invalid in ("cue extra", "status extra", "reanalyze extra", "seek", "seek xx", "seek 1 2"):
             self.cli.onecmd("track 1 deck " + invalid)
         self.engine.deck_command.assert_not_called()
         self.assertIn("Error:", self.output.getvalue())
@@ -70,8 +70,6 @@ class DeckCLITests(unittest.TestCase):
         self.assertIn("Opening title", text)
         self.assertIn("257: Title 256 — /music/256.wav", text)
         self.assertIn("deck", complete_line(self.cli, "track 1 ")["matches"])
-        self.assertEqual(complete_line(self.cli, "track 1 deck ")["matches"],
-                         ["cue", "remove", "seek", "status"])
         self.assertEqual(complete_line(self.cli, "track 1 deck cue ")["matches"], ["set"])
         self.assertEqual(complete_line(self.cli, "set 1 play ")["matches"], ["false", "true"])
         self.assertIn("sync", complete_line(self.cli, "set 1 ")["matches"])

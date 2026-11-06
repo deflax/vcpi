@@ -130,8 +130,10 @@ analysis limits and controls. There is no key lock, looping or crossfader.
 Beat analysis is cached across loads and daemon restarts. On Linux the default
 is `~/.cache/vcpi/analysis/`; an absolute `XDG_CACHE_HOME` overrides the cache root.
 macOS defaults to `~/Library/Caches/vcpi/analysis/`. File identity and analyzer
-version changes invalidate cached results. The cache contains analysis metadata,
-not audio or session playlists; see [deck commands](USAGE.md#deck-commands).
+version changes invalidate cached results. Use `track 1 deck reanalyze` to
+discard the selected song's cached beats and detect again, paused at its current
+position. The cache contains analysis metadata, not audio or session playlists;
+see [deck commands](USAGE.md#deck-commands).
 
 ## Repository Layout
 

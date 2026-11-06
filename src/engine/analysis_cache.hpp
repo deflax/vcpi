@@ -12,6 +12,7 @@ public:
     explicit BeatAnalysisCache(const std::string& audioPath) noexcept;
     std::optional<BeatAnalysis> load() const noexcept;
     void store(const BeatAnalysis& analysis) const noexcept;
+    void erase() const;
 
 private:
     std::string sourcePath;

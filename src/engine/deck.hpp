@@ -49,7 +49,7 @@ private:
     static constexpr std::size_t capacity = 262144, mirror = 512;
     static constexpr int decodeFrames = 4096, history = 200;
     enum State { free, preparing, ready, held, active, retired };
-    enum Mode { selection, seek, recall, restore };
+    enum Mode { selection, seek, recall, restore, reanalysis };
     struct Track {
         std::string id, path, title;
         std::optional<BeatAnalysis> grid;

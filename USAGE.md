@@ -552,6 +552,7 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 |---|---|
 | `get 1` | Deck parameters and their values, units and ranges, available for `set` |
 | `track 1 deck status` | Cached playlist, identity, transport, detected grid, sync state and errors |
+| `track 1 deck reanalyze` | Pause at the current position, discard this song's cached grid and run detection again |
 | `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
 | `track 1 deck <audio-file> [--name <label>]` | Append a song, or create a paused one-song deck |
 | `track 1 deck remove 2` | Remove playlist entry 2; final-entry removal requires `track 1 clear` |
@@ -613,11 +614,29 @@ canonical path requires fresh analysis. No-grid results are cached too.
 
 The cache is separate from sessions and music folders. Missing, malformed or
 stale records are recomputed; unavailable/unwritable storage does not prevent
-loading. Writes are atomic across concurrent deck processes. To force fresh
-analysis, stop the daemon, delete the applicable analysis cache directory, then
-restart and reload the session. Deleting the cache never deletes music or
-playlist data. Set `XDG_CACHE_HOME` before starting the daemon to choose a
-different cache root; relative values are ignored.
+loading. Writes are atomic across concurrent deck processes.
+
+To force fresh detection for the selected song:
+
+```text
+track 1 deck reanalyze
+track 1 deck status
+```
+
+`reanalyze` pauses the selected deck, removes that song's persisted cache entry,
+invalidates this deck's in-memory grid, and runs analysis asynchronously off the
+render thread. It retains position, cue, pitch, nudge, sync, playlist and effects;
+it does not resume playback automatically. Once status is `ready`, use
+`set 1 play true` to resume. Like a seek or selection, activating the prepared
+result requires an audio render block; if audio output is stopped, start it to
+complete activation. Cache-removal or analysis errors appear in deck status.
+
+Other decks and other songs' cache entries are not cleared. An already-loaded
+deck retains its own in-memory result until reloaded or reanalyzed. No music,
+file timestamps, or playlist data are changed, and no daemon restart is needed.
+A fresh analysis can still return “No reliable beat grid”; that result is cached
+again. Set `XDG_CACHE_HOME` before daemon startup to choose a different cache root;
+relative values are ignored.
 
 Set the target with `tempo 128`; enable Link normally to follow its shared
 timeline instead. Local tempo changes preserve beat continuity. Sync matches

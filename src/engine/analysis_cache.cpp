@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <system_error>
 #include <unistd.h>
 
 namespace vcpi {
@@ -194,6 +195,18 @@ std::optional<BeatAnalysis> BeatAnalysisCache::load() const noexcept {
         return std::nullopt;
     }
 }
+
+void BeatAnalysisCache::erase() const {
+    if (directory.empty() || filename.empty()) return;
+    const Descriptor folder(::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+    if (folder.value < 0) {
+        if (errno == ENOENT || errno == ENOTDIR) return;
+        throw std::system_error(errno, std::generic_category(), "Unable to open deck beat analysis cache");
+    }
+    if (::unlinkat(folder.value, filename.c_str(), 0) != 0 && errno != ENOENT)
+        throw std::system_error(errno, std::generic_category(), "Unable to remove deck beat analysis cache");
+}
+
 
 void BeatAnalysisCache::store(const BeatAnalysis& analysis) const noexcept {
     try {

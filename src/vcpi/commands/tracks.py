@@ -122,14 +122,18 @@ def deck(ctx, track_num, parts, text):
     try:
         tokens = parts[2:]
         if not tokens:
-            raise ValueError("expected audio path, remove <index>, status, seek <seconds>, or cue [set]")
+            raise ValueError("expected audio path, remove <index>, status, reanalyze, seek <seconds>, or cue [set]")
         action = tokens[0]
-        if action in ("status", "seek", "cue", "remove"):
+        if action in ("status", "reanalyze", "seek", "cue", "remove"):
             track = ctx.host.engine.tracks[idx]
             if track is None or track.source_type != "deck":
                 raise ValueError(f"Track {track_num} is not a deck")
             if tokens == ["status"]:
                 print_deck_status(ctx, track)
+            elif tokens == ["reanalyze"]:
+                ctx.host.engine.deck_command(idx, "reanalyze")
+                ctx.emit("  Reanalysis accepted; deck paused at its current position. "
+                         f"Check track {track_num} deck status for completion.")
             elif action == "seek" and len(tokens) == 2:
                 ctx.host.engine.deck_command(idx, "seek", float(tokens[1]))
                 ctx.emit("  seek accepted")
@@ -141,7 +145,7 @@ def deck(ctx, track_num, parts, text):
                 track = ctx.host.remove_deck_entry(idx, int(tokens[1]))
                 print_deck_status(ctx, track)
             else:
-                raise ValueError("expected status, remove <index>, seek <seconds>, or cue [set]")
+                raise ValueError("expected status, reanalyze, remove <index>, seek <seconds>, or cue [set]")
         else:
             sources, name = source_args(tokens, 1)
             track = ctx.host.load_deck(

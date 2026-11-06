@@ -267,8 +267,13 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
     stream.length = stream.reader->lengthInSamples;
     if (!std::isfinite(stream.rate) || stream.rate < 8000 || stream.rate > 768000 || stream.length <= 0)
         throw std::invalid_argument("Invalid deck audio rate or empty audio");
+    if (wanted.mode == reanalysis) {
+        source->erase();
+        track.grid.reset();
+        track.gridSource.reset();
+    }
     if (!track.grid || !track.gridSource || !source->matches(*track.gridSource)) {
-        auto grid = source->load();
+        auto grid = wanted.mode == reanalysis ? std::optional<BeatAnalysis>{} : source->load();
         if (!grid) {
             BeatAnalysis analyzed;
             if (!analyze(stream, analyzed)) return false;
@@ -497,7 +502,11 @@ double Deck::setParameter(const std::string& key, double value) {
 }
 void Deck::command(const std::string& action, double value) {
     if (!std::isfinite(value)) throw std::invalid_argument("Deck command value must be finite");
-    if (action == "sync_tempo") {
+    if (action == "reanalyze") {
+        playing.store(false, std::memory_order_release);
+        request(appliedTrack.load(std::memory_order_acquire),
+                positionSeconds.load(std::memory_order_acquire), reanalysis);
+    } else if (action == "sync_tempo") {
         if (value <= 0) throw std::invalid_argument("Deck sync_tempo must be positive");
         const auto now = monotonicSeconds();
         if (clockReceived.load(std::memory_order_relaxed))
