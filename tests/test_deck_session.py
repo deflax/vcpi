@@ -76,6 +76,7 @@ class DeckSessionTests(unittest.TestCase):
         host.engine.set_parameter(0, "play", True)
         host.engine.set_parameter(0, "nudge", 1)
         host.engine.set_parameter(0, "sync", False)
+        host.engine.set_parameter(0, "phase_offset", -0.375)
         host.save_session()
         saved = json.loads(self.session.read_text())
         entry = saved["tracks"][0]
@@ -86,6 +87,7 @@ class DeckSessionTests(unittest.TestCase):
         self.assertEqual(entry["deck"]["cue"], 0.25)
         self.assertEqual(entry["deck"]["pitch"], -1.25)
         self.assertFalse(entry["deck"]["sync"])
+        self.assertEqual(entry["deck"]["phase_offset"], -0.375)
         self.bank.unlink()
         restored = self.host()
         restored.restore_session()
@@ -100,12 +102,14 @@ class DeckSessionTests(unittest.TestCase):
         self.assertFalse(track.plugin.values["sync"])
         self.assertEqual(status["nudge"], 0)
         self.assertAlmostEqual(status["pitch"], -1.25)
+        self.assertEqual(status["phase_offset"], -0.375)
+        self.assertEqual(track.plugin.values["phase_offset"], -0.375)
         self.assertAlmostEqual(status["cue"], 0.25)
         self.assertAlmostEqual(status["position"], 0.25, places=3)
         self.assertEqual(track.plugin.values["track_select"], 1)
         self.assertEqual(status["tracks"], entries)
 
-    def test_old_session_defaults_to_sync_and_restores_paused(self):
+    def test_old_session_defaults_to_sync_and_zero_phase_and_restores_paused(self):
         self.session.write_text(json.dumps({
             "version": 3, "tracks": [
                 {"kind": "deck", "name": "Old", "path": str(self.bank),
@@ -117,15 +121,66 @@ class DeckSessionTests(unittest.TestCase):
         status = self.await_status(host, 0, lambda state: state.get("state") == "ready")
         self.assertTrue(status["sync"])
         self.assertFalse(status["play"])
+        self.assertEqual(status["phase_offset"], 0)
+        self.assertEqual(host.engine.tracks[0].plugin.values["phase_offset"], 0)
         host.save_session()
-        self.assertEqual(json.loads(self.session.read_text())["tracks"][0]["deck"]["tracks"],
+        saved = json.loads(self.session.read_text())
+        self.assertEqual(saved["tracks"][0]["deck"]["phase_offset"], 0)
+        self.assertEqual(saved["tracks"][0]["deck"]["tracks"],
                          [{"id": entry["id"], "title": entry["title"],
                            "path": str((self.root / entry["path"]).resolve())}
                           for entry in self.entries])
+        del saved["tracks"][0]["deck"]["phase_offset"]
+        self.session.write_text(json.dumps(saved))
         self.bank.unlink()
         restored = self.host()
         restored.restore_session(start_audio=False)
         self.assertEqual(restored.engine.tracks[0].deck["track_id"], "first")
+        self.assertEqual(restored.engine.tracks[0].deck["phase_offset"], 0)
+
+    def test_synced_session_restores_selected_song_phase_offset(self):
+        host = self.host()
+        host.load_deck(0, str(self.root / "first.wav"))
+        host.load_deck(0, str(self.root / "second.wav"))
+        selected = host.engine.tracks[0].deck["tracks"][1]["id"]
+        # Restore the desired selection directly: stopped output cannot commit a queued switch.
+        host.restore_deck(0, {**host.engine.tracks[0].deck, "track_id": selected})
+        host.engine.set_parameter(0, "phase_offset", 0.5)
+        host.save_session()
+        saved = json.loads(self.session.read_text())
+        self.assertEqual(saved["tracks"][0]["deck"]["track_id"], selected)
+        self.assertEqual(saved["tracks"][0]["deck"]["phase_offset"], 0.5)
+        restored = self.host()
+        restored.restore_session(start_audio=False)
+        status = self.await_status(restored, 0, lambda state: state.get("state") == "ready")
+        self.assertEqual(status["track_id"], selected)
+        self.assertEqual(status["phase_offset"], 0.5)
+        self.assertTrue(status["sync"])
+        self.assertFalse(status["play"])
+        self.assertEqual(restored.engine.tracks[0].plugin.values["phase_offset"], 0.5)
+
+    def test_invalid_phase_offset_restore_preserves_existing_deck(self):
+        host = self.host()
+        host.load_deck(0, str(self.root / "first.wav"))
+        host.engine.set_parameter(0, "phase_offset", 0.25)
+        host.engine.set_parameter(0, "nudge", 0.75)
+        self.await_status(host, 0, lambda state: state.get("state") == "ready")
+        previous = host.engine.tracks[0]
+        fields = ("track_id", "cue", "pitch", "play", "sync", "nudge", "phase_offset")
+        before = {key: previous.deck[key] for key in fields}
+        inline = dict(snapshot(host)["tracks"][0]["deck"])
+        legacy = {"bank_path": str(self.bank), "bank_id": "live-set",
+                  "track_id": "second", "cue": 0.5, "pitch": -1}
+        for deck in (inline, legacy):
+            for phase_offset in (-0.500001, 0.500001, float("-inf"), float("inf"), float("nan")):
+                with self.subTest(inline="tracks" in deck, phase_offset=phase_offset):
+                    with self.assertRaisesRegex(ValueError, "phase offset"):
+                        host.restore_deck(0, {**deck, "phase_offset": phase_offset}, "Replacement")
+                    current = host.engine.tracks[0]
+                    self.assertEqual(current.worker_pid, previous.worker_pid)
+                    self.assertEqual(current.generation, previous.generation)
+                    self.assertEqual(current.name, previous.name)
+                    self.assertEqual({key: current.deck[key] for key in fields}, before)
 
     def test_missing_id_and_bank_identity_report_errors_but_restore_other_tracks(self):
         for bank_id, track_id, bank_path in (

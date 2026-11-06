@@ -57,6 +57,7 @@ def _snapshot_cached(host: VcpiCore) -> dict:
                 "cue": status["cue"],
                 "pitch": status["pitch"],
                 "sync": status.get("sync", True),
+                "phase_offset": status.get("phase_offset", 0),
             }
         elif track.source_type != "wav":
             track_entry["native_state"] = _saved_plugin_state(track.plugin)

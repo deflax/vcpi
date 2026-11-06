@@ -307,7 +307,8 @@ class VcpiCore:
             if not isinstance(deck.get(key), str) or not deck[key].strip():
                 raise ValueError(f"deck {key} is required")
         settings = dict(track_id=deck["track_id"], cue=deck["cue"],
-                        pitch=deck["pitch"], sync=deck.get("sync", True))
+                        pitch=deck["pitch"], sync=deck.get("sync", True),
+                        phase_offset=deck.get("phase_offset", 0))
         if "tracks" in deck:
             catalog = make_catalog(deck["bank_id"], deck["tracks"],
                                    bank_path=deck.get("bank_path"), **settings)

@@ -20,7 +20,7 @@ struct DeckStatus {
     int trackSelect = 1, requestedTrackSelect = 1;
     std::uint64_t requestId = 0;
     bool loading = false, ready = true, buffering = false, ended = false, play = false;
-    double position = 0, duration = 0, cue = 0, pitch = 0, nudge = 0;
+    double position = 0, duration = 0, cue = 0, pitch = 0, nudge = 0, phaseOffset = 0;
     bool sync = true, syncActive = false;
     double bpm = 0, beatOffset = 0, beatConfidence = 0, playbackSpeed = 1, beatPhaseError = 0;
 };
@@ -76,7 +76,7 @@ private:
     bool analyze(Stream& stream, BeatAnalysis& grid);
     void publishGrid(const Stream& stream) noexcept;
     void work() noexcept;
-    void commit(int index) noexcept;
+    void commit(int index, double& phase) noexcept;
     void retirePending() noexcept;
     void setError(std::uint64_t id, const std::string& error);
     bool cancelled(std::uint64_t id) const noexcept;
@@ -93,6 +93,7 @@ private:
     std::atomic<int> requestedTrack{1}, appliedTrack{1};
     std::atomic<bool> stopping{false}, playing{false}, buffering{false}, ended{false};
     std::atomic<double> positionSeconds{0}, durationSeconds{0}, cueSeconds{0}, pitchTarget{0}, nudgeTarget{0};
+    std::atomic<double> phaseOffset{0};
     std::atomic<bool> syncEnabled{true}, syncActive{false};
     std::atomic<double> detectedBpm{0}, detectedOffset{0}, detectedConfidence{0};
     std::atomic<double> playbackSpeed{1}, beatPhaseError{0}, targetTempo{0};

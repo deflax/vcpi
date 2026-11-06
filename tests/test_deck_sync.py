@@ -214,6 +214,100 @@ class NativeDeckSyncTests(unittest.TestCase):
             self.assertAlmostEqual(status["bpm"] * status["playback_speed"], 135, delta=0.3)
             self.assertLess(abs(status["beat_phase_error"]), 0.01)
 
+    def test_synced_nudge_retains_opposite_acoustic_offsets_without_changing_tempo(self):
+        path = self.percussion("phase", seconds=60)
+        decks = [self.deck([path]) for _ in range(3)]
+        self.clock(decks, 120)
+        for plugin, _ in decks:
+            plugin.set_parameter("play", True)
+        self.render(decks, 8)
+        for (plugin, _), direction in zip(decks[1:], (1, -1)):
+            plugin.set_parameter("nudge", direction)
+        self.render(decks, 4)
+        for (plugin, runner), direction in zip(decks[1:], (1, -1)):
+            self.assertAlmostEqual(plugin.deck_status()["phase_offset"], direction * 0.16, places=8)
+            plugin.set_parameter("nudge", 0)
+            retained = plugin.deck_status()["phase_offset"]
+            # Render the first release block as well as the long settling tail:
+            # a smoothed nudge target must not keep moving the saved correction.
+            runner.render_once()
+            self.assertEqual(plugin.deck_status()["phase_offset"], retained)
+        decks[0][1].render_once()
+        self.render(decks, 6)
+        audio = self.render(decks, 3)
+        reference = self.pulse_times(audio[0])
+        for (plugin, _), samples, direction in zip(decks[1:], audio[1:], (1, -1)):
+            status = plugin.deck_status()
+            self.assertAlmostEqual(status["phase_offset"], direction * 0.16, places=8)
+            self.assertAlmostEqual(status["bpm"] * status["playback_speed"], 120, delta=0.3)
+            self.assertLess(abs(status["beat_phase_error"]), 0.01)
+            pulses = self.pulse_times(samples)
+            np.testing.assert_allclose(np.diff(pulses), 0.5, atol=0.012)
+            for pulse in reference[1:-1]:
+                nearest = pulses[np.argmin(np.abs(pulses - pulse))]
+                self.assertAlmostEqual(nearest - pulse, -direction * 0.08, delta=0.012)
+        reference_status = decks[0][0].deck_status()
+        self.assertEqual(reference_status["phase_offset"], 0)
+        self.assertAlmostEqual(reference_status["bpm"] * reference_status["playback_speed"], 120, delta=0.3)
+
+    def test_direct_phase_and_reset_slew_audio_without_transport_jumps(self):
+        path = self.percussion("direct-phase", seconds=50)
+        decks = [self.deck([path]), self.deck([path])]
+        self.clock(decks, 120)
+        for plugin, _ in decks:
+            plugin.set_parameter("play", True)
+        self.render(decks, 8)
+        plugin, _ = decks[1]
+        for offset in (0.25, -0.25, 0):
+            with self.subTest(offset=offset):
+                before = plugin.deck_status()
+                if offset:
+                    plugin.set_parameter("phase_offset", offset)
+                else:
+                    plugin.deck_command("phase_reset")
+                after = plugin.deck_status()
+                self.assertEqual(after["phase_offset"], offset)
+                for key in ("position", "cue", "play", "playback_speed", "request_id"):
+                    self.assertEqual(after[key], before[key], key)
+                self.render(decks, 6)
+                reference, corrected = map(self.pulse_times, self.render(decks, 2))
+                status = plugin.deck_status()
+                self.assertLess(abs(status["beat_phase_error"]), 0.01)
+                self.assertAlmostEqual(status["bpm"] * status["playback_speed"], 120, delta=0.3)
+                for pulse in reference[1:-1]:
+                    nearest = corrected[np.argmin(np.abs(corrected - pulse))]
+                    self.assertAlmostEqual(nearest - pulse, -offset * 0.5, delta=0.012)
+
+    def test_phase_wrap_pause_end_and_sync_toggle_preserve_correction(self):
+        path = self.percussion("wrap")
+        decks = [self.deck([path], phase_offset=direction * 0.499) for direction in (1, -1)]
+        self.clock(decks, 120)
+        for (plugin, _), direction in zip(decks, (1, -1)):
+            plugin.set_parameter("nudge", direction)
+        self.render(decks, 0.4)
+        for (plugin, _), direction in zip(decks, (1, -1)):
+            self.assertEqual(plugin.deck_status()["phase_offset"], direction * 0.499)
+            plugin.set_parameter("play", True)
+        self.render(decks, 0.4)
+        for (plugin, _), direction in zip(decks, (1, -1)):
+            self.assertAlmostEqual(plugin.deck_status()["phase_offset"],
+                                   math.remainder(direction * 0.515, 1), places=8)
+            plugin.set_parameter("play", False)
+            plugin.set_parameter("sync", False)
+        frozen = [plugin.deck_status()["phase_offset"] for plugin, _ in decks]
+        self.clock(decks, 130)
+        self.render(decks, 0.4)
+        for deck, phase in zip(decks, frozen):
+            plugin, _ = deck
+            self.assertEqual(plugin.deck_status()["phase_offset"], phase)
+            plugin.set_parameter("sync", True)
+            plugin.deck_command("seek", plugin.deck_status()["duration"])
+            self.assertTrue(self.settle_request(deck)["ended"])
+            plugin.set_parameter("nudge", 1)
+        self.render(decks, 0.4)
+        for (plugin, _), phase in zip(decks, frozen):
+            self.assertEqual(plugin.deck_status()["phase_offset"], phase)
+
     def test_silence_and_missing_clock_keep_manual_cursor(self):
         for name, bpm in (("silence", 0), ("no-clock", 120)):
             with self.subTest(name=name):
@@ -227,12 +321,14 @@ class NativeDeckSyncTests(unittest.TestCase):
                     self.assertIn("reliable", status["sync_error"])
                 plugin.set_parameter("pitch", 8)
                 plugin.set_parameter("play", True)
+                plugin.set_parameter("nudge", 1)
                 self.render([deck], 0.4)
                 start = plugin.deck_status()["position"]
                 audio = self.render([deck], 0.4)[0]
                 status = plugin.deck_status()
                 self.assertFalse(status["sync_active"])
-                self.assertAlmostEqual(status["position"] - start, 0.4 * 1.08, delta=0.0001)
+                self.assertAlmostEqual(status["position"] - start, 0.4 * 1.08 * 1.02, delta=0.0001)
+                self.assertEqual(status["phase_offset"], 0)
                 if not bpm:
                     np.testing.assert_array_equal(audio, 0)
 
@@ -255,6 +351,7 @@ class NativeDeckSyncTests(unittest.TestCase):
         self.assertFalse(status["sync_active"])
         self.assertEqual(status["sync_error"], "")
         self.assertAlmostEqual(status["position"] - start, 0.4 * 0.92 * 1.02, delta=0.0001)
+        self.assertEqual(status["phase_offset"], 0)
 
     def test_pause_seek_and_selection_reacquire_grid_phase(self):
         deck = self.deck([self.percussion("first", 120), self.percussion("second", 100, 0.21)])
@@ -287,10 +384,12 @@ class NativeDeckSyncTests(unittest.TestCase):
         plugin, _ = deck
         self.clock([deck], 400)
         plugin.set_parameter("play", True)
+        plugin.set_parameter("nudge", -1)
         self.render([deck], 0.4)
         status = plugin.deck_status()
         self.assertFalse(status["sync_active"])
         self.assertIn("Unsupported sync speed", status["sync_error"])
-        self.assertAlmostEqual(status["position"], 0.4, delta=0.0001)
+        self.assertAlmostEqual(status["position"], 0.4 * 0.98 + 0.0002, delta=0.0001)
+        self.assertEqual(status["phase_offset"], 0)
         with self.assertRaises(ValueError):
             plugin.deck_command("sync_tempo", 0)

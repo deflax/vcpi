@@ -192,7 +192,7 @@ def apply_deck_status(track, status):
     values = dict(status)
     if "position" in status:
         values["seek"] = status["position"]
-    for name in ("track_select", "seek", "nudge", "play", "pitch", "sync"):
+    for name in ("track_select", "seek", "nudge", "play", "pitch", "sync", "phase_offset"):
         if name not in values:
             continue
         value = values[name]

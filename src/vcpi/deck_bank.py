@@ -22,7 +22,8 @@ def _text(value, label):
     return value
 
 
-def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=True):
+def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=True,
+              phase_offset=0):
     """Resolve ordered assets without opening them; select saved identity exactly."""
     path = Path(bank_path).expanduser().resolve()
     with path.open("rb") as source:
@@ -52,7 +53,7 @@ def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=Tr
         title = _text(entry.get("title", identity_track), "track title")
         tracks.append({"id": identity_track, "path": str(asset.resolve()), "title": title})
     return make_catalog(identity, tracks, bank_path=str(path), track_id=track_id,
-                        cue=cue, pitch=pitch, sync=sync)
+                        cue=cue, pitch=pitch, sync=sync, phase_offset=phase_offset)
 
 
 def audio_entry(audio_path):
@@ -66,8 +67,8 @@ def audio_entry(audio_path):
 
 
 def make_catalog(identity, tracks, *, bank_path=None, track_id=None,
-                 cue=0, pitch=0, sync=True):
-    """Validate and encode an inline playlist, optionally restoring its selection."""
+                 cue=0, pitch=0, sync=True, phase_offset=0):
+    """Encode a playlist with selected-song phase correction in bounded beats."""
     identity = _text(identity, "playlist ID")
     if not isinstance(tracks, list) or not tracks:
         raise ValueError("deck playlist must contain at least one track")
@@ -94,12 +95,15 @@ def make_catalog(identity, tracks, *, bank_path=None, track_id=None,
         raise ValueError("deck cue must be finite and nonnegative")
     if not math.isfinite(pitch) or not -16 <= pitch <= 16:
         raise ValueError("deck pitch must be between -16 and 16")
+    phase_offset = float(phase_offset)
+    if not math.isfinite(phase_offset) or not -0.5 <= phase_offset <= 0.5:
+        raise ValueError("deck phase offset must be finite and between -0.5 and 0.5")
     if type(sync) is not bool:
         raise ValueError("deck sync must be a boolean")
     catalog = {"version": 1, "id": identity,
                "bank_path": _text(bank_path or f"session:{identity}", "playlist locator"),
                "tracks": entries, "initial_track": initial, "cue": cue, "pitch": pitch,
-               "sync": sync}
+               "sync": sync, "phase_offset": phase_offset}
     return validate_catalog(json.dumps(catalog, ensure_ascii=False, separators=(",", ":")))
 
 

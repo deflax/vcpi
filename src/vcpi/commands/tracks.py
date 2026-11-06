@@ -122,9 +122,9 @@ def deck(ctx, track_num, parts, text):
     try:
         tokens = parts[2:]
         if not tokens:
-            raise ValueError("expected audio path, remove <index>, status, reanalyze, seek <seconds>, or cue [set]")
+            raise ValueError("expected audio path, remove <index>, status, reanalyze, seek <seconds>, cue [set], or phase reset")
         action = tokens[0]
-        if action in ("status", "reanalyze", "seek", "cue", "remove"):
+        if action in ("status", "reanalyze", "seek", "cue", "phase", "remove"):
             track = ctx.host.engine.tracks[idx]
             if track is None or track.source_type != "deck":
                 raise ValueError(f"Track {track_num} is not a deck")
@@ -134,6 +134,9 @@ def deck(ctx, track_num, parts, text):
                 ctx.host.engine.deck_command(idx, "reanalyze")
                 ctx.emit("  Reanalysis accepted; deck paused at its current position. "
                          f"Check track {track_num} deck status for completion.")
+            elif tokens == ["phase", "reset"]:
+                ctx.host.engine.deck_command(idx, "phase_reset")
+                ctx.emit("  phase offset reset accepted")
             elif action == "seek" and len(tokens) == 2:
                 ctx.host.engine.deck_command(idx, "seek", float(tokens[1]))
                 ctx.emit("  seek accepted")
@@ -145,7 +148,7 @@ def deck(ctx, track_num, parts, text):
                 track = ctx.host.remove_deck_entry(idx, int(tokens[1]))
                 print_deck_status(ctx, track)
             else:
-                raise ValueError("expected status, reanalyze, remove <index>, seek <seconds>, or cue [set]")
+                raise ValueError("expected status, reanalyze, remove <index>, seek <seconds>, cue [set], or phase reset")
         else:
             sources, name = source_args(tokens, 1)
             track = ctx.host.load_deck(
@@ -264,7 +267,7 @@ def print_deck_status(ctx, track):
     ctx.emit(f"  playlist_id = {status.get('bank_id', '(not cached)')}")
     for key in ("track_id", "track_title",
                 "requested_track_id", "request_id", "state", "play",
-                "position", "duration", "cue", "pitch", "nudge", "bpm",
+                "position", "duration", "cue", "pitch", "nudge", "phase_offset", "bpm",
                 "beat_offset", "beat_confidence", "sync", "sync_active",
                 "sync_error", "playback_speed", "beat_phase_error", "error"):
         ctx.emit(f"  {key} = {status.get(key, '(not cached)')}")

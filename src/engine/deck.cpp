@@ -51,6 +51,9 @@ Deck::Deck(const std::string& catalog, double rate)
     const auto initial = number(parsed, "initial_track", 1);
     const auto initialCue = number(parsed, "cue", 0);
     const auto initialPitch = number(parsed, "pitch", 0);
+    const auto initialPhase = number(parsed, "phase_offset", 0);
+    if (!std::isfinite(initialPhase) || initialPhase < -0.5 || initialPhase > 0.5)
+        throw std::invalid_argument("Deck phase_offset must be finite and in [-0.5, 0.5]");
     if (!std::isfinite(initial) || initial != std::floor(initial) || initial < 1 || initial > trackCount() ||
         !std::isfinite(initialCue) || initialCue < 0 || !std::isfinite(initialPitch) || initialPitch < -16 || initialPitch > 16)
         throw std::invalid_argument("Invalid initial deck selection, cue or pitch");
@@ -60,6 +63,7 @@ Deck::Deck(const std::string& catalog, double rate)
     requestedTrack.store(requested.track);
     appliedTrack.store(requested.track);
     pitchTarget.store(initialPitch);
+    phaseOffset.store(initialPhase);
     pitch = initialPitch;
     syncEnabled.store(number(parsed, "sync", 1) != 0);
     formats.registerFormat(new juce::WavAudioFormat(), true);
@@ -143,7 +147,8 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
             requested = {id, newTrack, 0, selection};
             requestedTrack.store(newTrack, std::memory_order_release);
             if (prepared >= 0) {
-                commit(prepared);
+                auto phase = phaseOffset.load(std::memory_order_relaxed);
+                commit(prepared, phase);
                 gain = 0;
             } else {
                 appliedTrack.store(newTrack, std::memory_order_release);
@@ -365,7 +370,7 @@ void Deck::retirePending() noexcept {
     streams[pending].state.store(retired, std::memory_order_release);
     pending = -1;
 }
-void Deck::commit(int index) noexcept {
+void Deck::commit(int index, double& phase) noexcept {
     commitSequence.fetch_add(1, std::memory_order_acq_rel);
     auto& stream = streams[index];
     streams[current].state.store(retired, std::memory_order_release);
@@ -373,6 +378,8 @@ void Deck::commit(int index) noexcept {
     pending = -1;
     cursor = stream.target;
     if (stream.request.mode == selection) {
+        phase = 0;
+        phaseOffset.store(0, std::memory_order_release);
         playing.store(false, std::memory_order_release);
         cueSeconds.store(0, std::memory_order_release);
         nudgeTarget.store(0, std::memory_order_release);
@@ -417,12 +424,16 @@ void Deck::render(float* left, float* right, int frames) noexcept {
     const bool requestedSync = syncEnabled.load(std::memory_order_relaxed);
     bool activeSync = false;
     double speed = 1, phaseError = 0;
+    // Controls share render ownership. Accumulate locally, publishing once per
+    // block; raw nudge release freezes the retained target without a smoothing tail.
+    auto phase = phaseOffset.load(std::memory_order_relaxed);
     for (int frame = 0; frame < frames; ++frame) {
         if (pending >= 0 && cancelled(streams[pending].request.id)) retirePending();
-        if (pending >= 0 && gain <= 0) commit(pending);
+        if (pending >= 0 && gain <= 0) commit(pending, phase);
         auto& stream = streams[current];
         pitch += (pitchTarget.load(std::memory_order_relaxed) - pitch) * pitchStep;
-        nudge += (nudgeTarget.load(std::memory_order_relaxed) - nudge) * nudgeStep;
+        const auto targetNudge = nudgeTarget.load(std::memory_order_relaxed);
+        nudge += (targetNudge - nudge) * nudgeStep;
         speed = (1.0 + pitch / 100.0) * (1.0 + 0.02 * nudge);
         const auto baseSpeed = stream.grid.bpm > 0 ? tempo / stream.grid.bpm : 0;
         activeSync = requestedSync && clockValid && stream.grid.bpm > 0 &&
@@ -430,7 +441,7 @@ void Deck::render(float* left, float* right, int frames) noexcept {
         phaseError = 0;
         if (activeSync) {
             const auto sourceBeat = (cursor / stream.rate - stream.grid.offset) * stream.grid.bpm / 60;
-            phaseError = std::remainder(globalBeat - sourceBeat, 1.0);
+            phaseError = std::remainder(globalBeat + phase - sourceBeat, 1.0);
             const auto corrected = baseSpeed * (1 + std::clamp(phaseError * 1.5, -0.08, 0.08));
             syncSpeed += (corrected - syncSpeed) * pitchStep;
             speed = syncSpeed;
@@ -447,6 +458,8 @@ void Deck::render(float* left, float* right, int frames) noexcept {
         const double targetGain = audible && pending < 0 ? 1.0 : 0.0;
         gain += std::clamp(targetGain - gain, -rampStep, rampStep);
         if (audible) {
+            if (activeSync && targetNudge != 0)
+                phase = std::remainder(phase + 0.02 * targetNudge * beatStep, 1.0);
             const auto offset = static_cast<std::size_t>(consumed) & (capacity - 1);
             const auto used = stream.sinc[0].process(ratio, stream.ring[0].data() + offset, &lastLeft, 1);
             stream.sinc[1].process(ratio, stream.ring[1].data() + offset, &lastRight, 1);
@@ -461,6 +474,7 @@ void Deck::render(float* left, float* right, int frames) noexcept {
         right[frame] = lastRight * static_cast<float>(gain);
         globalBeat += beatStep;
     }
+    phaseOffset.store(phase, std::memory_order_release);
     positionSeconds.store(cursor / streams[current].rate, std::memory_order_release);
     syncActive.store(activeSync, std::memory_order_release);
     playbackSpeed.store(speed, std::memory_order_release);
@@ -473,6 +487,7 @@ double Deck::parameter(const std::string& key) const {
     if (key == "pitch") return pitchTarget.load(std::memory_order_acquire);
     if (key == "nudge") return nudgeTarget.load(std::memory_order_acquire);
     if (key == "sync") return syncEnabled.load(std::memory_order_acquire) ? 1.0 : 0.0;
+    if (key == "phase_offset") return phaseOffset.load(std::memory_order_acquire);
     throw std::invalid_argument("Unknown deck parameter: " + key);
 }
 double Deck::setParameter(const std::string& key, double value) {
@@ -494,6 +509,10 @@ double Deck::setParameter(const std::string& key, double value) {
     } else if (key == "nudge") {
         if (value < -1 || value > 1) throw std::invalid_argument("Deck nudge must be in [-1, 1]");
         nudgeTarget.store(value, std::memory_order_release);
+    } else if (key == "phase_offset") {
+        if (value < -0.5 || value > 0.5)
+            throw std::invalid_argument("Deck phase_offset must be in [-0.5, 0.5]");
+        phaseOffset.store(value, std::memory_order_release);
     } else if (key == "sync") {
         syncEnabled.store(value != 0, std::memory_order_release);
         if (value == 0) syncActive.store(false, std::memory_order_release);
@@ -502,7 +521,9 @@ double Deck::setParameter(const std::string& key, double value) {
 }
 void Deck::command(const std::string& action, double value) {
     if (!std::isfinite(value)) throw std::invalid_argument("Deck command value must be finite");
-    if (action == "reanalyze") {
+    if (action == "phase_reset") {
+        phaseOffset.store(0, std::memory_order_release);
+    } else if (action == "reanalyze") {
         playing.store(false, std::memory_order_release);
         request(appliedTrack.load(std::memory_order_acquire),
                 positionSeconds.load(std::memory_order_acquire), reanalysis);
@@ -553,6 +574,7 @@ DeckStatus Deck::status() const {
         result.cue = cueSeconds.load(std::memory_order_acquire);
         result.pitch = pitchTarget.load(std::memory_order_acquire);
         result.nudge = nudgeTarget.load(std::memory_order_acquire);
+        result.phaseOffset = phaseOffset.load(std::memory_order_acquire);
         result.bpm = detectedBpm.load(std::memory_order_acquire);
         result.beatOffset = detectedOffset.load(std::memory_order_acquire);
         result.beatConfidence = detectedConfidence.load(std::memory_order_acquire);

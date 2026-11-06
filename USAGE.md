@@ -560,17 +560,20 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 | `set 1 play true` / `set 1 play false` | Resume / pause, preserving source position |
 | `set 1 sync true` / `set 1 sync false` | Follow global/Link tempo and beat phase / use manual pitch and nudge |
 | `set 1 pitch -1.25` | Vinyl-style speed and pitch, -16 to +16 percent |
-| `set 1 nudge 1` / `set 1 nudge 0` | Temporary speed offset (-1..+1 gives up to ±2%); release to zero |
+| `set 1 nudge 1` / `set 1 nudge 0` | Move the phase target while synced; temporary ±2% speed when unsynced; release to zero |
 | `track 1 deck seek 90` | Seek in original-track seconds, bounded to track duration; retain play state |
 | `track 1 deck cue set` | Store current source position without moving |
 | `track 1 deck cue` | Recall cue and pause |
+| `get 1 phase_offset` / `set 1 phase_offset 0.125` | Read / set per-song phase correction in beats, -0.5..+0.5; positive advances the deck |
+| `track 1 deck phase reset` | Clear phase correction without seeking, pausing or changing shared BPM |
 
 The first three exposed sound controls are **`track_select`, `seek`, `nudge`**,
 so MIDI Mix maps them automatically to the top, middle and bottom knobs of each
 track strip. Selection spans playlist entries 1..N; seek spans 0..song duration;
 nudge spans -1..+1. Playlist edits and committed song changes refresh those
-ranges. Nudge affects manual playback when sync is off or unavailable; return it
-to zero after nudging. Remaining controls are `play`, `pitch` and `sync`.
+ranges. Return nudge to zero after nudging. Remaining controls are `play`, `pitch`,
+`sync` and `phase_offset`. With active sync, nudge moves the phase target only
+while audio is actually advancing; while unsynced it retains temporary ±2% speed.
 
 `get <track>` lists only the deck's get/set parameters, just like other sources;
 `get <track> <parameter>` reads one parameter. Use `track <track> deck status`
@@ -592,9 +595,11 @@ file. Variable tempo, short clips or ambiguous rhythms may still lack a reliable
 constant grid; half/double-tempo ambiguity is not universally resolvable.
 
 Status reports `bpm`, `beat_offset` (source seconds modulo a beat),
-`beat_confidence` (0–1), `sync`, `sync_active`, `sync_error`, `playback_speed` and
-`beat_phase_error` (signed beats, wrapped to ±0.5). Confidence measures agreement
-and phase residual among accepted stable regions, not a probability or the
+`phase_offset` (per-song correction in beats), `beat_confidence` (0–1), `sync`,
+`sync_active`, `sync_error`, `playback_speed` and `beat_phase_error` (signed beats,
+wrapped to ±0.5, measured against the corrected phase target).
+Confidence measures agreement and phase residual among accepted stable regions,
+not a probability or the
 fraction of the entire song with beats. Unreliable analysis reports
 `No reliable beat grid` and leaves playback manual.
 
@@ -625,8 +630,8 @@ track 1 deck status
 
 `reanalyze` pauses the selected deck, removes that song's persisted cache entry,
 invalidates this deck's in-memory grid, and runs analysis asynchronously off the
-render thread. It retains position, cue, pitch, nudge, sync, playlist and effects;
-it does not resume playback automatically. Once status is `ready`, use
+render thread. It retains position, cue, pitch, nudge, sync, `phase_offset`,
+playlist and effects; it does not resume playback automatically. Once status is `ready`, use
 `set 1 play true` to resume. Like a seek or selection, activating the prepared
 result requires an audio render block; if audio output is stopped, start it to
 complete activation. Cache-removal or analysis errors appear in deck status.
@@ -647,8 +652,31 @@ correction. Unsupported ratios report an error and leave playback manual.
 This aligns beats, not automatically detected bar/downbeat or musical phrases.
 
 Sync uses vinyl-style speed/pitch changes, **not key lock or time stretching**.
-While sync is active it owns playback speed; stored pitch/nudge controls apply
-when sync is off or unavailable. For manual beatmatching:
+While sync is active it owns playback speed and ignores stored manual pitch.
+Nudge instead moves that deck's phase target: positive advances it, negative
+delays it. At full nudge the target moves by 0.02 beats per shared beat (about
+20 ms per second at any steady tempo). Release to zero to retain the correction;
+the smooth speed correction settles back to the locked target tempo. Shared
+BPM and other decks are unchanged. Paused, ended or starved playback does not
+accumulate phase correction.
+
+```text
+set 1 nudge 1
+set 1 nudge 0
+get 1 phase_offset
+set 1 phase_offset 0.125
+track 1 deck phase reset
+```
+
+`phase_offset` is separate from the analyzer's `beat_offset`; it never edits the
+shared analysis cache. Its range is -0.5..+0.5 beats, and continued nudging wraps
+at half a beat. This adjusts beat phase, not bar/downbeat position. Direct setting
+or resetting changes the target without seeking; active sync realigns smoothly.
+The correction survives pause, seek, cue recall, reanalysis, sync/tempo changes
+and session save/restore, but a different song selection starts at zero.
+
+When sync is off or unavailable, pitch and temporary ±2% speed nudge work as
+before; the stored phase correction is retained but ignored. For manual beatmatching:
 
 ```text
 set 1 sync false
@@ -660,9 +688,9 @@ set 1 nudge 0
 Manual pitch and nudge are smoothed; pitch changes pitch as well as speed.
 Selections/seek prepare outside rendering; the old track remains usable until an
 audio-side commit. Successful selection fades out, resets cue/position to zero,
-clears nudge and pauses, retaining pitch, mixer, routing and inserts. Newest
-selection wins; selecting the active entry cancels a pending selection. A failed
-load keeps current playback and reports the requested identity and error.
+clears nudge and phase correction and pauses, retaining pitch, mixer, routing
+and inserts. Newest selection wins; selecting the active entry cancels a pending
+selection. A failed load keeps current playback and reports the requested identity and error.
 
 Mute continues transport. Stopping output freezes position without changing the
 deck play flag; pending prepared changes commit when rendering resumes. EOF stops
@@ -1160,15 +1188,16 @@ retaining its original location for resolving external files. Abstractions and
 sample files must remain installed separately.
 Decks instead store an explicit `deck` payload containing the full ordered
 `tracks` list (stable ID, absolute audio path and title), playlist identity,
-committed stable `track_id`, `cue` seconds, `pitch` and boolean `sync`. They do not
-store a VST3 chunk for the source; insert chunks are preserved normally. Restore
-needs no external playlist manifest: it resolves the saved selection, prepares
+committed stable `track_id`, `cue` seconds, `pitch`, boolean `sync` and
+`phase_offset` in beats. They do not store a VST3 chunk for the source; insert
+chunks are preserved normally. Restore needs no external playlist manifest: it
+resolves the saved selection, prepares
 at cue paused, sets nudge to zero and reanalyzes the selected audio.
 Legacy bank-based deck sessions are still readable; their manifests are resolved
 on restore and subsequent saves embed the playlist. Older payloads without
-`sync` default to automatic sync. Missing audio, IDs or legacy banks are reported
-per track; unaffected tracks continue restoring. A pending selection is never
-persisted in place of the committed track.
+`sync` default to automatic sync; missing `phase_offset` defaults to zero.
+Missing audio, IDs or legacy banks are reported per track; unaffected tracks
+continue restoring. A pending selection is never persisted in place of the committed track.
 
 
 Format 3 stores mixer instruments under `tracks` and sequencer destinations

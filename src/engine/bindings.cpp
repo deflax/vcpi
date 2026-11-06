@@ -70,6 +70,7 @@ py::dict deckDict(const DeckStatus& info) {
     result["cue"] = info.cue;
     result["pitch"] = info.pitch;
     result["nudge"] = info.nudge;
+    result["phase_offset"] = info.phaseOffset;
     result["bpm"] = info.bpm;
     result["beat_offset"] = info.beatOffset;
     result["beat_confidence"] = info.beatConfidence;

@@ -110,7 +110,7 @@ commands use cached snapshots.
 
 Sessions save native VST3 state chunks for instruments, track inserts, and master
 effects; WAV tracks remain path-based, while decks embed their playlists, selected
-song identity, cue, pitch and sync mode and restore paused. See [session commands](USAGE.md#session-commands)
+song identity, cue, pitch, sync mode and phase correction and restore paused. See [session commands](USAGE.md#session-commands)
 for save/restore behavior and legacy session compatibility.
 
 Native decks stream mono/stereo AIFF, WAV, MP3 and FLAC tracks from session-owned
@@ -120,9 +120,12 @@ order without scanning subdirectories. Repeat either command to append new files
 already-listed resolved paths are skipped. Use `track 1 deck remove <index>` to
 remove a song. Queen Mary DSP analyzes the whole selected file for tempo and a stable beat grid; decks
 follow the shared musical timeline's tempo and beat phase by default.
-Each has play/pause,
-vinyl-style speed/pitch, momentary nudge, seek and one cue point. The first three
-parameters—track selection, seek and nudge—map automatically to MIDI Mix knobs.
+Each has play/pause, vinyl-style speed/pitch, nudge, seek and one cue point.
+While synced, nudge adjusts a persistent per-song phase correction without
+changing shared BPM; releasing retains alignment. Read or set `phase_offset`
+in beats, or clear it with `track 1 deck phase reset`. Unsynced nudge retains
+its temporary ±2% speed behavior. The first three parameters—track selection,
+seek and nudge—map automatically to MIDI Mix knobs.
 Use `set 1 sync false` for manual beatmatching. See
 [deck commands and MIDI bindings](USAGE.md#deck-commands) for playlist editing,
 analysis limits and controls. There is no key lock, looping or crossfader.

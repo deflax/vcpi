@@ -292,7 +292,8 @@ std::vector<ParameterSnapshot> Plugin::parameters() {
     if (deck) {
         std::lock_guard<std::mutex> lock(deckMutex);
         return {deckParameter("track_select"), deckParameter("seek"), deckParameter("nudge"),
-                deckParameter("play"), deckParameter("pitch"), deckParameter("sync")};
+                deckParameter("play"), deckParameter("pitch"), deckParameter("sync"),
+                deckParameter("phase_offset")};
     }
     ControlOwnership lock(ownership);
     std::vector<ParameterSnapshot> result;
@@ -583,6 +584,10 @@ ParameterSnapshot Plugin::deckParameter(const std::string& key) const {
     } else if (key == "nudge") {
         result.low = -1;
         result.high = 1;
+    } else if (key == "phase_offset") {
+        result.low = -0.5;
+        result.high = 0.5;
+        result.units = "beats";
     }
     result.rawValue = result.high > result.low ? (result.rawValue - result.low) / (result.high - result.low) : 0.0;
     return result;

@@ -89,17 +89,22 @@ class NativeDeckTests(unittest.TestCase):
 
     def test_constructor_prepares_paused_restore_without_rendering(self):
         path = self.tone()
-        plugin, runner, _ = self.deck([path], cue=1.125, pitch=-3.5)
+        plugin, runner, _ = self.deck([path], cue=1.125, pitch=-3.5, phase_offset=-0.125)
         status = plugin.deck_status()
         self.assertEqual((status["track_id"], status["state"], status["play"]),
                          ("track-1", "ready", False))
         self.assertAlmostEqual(status["position"], 1.125)
         self.assertEqual((status["cue"], status["pitch"], status["nudge"]), (1.125, -3.5, 0))
+        self.assertEqual(status["phase_offset"], -0.125)
         np.testing.assert_array_equal(runner.render_once(), 0)
         self.assertEqual(plugin.deck_status()["position"], status["position"])
         self.assertEqual(plugin.parameter("track_select")["range"], (1, 1))
         self.assertEqual(plugin.parameter("pitch")["range"], (-16, 16))
         self.assertEqual(plugin.parameter("nudge")["range"], (-1, 1))
+        phase = plugin.parameter("phase_offset")
+        self.assertEqual((phase["kind"], phase["range"], phase["units"]),
+                         ("float", (-0.5, 0.5), "beats"))
+        self.assertEqual(phase["raw_value"], 0.375)
         self.assertEqual(plugin.parameter("play")["kind"], "bool")
         plugin.set_parameter("pitch", 2.25)
         plugin.deck_command("cue_set")
@@ -115,7 +120,7 @@ class NativeDeckTests(unittest.TestCase):
         paths = [self.tone("short", seconds=2), self.tone("long", seconds=5)]
         plugin, runner, _ = self.deck(paths, cue=0.5)
         self.assertEqual(list(plugin.parameters()),
-                         ["track_select", "seek", "nudge", "play", "pitch", "sync"])
+                         ["track_select", "seek", "nudge", "play", "pitch", "sync", "phase_offset"])
         seek = plugin.parameter("seek")
         self.assertEqual((seek["kind"], seek["range"], seek["units"]), ("float", (0, 2), "s"))
         self.assertAlmostEqual(seek["raw_value"], 0.25)
@@ -139,12 +144,31 @@ class NativeDeckTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 plugin.set_parameter("seek", invalid)
 
+    def test_phase_parameter_and_initial_catalog_reject_invalid_offsets(self):
+        path = self.tone()
+        plugin, runner, _ = self.deck([path])
+        self.assertEqual(plugin.get_parameter("phase_offset"), 0)
+        for value in (-0.5, 0.5, 0.125):
+            self.assertEqual(plugin.set_parameter("phase_offset", value), value)
+            runner.render_once()
+            self.assertEqual(plugin.deck_status()["phase_offset"], value)
+        for value in (-0.500001, 0.500001, float("nan"), float("inf"), -float("inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    plugin.set_parameter("phase_offset", value)
+                self.assertEqual(plugin.get_parameter("phase_offset"), 0.125)
+                with self.assertRaises(ValueError):
+                    self.backend.Plugin(self.catalog([path], phase_offset=value), 48000, 512, "deck")
+        plugin.deck_command("phase_reset")
+        self.assertEqual(plugin.get_parameter("phase_offset"), 0)
+
     def test_append_and_nonactive_removal_preserve_exact_active_audio(self):
         paths = [self.tone("first"), self.tone("active"), self.tone("appended")]
         edited, runner, _ = self.deck(paths[:2], initial_track=2, cue=0.25, pitch=2, sync=0)
         reference, reference_runner, _ = self.deck(paths[:2], initial_track=2, cue=0.25, pitch=2, sync=0)
         for plugin, owner in ((edited, runner), (reference, reference_runner)):
             plugin.set_parameter("nudge", 0.5)
+            plugin.set_parameter("phase_offset", 0.25)
             plugin.set_parameter("play", True)
             self.render(owner, 3)
         for catalog, ordinal, count in ((self.catalog(paths), 2, 3),
@@ -152,7 +176,7 @@ class NativeDeckTests(unittest.TestCase):
             before = edited.deck_status()
             edited.update_deck_catalog(catalog)
             after = edited.deck_status()
-            for key in ("track_id", "position", "cue", "play", "pitch", "nudge", "sync"):
+            for key in ("track_id", "position", "cue", "play", "pitch", "nudge", "sync", "phase_offset"):
                 self.assertEqual(after[key], before[key], key)
             self.assertEqual((after["track_select"], after["requested_track_select"]), (ordinal, ordinal))
             self.assertFalse(after["loading"])
@@ -163,6 +187,7 @@ class NativeDeckTests(unittest.TestCase):
         paths = [self.tone("first", seconds=2), self.tone("middle"), self.tone("last", seconds=6)]
         plugin, runner, _ = self.deck(paths, initial_track=2, cue=0.4, pitch=3, sync=0)
         plugin.set_parameter("nudge", 0.75)
+        plugin.set_parameter("phase_offset", -0.25)
         plugin.set_parameter("play", True)
         self.render(runner, 2)
         plugin.update_deck_catalog(self.catalog([paths[0], paths[2]], ids=[1, 3]))
@@ -170,15 +195,18 @@ class NativeDeckTests(unittest.TestCase):
         self.assertEqual((status["track_id"], status["track_select"]), ("track-3", 2))
         self.assertEqual((status["position"], status["cue"], status["play"], status["nudge"]),
                          (0, 0, False, 0))
+        self.assertEqual(status["phase_offset"], 0)
         self.assertEqual((status["pitch"], status["sync"], status["duration"]), (3, False, 6))
         self.assertFalse(status["loading"])
         np.testing.assert_array_equal(runner.render_once(), 0)
         plugin.set_parameter("play", True)
         runner.render_once()
+        plugin.set_parameter("phase_offset", 0.125)
         plugin.update_deck_catalog(self.catalog(paths[:1]))
         status = plugin.deck_status()
         self.assertEqual((status["track_id"], status["track_select"], status["position"], status["play"]),
                          ("track-1", 1, 0, False))
+        self.assertEqual(status["phase_offset"], 0)
         self.assertEqual(plugin.parameter("seek")["range"], (0, 2))
 
     def test_playlist_edit_cancels_pending_selection_and_seek(self):
@@ -332,9 +360,10 @@ class NativeDeckTests(unittest.TestCase):
         self.render(runner, 16)
         released = self.render(runner, 24)
         self.assertAlmostEqual(self.frequency(released, 48000), 1080, delta=5)
+        self.assertEqual(plugin.deck_status()["phase_offset"], 0)
 
     def test_seek_cue_eof_and_restart_at_cue(self):
-        plugin, runner, _ = self.deck([self.tone(seconds=2)])
+        plugin, runner, _ = self.deck([self.tone(seconds=2)], phase_offset=0.2)
         plugin.deck_command("seek", 0.75)
         self.await_state(plugin, runner, lambda s: not s["loading"] and abs(s["position"] - 0.75) < 1e-8)
         plugin.deck_command("cue_set")
@@ -361,6 +390,12 @@ class NativeDeckTests(unittest.TestCase):
         plugin.set_parameter("play", False)
         status = self.await_state(plugin, runner, lambda s: not s["loading"])
         self.assertEqual(status["position"], 0)
+        self.assertEqual(status["phase_offset"], 0.2)
+        request_id = status["request_id"]
+        plugin.set_parameter("track_select", 1)
+        runner.render_once()
+        self.assertEqual(plugin.deck_status()["phase_offset"], 0.2)
+        self.assertEqual(plugin.deck_status()["request_id"], request_id)
 
     def test_restore_and_seek_at_duration_remain_ended_not_silently_playing(self):
         plugin, runner, _ = self.deck([self.tone(seconds=2)], cue=2)
@@ -386,6 +421,7 @@ class NativeDeckTests(unittest.TestCase):
         paths = [self.tone("a"), self.tone("b", rate=96000), self.tone("c", frequency=700), self.root / "missing.wav"]
         plugin, runner, _ = self.deck(paths)
         plugin.set_parameter("pitch", -2)
+        plugin.set_parameter("phase_offset", -0.3)
         plugin.set_parameter("play", True)
         self.render(runner, 2)
         plugin.set_parameter("track_select", 2)
@@ -394,6 +430,8 @@ class NativeDeckTests(unittest.TestCase):
         self.assertEqual((status["track_id"], status["requested_track_id"]), ("track-3", "track-3"))
         self.assertEqual((status["play"], status["position"], status["cue"], status["pitch"], status["nudge"]),
                          (False, 0, 0, -2, 0))
+        self.assertEqual(status["phase_offset"], 0)
+        plugin.set_parameter("phase_offset", 0.3)
         plugin.set_parameter("play", True)
         self.render(runner, 2)
         before = plugin.deck_status()["position"]
@@ -402,6 +440,7 @@ class NativeDeckTests(unittest.TestCase):
         self.assertEqual(status["track_id"], "track-3")
         self.assertEqual(status["requested_track_id"], "track-4")
         self.assertTrue(status["play"])
+        self.assertEqual(status["phase_offset"], 0.3)
         self.assertGreaterEqual(status["position"], before)
         plugin.set_parameter("track_select", 2)
         plugin.set_parameter("track_select", 3)
@@ -410,6 +449,7 @@ class NativeDeckTests(unittest.TestCase):
         self.assertEqual(plugin.deck_status()["track_id"], "track-3")
         self.assertTrue(plugin.deck_status()["play"])
         self.assertEqual(status["error"], "")
+        self.assertEqual(plugin.deck_status()["phase_offset"], 0.3)
 
     def test_cd_audio_preserves_treble_at_unity_speed(self):
         for output_rate in (44100, 48000):

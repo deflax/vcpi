@@ -343,9 +343,9 @@ def _build_flow_snapshot(host, engine) -> dict:
             if track.source_type == "deck":
                 for field in ("bank_id", "track_id", "track_title", "requested_track_id",
                               "request_id", "state", "play", "position", "duration",
-                              "cue", "pitch", "nudge", "error"):
+                              "cue", "pitch", "nudge", "phase_offset", "error"):
                     rows.append([f"Deck {field}", _value(track.deck.get(field, "(not cached)")),
-                                 "cached transport; independent of Link"])
+                                 "cached deck state; independent play/pause"])
                 for ordinal, entry in enumerate(track.deck.get("tracks", []), 1):
                     rows.append([f"Deck selection {ordinal}", entry.get("title") or entry["id"],
                                  entry["id"]])

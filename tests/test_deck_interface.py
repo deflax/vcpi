@@ -29,7 +29,9 @@ def deck_track(generation=7):
         "play": ParameterSnapshot(kind="bool", is_boolean=True),
         "pitch": ParameterSnapshot(range=(-16, 16), units="%"),
         "sync": ParameterSnapshot(kind="bool", is_boolean=True, range=(0, 1)),
-    }, values={"track_select": 1, "seek": 12.5, "play": False, "pitch": 0.0, "nudge": 0.0, "sync": True})
+        "phase_offset": ParameterSnapshot(range=(-0.5, 0.5), units="beats"),
+    }, values={"track_select": 1, "seek": 12.5, "play": False, "pitch": 0.0,
+               "nudge": 0.0, "sync": True, "phase_offset": 0.25})
     track = InstrumentTrack("Deck A", "/bank.json", plugin,
                             source_type="deck", generation=generation)
     track.deck = {
@@ -37,7 +39,7 @@ def deck_track(generation=7):
         "track_title": "Opening title", "requested_track_id": "second",
         "request_id": 4, "state": "loading", "play": False,
         "position": 12.5, "duration": 100, "cue": 2.0, "pitch": -1.25,
-        "nudge": 0, "sync": False, "error": "",
+        "nudge": 0, "sync": False, "phase_offset": 0.25, "error": "",
         "tracks": [{"id": str(i), "title": f"Title {i}", "path": f"/music/{i}.wav"}
                    for i in range(257)],
     }
@@ -56,10 +58,23 @@ class DeckCLITests(unittest.TestCase):
         self.cli = HostCLI(self.host, stdout=self.output, owns_host=False)
 
     def test_invalid_transport_grammar_does_not_mutate_deck(self):
-        for invalid in ("cue extra", "status extra", "reanalyze extra", "seek", "seek xx", "seek 1 2"):
+        for invalid in ("cue extra", "status extra", "reanalyze extra", "seek", "seek xx", "seek 1 2",
+                        "phase", "phase extra", "phase reset extra"):
             self.cli.onecmd("track 1 deck " + invalid)
         self.engine.deck_command.assert_not_called()
         self.assertIn("Error:", self.output.getvalue())
+
+    def test_get_follows_phase_changes_from_render_status(self):
+        metadata = {name: replace(parameter)
+                    for name, parameter in self.track.plugin.parameters.items()}
+        metadata["phase_offset"].raw_value = 0.75  # Metadata predates the live correction.
+        apply_deck_status(self.track, {"phase_offset": -0.125, "parameters": metadata})
+        self.cli.onecmd("get 1 phase_offset")
+        value = self.output.getvalue().split(" = ", 1)[1].split()[0]
+        self.assertEqual(float(value), -0.125)
+        self.assertEqual(self.track.plugin.parameters["phase_offset"].raw_value, 0.375)
+        self.assertEqual(self.track.deck["phase_offset"], -0.125)
+        self.engine.request.assert_not_called()
 
     def test_get_status_and_completion_never_request_live_state(self):
         self.cli.onecmd("track 1 deck status")
@@ -105,7 +120,6 @@ class DeckCLITests(unittest.TestCase):
         self.cli.onecmd("set 1 sync false")
         self.engine.set_parameter.assert_called_once_with(0, "sync", False, fx_index=None)
 
-
     def test_deck_payload_omits_source_chunk_but_keeps_insert_chunks(self):
         self.track.effects = [PluginSnapshot(
             2, path_to_plugin_file="/delay.vst3", native_state=b"effect-state")]
@@ -128,7 +142,7 @@ class DeckCLITests(unittest.TestCase):
         self.assertEqual(saved["deck"], {
             "bank_path": "/bank.json", "bank_id": "set", "track_id": "first",
             "tracks": self.track.deck["tracks"],
-            "cue": 2.0, "pitch": -1.25, "sync": False})
+            "cue": 2.0, "pitch": -1.25, "sync": False, "phase_offset": 0.25})
         self.assertEqual(base64.b64decode(saved["effects"][0]["native_state"]), b"effect-state")
 
 

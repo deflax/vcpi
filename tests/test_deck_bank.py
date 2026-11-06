@@ -28,17 +28,19 @@ class DeckBankTests(unittest.TestCase):
         self.assertEqual(catalog["tracks"][0]["path"], str(self.root / "missing.wav"))
         self.assertEqual(catalog["initial_track"], 1)
         self.assertTrue(catalog["sync"])
+        self.assertEqual(catalog["phase_offset"], 0)
         self.assertFalse(Path(catalog["tracks"][0]["path"]).exists())
 
     def test_stable_identity_survives_reordering_without_fallback(self):
         self.bank([{"id": "second", "path": "/music/second.wav"},
                    {"id": "first", "path": "first.wav"}])
         catalog = json.loads(load_bank(self.path, track_id="first", bank_id="set",
-                                      cue=12.5, pitch=-1.25, sync=False))
+                                      cue=12.5, pitch=-1.25, sync=False, phase_offset=-0.25))
         self.assertEqual(catalog["initial_track"], 2)
         self.assertEqual(catalog["cue"], 12.5)
         self.assertEqual(catalog["pitch"], -1.25)
         self.assertFalse(catalog["sync"])
+        self.assertEqual(catalog["phase_offset"], -0.25)
         with self.assertRaisesRegex(ValueError, "not found"):
             load_bank(self.path, track_id="removed")
         with self.assertRaisesRegex(ValueError, "mismatch"):
@@ -61,6 +63,22 @@ class DeckBankTests(unittest.TestCase):
                           {"sync": "false"}, {"sync": 0}, {"sync": None}):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 load_bank(self.path, **arguments)
+
+    def test_phase_offset_catalog_bounds_and_invalid_values(self):
+        self.bank()
+        tracks = [{"id": "first", "path": str(self.root / "missing.wav")}]
+        for phase_offset in (-0.5, -0.25, 0, 0.25, 0.5):
+            with self.subTest(phase_offset=phase_offset):
+                inline = json.loads(make_catalog("set", tracks, phase_offset=phase_offset))
+                legacy = json.loads(load_bank(self.path, phase_offset=phase_offset))
+                self.assertEqual(inline["phase_offset"], phase_offset)
+                self.assertEqual(legacy["phase_offset"], phase_offset)
+        for phase_offset in (-0.500001, 0.500001, float("-inf"), float("inf"), float("nan")):
+            with self.subTest(phase_offset=phase_offset):
+                with self.assertRaisesRegex(ValueError, "phase offset"):
+                    make_catalog("set", tracks, phase_offset=phase_offset)
+                with self.assertRaisesRegex(ValueError, "phase offset"):
+                    load_bank(self.path, phase_offset=phase_offset)
 
     def test_large_catalog_uses_existing_bounded_frames(self):
         tracks = [{"id": str(i), "path": f"music/{i}.wav", "title": "Title " * 20}
@@ -112,6 +130,7 @@ class DeckBankTests(unittest.TestCase):
         self.assertEqual(catalog["tracks"], [first, second])
         self.assertEqual(catalog["initial_track"], 2)
         self.assertEqual(catalog["bank_path"], "session:playlist")
+        self.assertEqual(catalog["phase_offset"], 0)
 
     def test_inline_playlist_rejects_empty_duplicate_and_relative_entries(self):
         valid = {"id": "entry", "path": str(self.root / "song.wav")}
