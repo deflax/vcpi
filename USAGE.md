@@ -603,6 +603,36 @@ not a probability or the
 fraction of the entire song with beats. Unreliable analysis reports
 `No reliable beat grid` and leaves playback manual.
 
+To diagnose a rejected grid, enable `debug on`, then run
+`track 1 deck reanalyze` (replace `1` with the mixer track). Reanalysis bypasses
+the selected song's cache and pauses it at its current position. Each fresh
+analysis emits one `beat-analysis` summary to the **vcpid terminal**, prefixed
+with its worker (for example `[track 1]`); it is not printed in the client.
+Use `LOG_LEVEL=DEBUG ./vcpid` to include initial-load analysis. Cached loads
+do not rerun analysis or emit a summary. Output follows the existing native
+debug routing, so `debug off` discards it; vcpi does not create a log file.
+When running under systemd, inspect the service's journal.
+
+The summary includes the source path, `reason`, tracker-window counts,
+`predicted_beats`, beats discarded at window boundaries (`boundary_beats`),
+beats rejected by transient support (`weak_beats`), `supported_beats`, and
+`stable_regions`. `gap_candidates` and `unstable_candidates` count rejected
+16-beat candidate starts, not individual beats. Windows overlap, so aggregate
+beat counts are not unique song beats. When fitting reaches the relevant stage,
+it also includes `candidate_bpm`, `matched_beats`, `region_beats`, `coverage`,
+`rms_error_ms`, and `confidence`; unavailable fit metrics are omitted rather
+than reported as a measured zero. Coverage refers to accepted-region beats,
+not the whole song.
+
+`reason=accepted` indicates success. Rejections distinguish `no-stable-regions`,
+`insufficient-fit-beats`, `insufficient-matched-beats`, `coverage-below-0.60`,
+`invalid-period`, `tempo-outside-60-200`, and `confidence-below-0.65`.
+`cancelled` identifies interrupted analysis and `read-error` a decoding failure.
+For `no-stable-regions`, use the window, weak-beat, gap and unstable-candidate
+counts to identify where evidence was lost. Detection thresholds are unchanged:
+confidence must be at least 0.65, with 25 ms region tolerance and at least
+16 supported stable beats.
+
 Shared clock refreshes carry tempo, beat and the original monotonic sample time
 as one snapshot through the audio and track workers. Each deck extrapolates from
 that sample time, rather than treating a delayed beat value as current on receipt.
