@@ -171,6 +171,52 @@ class NativeDeckSyncTests(unittest.TestCase):
                 self.assertAlmostEqual(status["bpm"] * status["playback_speed"], 126, delta=0.3)
                 self.assertLess(abs(status["beat_phase_error"]), 0.015)
 
+    def test_competing_regions_accept_only_same_tempo_half_beat_alternatives(self):
+        for name, second_bpm, phase_shift, accepted in (
+            ("half-beat", 120, 0.25, True),
+            ("near-half-beat", 120, 0.244, True),
+            ("quarter-beat", 120, 0.125, False),
+            ("different-tempo", 130, 0.25, False),
+        ):
+            with self.subTest(name=name):
+                audio = np.zeros(self.rate * 160)
+                t = np.arange(round(0.025 * self.rate)) / self.rate
+                pulse = 0.7 * np.exp(-t * 180) * np.cos(2 * math.pi * 800 * t)
+                # Two stable sections separated by a breakdown. The first
+                # contains the longest region and anchors the output phase.
+                for start, end, bpm, offset in (
+                    (0, 70, 120, 0.137),
+                    (85, 160, second_bpm, 0.137 + phase_shift),
+                ):
+                    for beat in np.arange(start + offset, end - 0.025, 60 / bpm):
+                        begin = round(beat * self.rate)
+                        audio[begin:begin + len(pulse)] += pulse
+                path = self.root / f"{name}.wav"
+                with wave.open(str(path), "wb") as output:
+                    output.setnchannels(1)
+                    output.setsampwidth(2)
+                    output.setframerate(self.rate)
+                    output.writeframes((audio * 32767).astype("<i2").tobytes())
+                deck = self.deck([path])
+                plugin, _ = deck
+                status = plugin.deck_status()
+                if not accepted:
+                    self.assertEqual(status["bpm"], 0, status)
+                    self.assertIn("No reliable beat grid", status["sync_error"])
+                    continue
+                self.assertAlmostEqual(status["bpm"], 120, delta=0.15)
+                self.assertGreaterEqual(status["beat_confidence"], 0.65)
+                # Do not average the phase groups into an unsupported
+                # quarter-beat grid, or silently double the detected BPM.
+                self.assertLess(abs(math.remainder(status["beat_offset"] - 0.137, 0.5)), 0.015)
+                self.clock([deck], 126)
+                plugin.set_parameter("play", True)
+                self.render([deck], 4)  # Let the phase-lock speed correction settle.
+                rendered = self.render([deck], 4)[0]
+                self.assertTrue(plugin.deck_status()["sync_active"])
+                self.assertEqual(plugin.deck_status()["sync_error"], "")
+                np.testing.assert_allclose(np.diff(self.pulse_times(rendered)), 60 / 126, atol=0.012)
+
     def test_sustained_bass_and_aperiodic_noise_do_not_invent_a_grid(self):
         time_axis = np.arange(24 * self.rate) / self.rate
         audio = (0.2 * np.sin(2 * math.pi * 65 * time_axis)

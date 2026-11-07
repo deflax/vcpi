@@ -22,6 +22,12 @@ constexpr double step = hop / analysisRate, tolerance = 0.025;
 constexpr std::size_t trackerWindow = 4096, trackerOverlap = 1024;
 constexpr std::size_t minimumBeats = 16;
 
+std::string analysisSource(const juce::AudioFormatReader& reader) {
+    const auto* file = dynamic_cast<const juce::FileInputStream*>(reader.input);
+    const auto source = file ? file->getFile().getFullPathName() : juce::String("<stream>");
+    return juce::JSON::toString(juce::var(source), true).toStdString();
+}
+
 // Only used by the non-real-time analysis worker. Raw stderr follows the
 // daemon's existing debug routing; never emit per-beat or render-thread logs.
 struct Diagnostics {
@@ -29,14 +35,14 @@ struct Diagnostics {
     std::size_t windows = 0, silentWindows = 0, invalidWindows = 0;
     std::size_t predicted = 0, boundary = 0, weak = 0, supported = 0;
     std::size_t gaps = 0, unstable = 0, regions = 0, matched = 0, total = 0;
+    std::size_t halfBeatMatched = 0;
     double bpm = 0, coverage = -1, rms = -1, confidence = -1;
 
     void log(const juce::AudioFormatReader& reader) const {
-        const auto* file = dynamic_cast<const juce::FileInputStream*>(reader.input);
-        const auto source = file ? file->getFile().getFullPathName() : juce::String("<stream>");
+        const auto source = analysisSource(reader);
         std::ostringstream message;
         message << std::fixed << std::setprecision(4)
-                << "beat-analysis source=" << juce::JSON::toString(juce::var(source), true).toStdString()
+                << "beat-analysis source=" << source
                 << " reason=" << reason
                 << " windows=" << windows << " silent_windows=" << silentWindows
                 << " invalid_tracker_windows=" << invalidWindows
@@ -44,7 +50,9 @@ struct Diagnostics {
                 << " weak_beats=" << weak << " supported_beats=" << supported
                 << " gap_candidates=" << gaps << " unstable_candidates=" << unstable
                 << " stable_regions=" << regions << " matched_beats=" << matched
-                << " region_beats=" << total;
+                << " region_beats=" << total
+                << " aligned_beats=" << matched - halfBeatMatched
+                << " half_beat_matches=" << halfBeatMatched;
         if (bpm > 0) message << " candidate_bpm=" << bpm;
         if (coverage >= 0) message << " coverage=" << coverage;
         if (rms >= 0) message << " rms_error_ms=" << rms * 1000;
@@ -68,6 +76,46 @@ struct Region {
     double period = 0, offset = 0;
     double span() const { return points.back().time - points.front().time; }
 };
+
+// Choose one phase interpretation for the entire region, not for each point:
+// a drifting region must not hop between subdivisions to manufacture a fit.
+double regionPhase(const Region& region, double period, double offset) {
+    const double midpointBeat = region.points.back().beat * 0.5;
+    const double phase = region.offset - offset + midpointBeat * (region.period - period);
+    return std::abs(std::remainder(phase, period)) > period * 0.25 ? 0.5 : 0.0;
+}
+
+void logRegion(const Region& region, std::size_t index, double period, double offset,
+               std::size_t phaseRejected, std::size_t matched, double phase, const std::string& source) {
+    const double periodLimit = tolerance * 2 / region.points.size();
+    const bool tempoCompatible = std::abs(region.period - period) <= periodLimit;
+    const char* disagreement = tempoCompatible ? (phaseRejected ? "phase" : "none")
+                                              : (phaseRejected ? "both" : "tempo");
+    // Compare fitted local-grid phase at both ends: a tempo mismatch can align
+    // briefly, then drift. Signed phase wraps to half a global beat.
+    const double phaseStart = std::remainder(region.offset - offset, period);
+    const double phaseEnd = std::remainder(
+        region.offset + region.points.back().beat * region.period - offset, period);
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(4)
+            << "beat-analysis-region source=" << source << " region=" << index
+            << " start_seconds=" << region.points.front().time
+            << " end_seconds=" << region.points.back().time
+            << " bpm=" << 60 / region.period << " beats=" << region.points.size()
+            << " candidate_bpm=" << 60 / period
+            << " period_delta_ms=" << (region.period - period) * 1000
+            << " allowed_period_delta_ms=" << periodLimit * 1000
+            << " phase_start_ms=" << phaseStart * 1000
+            << " phase_end_ms=" << phaseEnd * 1000
+            << " phase_rejected_beats=" << phaseRejected
+            << " matched_beats=" << matched
+            << " aligned_beats=" << (phase == 0 ? matched : 0)
+            << " half_beat_matches=" << (phase == 0.5 ? matched : 0)
+            << " phase_group=" << (phase == 0.5 ? "half-beat" : "aligned")
+            << " tempo_compatible=" << (tempoCompatible ? "true" : "false")
+            << " disagreement=" << disagreement;
+    std::fprintf(stderr, "%s\n", message.str().c_str());
+}
 
 // Fit consecutive, acoustically supported tracker beats, not an arbitrary grid
 // through all the tracker's predictions (which also exist for white noise).
@@ -111,7 +159,8 @@ void appendRegions(const std::vector<Point>& points, std::vector<Region>& region
     }
 }
 
-BeatAnalysis fitGrid(const std::vector<double>& novelty, const std::atomic<bool>& cancel, Diagnostics& diagnostic) {
+BeatAnalysis fitGrid(const std::vector<double>& novelty, const std::atomic<bool>& cancel,
+                     Diagnostics& diagnostic, const juce::AudioFormatReader& reader) {
     std::vector<Region> regions;
     for (std::size_t start = 0; start < novelty.size(); start += trackerWindow - trackerOverlap) {
         if (cancel.load(std::memory_order_relaxed)) return {};
@@ -183,15 +232,19 @@ BeatAnalysis fitGrid(const std::vector<double>& novelty, const std::atomic<bool>
         [](const Region& a, const Region& b) { return a.span() < b.span(); });
     double period = anchor->period, offset = anchor->offset;
     const double origin = offset;
-    // Refine using compatible stable regions, including ones separated by an
-    // intro/breakdown. Centered regression avoids cancellation in hour-long files.
+    // Keep the longest region's phase as the anchor. Opposite-phase regions
+    // contribute half-integer beat coordinates, never an averaged quarter-beat
+    // offset or a doubled tempo. Confidence then measures agreement with this
+    // two-phase interpretation, not certainty that the anchor is the kick.
+    // Centered regression avoids cancellation in hour-long files.
     for (int pass = 0; pass < 3; ++pass) {
         Fit fit;
         for (const auto& region : regions) {
             if (cancel.load(std::memory_order_relaxed)) return {};
             if (std::abs(region.period - period) > tolerance * 2 / region.points.size()) continue;
+            const double phase = regionPhase(region, period, offset);
             for (const auto& point : region.points) {
-                const double beat = std::round((point.time - offset) / period);
+                const double beat = std::round((point.time - offset) / period - phase) + phase;
                 if (std::abs(point.time - offset - beat * period) <= tolerance)
                     fit.add(beat, point.time - origin);
             }
@@ -203,15 +256,23 @@ BeatAnalysis fitGrid(const std::vector<double>& novelty, const std::atomic<bool>
         period = fit.period(); offset = origin + fit.offset();
     }
     double squaredError = 0;
-    std::size_t matched = 0, total = 0;
+    std::size_t matched = 0, total = 0, regionIndex = 0;
+    const auto source = analysisSource(reader);
     for (const auto& region : regions) {
+        std::size_t regionMatched = 0, phaseRejected = 0;
+        const bool tempoCompatible = std::abs(region.period - period) <= tolerance * 2 / region.points.size();
+        const double phase = regionPhase(region, period, offset);
         for (const auto& point : region.points) {
             ++total;
-            const double error = std::abs(std::remainder(point.time - offset, period));
-            if (error <= tolerance && std::abs(region.period - period) <= tolerance * 2 / region.points.size()) {
-                ++matched; squaredError += error * error;
+            const double directError = std::abs(std::remainder(point.time - offset, period));
+            const double error = std::abs(std::remainder(point.time - offset - phase * period, period));
+            if (directError > tolerance) ++phaseRejected;
+            if (error <= tolerance && tempoCompatible) {
+                ++matched; ++regionMatched; squaredError += error * error;
+                if (phase == 0.5) ++diagnostic.halfBeatMatched;
             }
         }
+        logRegion(region, ++regionIndex, period, offset, phaseRejected, regionMatched, phase, source);
     }
     diagnostic.matched = matched;
     diagnostic.total = total;
@@ -294,7 +355,7 @@ BeatAnalysis analyzeBeats(juce::AudioFormatReader& reader, const std::atomic<boo
         const int padding = window - buffered;
         for (int i = 0; i < padding; ++i) appendSample(0);
     }
-    const auto result = fitGrid(novelty, cancel, diagnostic);
+    const auto result = fitGrid(novelty, cancel, diagnostic, reader);
     diagnostic.log(reader);
     return result;
 }

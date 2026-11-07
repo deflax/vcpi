@@ -133,6 +133,10 @@ order without scanning subdirectories. Repeat either command to append new files
 already-listed resolved paths are skipped. Use `track 1 deck remove <index>` to
 remove a song. Queen Mary DSP analyzes the whole selected file for tempo and a stable beat grid; decks
 follow the shared musical timeline's tempo and beat phase by default.
+Same-tempo regions that switch to offbeat accents can support analysis through
+an explicit half-beat alternative without doubling BPM. The output retains one
+anchored phase, not an average of opposite phases; this is not automatic kick
+identification, and `phase_offset` remains available for musical correction.
 Each has play/pause, vinyl-style speed/pitch, nudge, seek and one cue point.
 While synced, nudge adjusts a persistent per-song phase correction without
 changing shared BPM; releasing retains alignment. Read or set `phase_offset`

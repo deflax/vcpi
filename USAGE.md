@@ -594,14 +594,26 @@ stable beats. A beatless intro can be followed by a usable region later in the
 file. Variable tempo, short clips or ambiguous rhythms may still lack a reliable
 constant grid; half/double-tempo ambiguity is not universally resolvable.
 
+Same-tempo stable regions may follow opposite rhythmic phases (for example,
+kicks versus offbeat accents). The fitter allows either the anchor phase or a
+half-beat alternative, choosing one interpretation per region and applying the
+same 25 ms residual and tempo-compatibility checks. Half-beat alternatives
+contribute half-integer beat coordinates; they do not double BPM or average
+the output into an unsupported quarter-beat phase. Other phase disagreements
+still reduce coverage. The longest stable region anchors the output phase;
+this does not guarantee that it represents the kick. Use `phase_offset` or
+synced nudge to correct musical phase if needed. The analyzer version change
+invalidates older cached results automatically.
+
 Status reports `bpm`, `beat_offset` (source seconds modulo a beat),
 `phase_offset` (per-song correction in beats), `beat_confidence` (0–1), `sync`,
 `sync_active`, `sync_error`, `playback_speed` and `beat_phase_error` (signed beats,
 wrapped to ±0.5, measured against the corrected phase target).
-Confidence measures agreement and phase residual among accepted stable regions,
-not a probability or the
-fraction of the entire song with beats. Unreliable analysis reports
-`No reliable beat grid` and leaves playback manual.
+Confidence measures coverage and timing regularity among accepted stable-region
+beats, allowing the selected half-beat interpretation. It is not a probability,
+the fraction of the entire song with beats, or certainty that the chosen phase
+is the musical beat. Unreliable analysis reports `No reliable beat grid` and
+leaves playback manual.
 
 To diagnose a rejected grid, enable `debug on`, then run
 `track 1 deck reanalyze` (replace `1` with the mixer track). Reanalysis bypasses
@@ -623,6 +635,40 @@ it also includes `candidate_bpm`, `matched_beats`, `region_beats`, `coverage`,
 `rms_error_ms`, and `confidence`; unavailable fit metrics are omitted rather
 than reported as a measured zero. Coverage refers to accepted-region beats,
 not the whole song.
+`matched_beats` includes both `aligned_beats` and `half_beat_matches`; coverage
+and RMS residual use each region's selected interpretation. Half-beat matches
+support the shared tempo/subdivision without claiming direct output-phase
+alignment.
+
+When analysis completes grid refinement, a `beat-analysis-region` line precedes
+the summary for each stable region, even if the final grid is rejected. These
+use the same worker prefix and source path. Regions are numbered from 1;
+`start_seconds` and `end_seconds` locate their first/last supported beats in the
+source file. `bpm` and `beats` describe the local region; `candidate_bpm`
+identifies the final candidate grid used for comparison.
+
+`period_delta_ms` is local minus candidate beat duration;
+`allowed_period_delta_ms` is the existing tempo-compatibility limit for that
+region. `tempo_compatible` reports whether it passes. `phase_start_ms` and
+`phase_end_ms` compare the fitted local grid at its first/last beat with the
+candidate grid, signed and wrapped to half a candidate beat. Positive means the
+local beat is later than the nearest candidate beat; values can wrap between
+positive and negative near the half-beat boundary.
+
+`phase_rejected_beats` counts supported region beats more than 25 ms from the
+unshifted candidate grid, independently of tempo compatibility. `phase_group`
+is `aligned` or `half-beat`, indicating the interpretation selected for the
+whole region. `matched_beats` counts tempo-compatible beats within 25 ms after
+that interpretation and sums to the summary's count; it is split into
+`aligned_beats` and `half_beat_matches`.
+
+`disagreement` still compares against the unshifted grid: `none`, `phase`,
+`tempo`, or `both`. Thus `disagreement=phase` can coexist with accepted
+`half_beat_matches`; it identifies an alternative phase, not necessarily
+unsupported evidence. Tempo disagreement means the entire region fails tempo
+compatibility. `both` does not establish two independent causes: a tempo
+mismatch can itself produce phase drift. Early exits before refinement finishes
+emit only the summary.
 
 `reason=accepted` indicates success. Rejections distinguish `no-stable-regions`,
 `insufficient-fit-beats`, `insufficient-matched-beats`, `coverage-below-0.60`,
