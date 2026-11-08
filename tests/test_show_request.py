@@ -11,22 +11,12 @@ class ShowRequestTests(unittest.TestCase):
             request = parse_show(arguments)
             self.assertEqual(request.view, 'controlsbeatstep')
             self.assertTrue(request.details)
-            self.assertFalse(request.browse)
         effect = parse_show('1 fx "2" --details')
         self.assertEqual(effect.view, 'track1fx2')
         self.assertTrue(effect.details)
 
-    def test_only_explicit_browse_enters_explorer(self):
-        self.assertFalse(parse_show('').browse)
-        self.assertFalse(parse_show('--details').browse)
-        self.assertFalse(parse_show('all').browse)
-        request = parse_show('browse --details')
-        self.assertTrue(request.browse)
-        self.assertTrue(request.details)
-        self.assertEqual(request.view, 'overview')
-
     def test_conflicting_targets_and_duplicate_flags_are_rejected(self):
-        for arguments in ('--details --details', 'browse 1', 'browse midi',
+        for arguments in ('--details --details', 'browse', 'browse --details', 'browse 1', 'browse midi',
                           'controls unknown', 'controls midimix beatstep',
                           '1 fx --details', '1 --unknown', '"midi', 'midi audio'):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):

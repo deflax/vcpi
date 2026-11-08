@@ -6,8 +6,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, PropertyMock, patch
 
-from prompt_toolkit.keys import Keys
-
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
 from vcpi.commands.cli import HostCLI
 from vcpi.models import NUM_TRACKS, InstrumentTrack
@@ -98,35 +96,6 @@ class FlowTests(unittest.TestCase):
                 with self.subTest(track=number):
                     flow_display.display_flow(console, snapshot, str(number))
                     self.assertEqual(table.call_args.args[0]["id"], f"track{number}")
-
-    def test_browser_cycles_all_tracks_before_master_and_keeps_shortcuts(self):
-        snapshot = build_flow_snapshot(self.host)
-        fetch = Mock(return_value=snapshot)
-        with patch.object(flow_display, "display_flow") as display:
-            def application(**kwargs):
-                control = kwargs["layout"].current_control
-                bindings = kwargs["key_bindings"]
-
-                def jump(key, expected):
-                    bindings.get_bindings_for_keys((key,))[-1].handler(None)
-                    control.render(80)
-                    self.assertEqual(display.call_args.args[2], expected)
-
-                def run():
-                    jump("a", "audio")
-                    for number in range(1, 17):
-                        jump(Keys.Right, f"track{number}")
-                    jump(Keys.Right, "master")
-                    jump(Keys.BackTab, "track16")
-                    jump("8", "track8")
-                    jump(Keys.ControlI, "track9")
-                    jump("9", "master")
-
-                return SimpleNamespace(run=run)
-
-            with patch.object(flow_display, "Application", side_effect=application):
-                flow_display.explore_flow(fetch)
-        fetch.assert_called_once_with()
 
     def test_upper_tracks_have_no_physical_midimix_bindings(self):
         self.engine.tracks[15] = copy.deepcopy(self.track)
@@ -297,22 +266,19 @@ class FlowTests(unittest.TestCase):
             self.assertEqual(by_field[field], str(count))
         self.assertEqual(by_field["sound controls"], str(counts[0]))
 
-    def test_children_exist_in_both_modes_and_effect_details_expand_metadata(self):
+    def test_effect_views_exist_in_both_modes_and_details_expand_metadata(self):
         compact = {section["id"]: section for section in build_flow_snapshot(self.host)["sections"]}
         snapshot = build_flow_snapshot(self.host, details=True)
         detailed = {section["id"]: section for section in snapshot["sections"]}
         self.assertEqual(set(compact), set(detailed))
-        for section_id, parent, plugin, counts in (
-                ("track1fx1", "track1", self.track.effects[0], (1, 1, 0, 0)),
-                ("masterfx1", "master", self.engine.master_effects[0], (1, 0, 1, 1))):
+        for section_id, plugin, counts in (
+                ("track1fx1", self.track.effects[0], (1, 1, 0, 0)),
+                ("masterfx1", self.engine.master_effects[0], (1, 0, 1, 1))):
             with self.subTest(section=section_id):
-                self.assertEqual(compact[section_id]["parent"], parent)
-                self.assertEqual(detailed[section_id]["parent"], parent)
                 self.assertNotIn(plugin.identifier, str(compact[section_id]["rows"]))
                 self.assert_plugin_metadata(detailed[section_id]["rows"], plugin, counts)
                 self.assertIn(plugin.identifier, render_flow_snapshot(snapshot, section_id))
                 self.assertIn(plugin.identifier, render_flow_snapshot(snapshot))
-        self.assertEqual(compact["controlsbeatstep"]["parent"], "controls")
 
     def test_audio_is_output_configuration_not_repeated_track_chains(self):
         rows = self.rows("audio")

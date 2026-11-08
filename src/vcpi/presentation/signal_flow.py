@@ -36,15 +36,13 @@ def _value(value) -> str:
     return str(value)
 
 
-def _section(section_id, title, columns, rows, *, states=None, parent=None) -> dict:
+def _section(section_id, title, columns, rows, *, states=None) -> dict:
     result = {"id": section_id, "title": title, "columns": list(columns),
               "rows": [[str(cell) for cell in row] for row in rows]}
     result["cell_states"] = [
         [None] * (len(columns) - 1) + [state]
         for state in (states if states is not None else [None] * len(rows))
     ]
-    if parent is not None:
-        result["parent"] = parent
     return result
 
 
@@ -126,11 +124,11 @@ def _binding_row(binding, details):
     return [binding.control, binding.message, binding.target, value, state]
 
 
-def _effect_section(section_id, title, parent, plugin, details):
+def _effect_section(section_id, title, plugin, details):
     rows = (plugin_metadata_rows(plugin) if details else
             [("Name", _plugin_name(plugin)), ("Type", plugin.category or plugin.info_type or "unknown"),
              ("Latency", f"{plugin.reported_latency_samples} samples")])
-    return _section(section_id, title, ["Field", "Value"], rows, parent=parent)
+    return _section(section_id, title, ["Field", "Value"], rows)
 
 
 def build_flow_snapshot(host, *, details=False) -> dict:
@@ -289,7 +287,7 @@ def _build_flow_snapshot(host, engine, details):
             states.append("healthy" if midimix_output else "warning")
         section = _section(f"controls{key}", _CONTROLLER_NAMES[key],
                            ["Control", "Message", "Target", "Cached value", "State"], rows,
-                           states=states, parent="controls")
+                           states=states)
         section["description"] = (
             "Fixed CC/note map; all input channels. Device template not verified."
             if key == "midimix" else PROFILE_NOTE)
@@ -362,7 +360,7 @@ def _build_flow_snapshot(host, engine, details):
         sections.append(_section(section_id, f"Track {index + 1}", ["Field / control", "Value / target", "State / route"], rows, states=states))
         if track is not None:
             for effect_index, effect in enumerate(track.effects, 1):
-                sections.append(_effect_section(f"{section_id}fx{effect_index}", f"Track {index + 1} FX {effect_index}", section_id, effect, details))
+                sections.append(_effect_section(f"{section_id}fx{effect_index}", f"Track {index + 1} FX {effect_index}", effect, details))
 
     master_rows = [["Input", "sum of eligible track outputs", "after track gain / mute / solo"],
                    ["Chain", master_chain, "-> master gain -> output"],
@@ -378,7 +376,7 @@ def _build_flow_snapshot(host, engine, details):
         master_states.append(None)
     sections.append(_section("master", "Master bus", ["Field", "Value", "State / route"], master_rows, states=master_states))
     for index, effect in enumerate(master_effects, 1):
-        sections.append(_effect_section(f"masterfx{index}", f"Master FX {index}", "master", effect, details))
+        sections.append(_effect_section(f"masterfx{index}", f"Master FX {index}", effect, details))
     return {"title": "vcpi Signal Flow (cached)", "sections": sections}
 
 

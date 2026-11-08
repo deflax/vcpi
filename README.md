@@ -272,10 +272,9 @@ supports them. Quote names containing spaces. Free-form numeric values are left 
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
 `show` commands display tables. Bare `show` prints a compact sixteen-track overview;
-`show browse` opens the optional read-only full-screen explorer. Its root tabs
-cover routing, controllers, audio, tracks and master; effects and controller
-maps are child views. Refresh is manual. `get` includes
-parameter values, units, ranges, and choices without slider bars.
+focused views cover routing, controllers, audio, tracks, master and effects.
+All views print at the prompt. `get` includes parameter values, units, ranges,
+and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
 table; use `help <command>` or a focused topic such as `help track wav`,
 `help audio start`, or `help midi input close` for syntax, defaults, and examples.
@@ -616,7 +615,6 @@ vcpi> ableton link 120
 vcpi> status
 
 vcpi> show                         # compact routing overview; stays at the prompt
-vcpi> show browse                  # optional explorer; Enter opens children
 vcpi> show controls                # controller connections and configured profiles
 vcpi> show controls midimix        # mapped controls and cached values
 vcpi> show controls beatstep --details # full expected profile, ranges and input modes

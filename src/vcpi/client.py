@@ -29,7 +29,7 @@ from prompt_toolkit.history import FileHistory
 from rich.console import Console
 
 from vcpi.presentation.client_display import display_response
-from vcpi.presentation.flow_display import display_flow, explore_flow
+from vcpi.presentation.flow_display import display_flow
 from vcpi.presentation.show_request import parse_show
 from vcpi.paths import DEFAULT_SOCK_PATH
 
@@ -91,11 +91,8 @@ def connect(sock_path: str | Path | None = None):
             if console is not None and command and command[0] == "show":
                 try:
                     request = parse_show(command[1] if len(command) > 1 else "")
-                    fetch = lambda: _fetch_flow_snapshot(rfile, wfile, details=request.details)
-                    if request.browse:
-                        explore_flow(fetch)
-                    else:
-                        display_flow(console, fetch(), request.view)
+                    snapshot = _fetch_flow_snapshot(rfile, wfile, details=request.details)
+                    display_flow(console, snapshot, request.view)
                 except (OSError, ValueError) as error:
                     console.print(f"Error: {error}", markup=False, style="bold red")
                 continue

@@ -13,14 +13,13 @@ SHOW_TARGETS = ("all", "midi", "controls", "audio",
 SHOW_CONTROLLERS = ("midimix", "beatstep")
 SHOW_USAGE = ("Usage: show [all|midi|controls|audio|1-16|master] [--details] | "
               "show controls [midimix|beatstep] [--details] | "
-              "show <1-16|master> fx <fx_index> [--details] | show browse [--details]")
+              "show <1-16|master> fx <fx_index> [--details]")
 
 
 @dataclass(frozen=True)
 class ShowRequest:
     view: str = "overview"
     details: bool = False
-    browse: bool = False
 
 
 def resolve_show(arguments: list[str]) -> ShowRequest:
@@ -32,8 +31,6 @@ def resolve_show(arguments: list[str]) -> ShowRequest:
     if not tokens:
         return ShowRequest(details=details)
     target = tokens[0]
-    if tokens == ["browse"]:
-        return ShowRequest(details=details, browse=True)
     if len(tokens) == 1 and target in SHOW_TARGETS:
         view = f"track{target}" if target.isdecimal() else target
         return ShowRequest(view, details)

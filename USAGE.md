@@ -323,8 +323,8 @@ wrap to the terminal width; detailed help remains readable plain text.
 
 The interactive client uses `prompt_toolkit` for the `vcpi>` command line
 and Rich for terminal presentation. `help`, `get`, `status`, and
-`show` use tables. Bare `show` prints a compact overview; `show browse` explicitly
-opens the optional full-screen explorer. Piped output remains plain text.
+`show` use tables. Bare `show` prints a compact overview at the prompt.
+Piped output remains plain text.
 Other responses, including `help <command>`, retain their text.
 
 - Up/Down recall commands from the current client session.
@@ -825,7 +825,7 @@ hardware-free rendering does not establish live hardware suitability.
 | `gain <track\|master> [value]` | Read or set linear gain (0.0–1.0) |
 | `mute <track> [on\|off\|toggle]` | Set mute explicitly; omitted state toggles |
 | `solo <track> [on\|off\|toggle]` | Set solo explicitly; omitted state toggles |
-| `show [all\|midi\|controls\|audio\|1-16\|master] [--details]` | Print a compact cached view; `show browse` opens the optional explorer |
+| `show [all\|midi\|controls\|audio\|1-16\|master] [--details]` | Print a compact cached view at the prompt |
 
 `gain 1` reads without changing state. `mute 1 on` and `solo 1 off` are
 idempotent; bare `mute 1` and `solo 1` are convenient toggle shortcuts.
@@ -1399,14 +1399,12 @@ Inspection is read-only; parameters belong to `get`, not another parameter dump.
 | `show <track> fx <index>` | Selected track-effect summary |
 | `show master` | Master chain, gain, control and output |
 | `show master fx <index>` | Selected master-effect summary |
-| `show all` | Every compact view, including controller and loaded effect children |
-| `show browse` | Optional hierarchical full-screen explorer |
+| `show all` | Every compact view, including controller mappings and loaded effects |
 | Any of the above with `--details` | Expanded metadata, paths, diagnostics, ranges, feedback and inactive slots |
 
 Effect selectors require an explicit 1-based index; `show master` never implicitly
 selects an effect. `--details` may precede or follow the target. Quoted arguments
-use the same shell parsing in interactive and plain clients. Piped `show browse`
-prints the overview; it does not attempt terminal navigation.
+use the same shell parsing in interactive and plain clients.
 
 Controller views describe **configured expectations**, not mappings read from the
 hardware. The physical controller template must match vcpi's map; vcpi does not
@@ -1420,24 +1418,8 @@ different conditions. A track being muted or audio being stopped does not disabl
 its controller bindings. Unbound, unsupported and unavailable slots are hidden
 from compact binding lists and included with `--details`.
 
-Inside `show browse`:
-
-- The single-line tab bar shows root views, keeping the selected root visible.
-- Left/Right or Tab/Shift-Tab cycle siblings.
-- Enter opens the first child; cycle siblings to select another controller/effect.
-  Backspace returns to the parent. Effects belong to their track/master; controller
-  maps belong to Controls, rather than adding more top-level tabs.
-- `o`, `m`, `c`, `a` jump to overview, MIDI, controls or audio; `1`–`8` select tracks
-  1–8 and `9` still selects master, not track 9. All sixteen tracks are available
-  with Left/Right or Tab/Shift-Tab, in numeric order before master.
-- Up/Down, PageUp/PageDown and Home/End scroll.
-- `r` explicitly refreshes; navigation sends no requests. Failed refresh preserves
-  the previous view and displays an error.
-- `q`, Escape, Ctrl-C or Ctrl-D return to the prompt.
-- `show browse --details` browses expanded views.
-
 The overview keeps one row per stage; focused views retain full values through
-wrapping/scrolling. Colours come from explicit state: green for healthy/mapped,
+wrapping. Colours come from explicit state: green for healthy/mapped,
 yellow for warnings/unavailable conditions, red for errors and dim for neutral
 entries—not words found inside plugin names or descriptions.
 

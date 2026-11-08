@@ -13,9 +13,8 @@ from .help import VCPI_ASCII_LOGO
 def show(ctx, arg):
     """Inspect cached routing: show [target] [--details]
 
-    Bare show prints a compact overview. show browse opens the interactive
-    explorer; piped output uses the same overview. Use show controls
-    [midimix|beatstep] for mappings, or --details for metadata and diagnostics.
+    Bare show prints a compact overview. Use show controls [midimix|beatstep]
+    for mappings, or --details for metadata and diagnostics.
     """
     try:
         request = parse_show(arg)

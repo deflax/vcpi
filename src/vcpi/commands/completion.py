@@ -186,7 +186,7 @@ def _complete_inspection(ctx):
         targets = [arg for arg in args if arg != "--details"]
         values = []
         if not targets:
-            values.extend((*SHOW_TARGETS, "browse"))
+            values.extend(SHOW_TARGETS)
         elif targets == ["controls"]:
             values.extend(SHOW_CONTROLLERS)
         elif targets[0] in (*_TRACKS, "master"):
