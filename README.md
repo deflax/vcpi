@@ -350,7 +350,9 @@ the owning process and reports the actual applied value, including clamping.
 See [USAGE.md](USAGE.md#plugin-commands) for capture details and parameter examples.
 
 `show <track>` summarizes the chain, routing, mixer state and relevant controller
-bindings. Add `--details` for instrument metadata, paths and worker diagnostics.
+bindings, plus compact deck title, transport, detected BPM, requested/active sync
+and errors. Add `--details` for instrument metadata, paths and worker diagnostics,
+including full deck diagnostics and indexed playlist paths.
 Use `show <track> fx <index> --details` or `show master fx <index> --details`
 for full effect metadata; both require an explicit 1-based effect index.
 
@@ -547,14 +549,18 @@ vcpi> tempo 120
 vcpi> audio start
 vcpi> set 1 play true
 vcpi> set 2 play true
-vcpi> track 2 deck status
+vcpi> show 2
 ```
 
 Both decks initially load paused; the second command appends to Deck A without
 changing its selected song. Select playlist entries with `set 1 track_select 2`;
 selection is asynchronous and commits paused without
-replacing the worker or inserts. Inspect `track 1 deck status` for requested
-versus applied identity, detected BPM, confidence, sync state and errors.
+replacing the worker or inserts. Inspect `show 1` for compact operational info,
+including errors. Detected BPM is the song's analyzed tempo, distinct from the
+shared/global tempo; pending or missing analysis reads analyzing/unavailable,
+not 0. Use `show 1 --details` for requested versus applied selection, confidence,
+grid offsets, full diagnostics and indexed playlist paths. `get 1` remains the
+list of settable deck controls.
 Automatic Queen Mary analysis fits stable 60–200 BPM regions across the whole
 track and persists results; uncertain grids remain manual rather than guessing.
 Hardware-free Linux rendering and daemon command

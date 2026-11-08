@@ -319,9 +319,12 @@ class DeckSessionTests(unittest.TestCase):
             self.assertIn("seek accepted", command("track 1 deck seek 0.5"))
             self.assertIn("cue_set accepted", command("track 1 deck cue set"))
             self.assertIn("cue accepted", command("track 1 deck cue"))
-            status_text = command("track 1 deck status")
-            self.assertIn(str(self.root / "first.wav"), status_text)
-            self.assertIn(str(self.root / "second.wav"), status_text)
+            status_text = command("show 1 --details")
+            # Plain show wraps long playlist paths into the third column.
+            paths = "".join(line.rsplit("|", 1)[-1].strip()
+                            for line in status_text.splitlines() if "|" in line)
+            self.assertIn(str(self.root / "first.wav"), paths)
+            self.assertIn(str(self.root / "second.wav"), paths)
             self.assertIn("track_select", command("get 1"))
             self.assertIn("request accepted", command("set 1 track_select 2"))
             selected = host.engine.tracks[0].deck["tracks"][1]["id"]

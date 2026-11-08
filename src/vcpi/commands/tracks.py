@@ -122,18 +122,16 @@ def deck(ctx, track_num, parts, text):
     try:
         tokens = parts[2:]
         if not tokens:
-            raise ValueError("expected audio path, remove <index>, status, reanalyze, seek <seconds>, cue [set], or phase reset")
+            raise ValueError("expected audio path, remove <index>, reanalyze, seek <seconds>, cue [set], or phase reset")
         action = tokens[0]
-        if action in ("status", "reanalyze", "seek", "cue", "phase", "remove"):
+        if action in ("reanalyze", "seek", "cue", "phase", "remove"):
             track = ctx.host.engine.tracks[idx]
             if track is None or track.source_type != "deck":
                 raise ValueError(f"Track {track_num} is not a deck")
-            if tokens == ["status"]:
-                print_deck_status(ctx, track)
-            elif tokens == ["reanalyze"]:
+            if tokens == ["reanalyze"]:
                 ctx.host.engine.deck_command(idx, "reanalyze")
                 ctx.emit("  Reanalysis accepted; deck paused at its current position. "
-                         f"Check track {track_num} deck status for completion.")
+                         f"Check show {track_num} for completion.")
             elif tokens == ["phase", "reset"]:
                 ctx.host.engine.deck_command(idx, "phase_reset")
                 ctx.emit("  phase offset reset accepted")
@@ -145,16 +143,18 @@ def deck(ctx, track_num, parts, text):
                 ctx.host.engine.deck_command(idx, command)
                 ctx.emit(f"  {command} accepted")
             elif action == "remove" and len(tokens) == 2:
-                track = ctx.host.remove_deck_entry(idx, int(tokens[1]))
-                print_deck_status(ctx, track)
+                ctx.host.remove_deck_entry(idx, int(tokens[1]))
+                ctx.emit(f"  Removed playlist entry {tokens[1]} from track {track_num}; "
+                         f"use show {track_num} --details for the playlist.")
             else:
-                raise ValueError("expected status, reanalyze, remove <index>, seek <seconds>, cue [set], or phase reset")
+                raise ValueError("expected reanalyze, remove <index>, seek <seconds>, cue [set], or phase reset")
         else:
             sources, name = source_args(tokens, 1)
             track = ctx.host.load_deck(
                 idx, str(Path(sources[0]).expanduser()), name)
             ctx.emit(f"  track {track_num} = {track.name}")
-            print_deck_status(ctx, track)
+            ctx.emit(f"  Use show {track_num} for playback state or "
+                     f"show {track_num} --details for the playlist.")
     except Exception as error:
         ctx.emit(f"Error: {error}")
     return
@@ -259,18 +259,4 @@ def wav(ctx, track_num, parts, text):
     ctx.emit(f"  wav      : {track.path}")
     ctx.emit(f"  route with: midi link <channel 1-16> {track_num}")
     return
-
-
-def print_deck_status(ctx, track):
-    """Render only the daemon snapshot, never synchronizing with a worker."""
-    status = track.deck
-    ctx.emit(f"  playlist_id = {status.get('bank_id', '(not cached)')}")
-    for key in ("track_id", "track_title",
-                "requested_track_id", "request_id", "state", "play",
-                "position", "duration", "cue", "pitch", "nudge", "phase_offset", "bpm",
-                "beat_offset", "beat_confidence", "sync", "sync_active",
-                "sync_error", "playback_speed", "beat_phase_error", "error"):
-        ctx.emit(f"  {key} = {status.get(key, '(not cached)')}")
-    for ordinal, entry in enumerate(status.get("tracks", []), 1):
-        ctx.emit(f"  {ordinal}: {entry.get('title') or entry['id']} — {entry['path']}")
 

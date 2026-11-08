@@ -149,7 +149,8 @@ def set(ctx, arg):
         actual = ctx.host.engine.set_parameter(idx, pname, pval, fx_index=fx_idx)
         if (idx is not None and fx_idx is None and pname == "track_select"
                 and ctx.host.engine.tracks[idx].source_type == "deck"):
-            ctx.emit(f"  track_select request accepted = {actual}; use deck status for applied selection")
+            ctx.emit(f"  track_select request accepted = {actual}; "
+                     f"use show {idx + 1} for applied selection")
         else:
             ctx.emit(f"  {pname} = {actual}")
     except Exception as error:

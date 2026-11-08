@@ -382,7 +382,7 @@ hardware or empty plugin/effect lists may also yield no choices.
 | `set <track> <name> <value>` | Set instrument parameter |
 | `set <track> fx <fx_index> <name> <value>` | Set track-effect parameter |
 | `set master <fx_index> <name> <value>` | Set master-effect parameter; explicit index required |
-| `show <track> [--details]` | Show chain, routing, mixer and mapped controls; details adds full instrument metadata |
+| `show <track> [--details]` | Show chain, routing, mixer, mapped controls and compact deck info; details adds full instrument metadata, deck diagnostics and indexed playlist paths |
 | `show <track> fx <fx_index> [--details]` | Inspect a track effect; details adds full metadata; explicit 1-based index required |
 | `show master fx <fx_index> [--details]` | Inspect a master effect; details adds full metadata; explicit 1-based index required |
 
@@ -522,13 +522,13 @@ a directory appends only newly discovered paths. Existing song IDs and playlist
 order are retained.
 
 ```text
-track 1 deck status
+show 1 --details
 set 1 track_select 2
 track 1 deck remove 1
 save live-set
 ```
 
-Status lists song titles, paths and 1-based selection indexes. Removing an
+`show 1 --details` lists song titles, paths and 1-based selection indexes. Removing an
 unselected song preserves playback; indexes close up around the removed entry.
 Removing the selected song prepares the next song at that index (or the previous
 song when removing the last entry), paused at zero. The final song cannot be
@@ -556,7 +556,8 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 | Command | Behaviour |
 |---|---|
 | `get 1` | Deck parameters and their values, units and ranges, available for `set` |
-| `track 1 deck status` | Cached playlist, identity, transport, detected grid, sync state and errors |
+| `show 1` | Cached compact deck title, transport, detected BPM, requested/active sync and errors |
+| `show 1 --details` | Full cached deck diagnostics, requested versus applied selection, detected grid and indexed playlist paths |
 | `track 1 deck reanalyze` | Pause at the current position, discard this song's cached grid and run detection again |
 | `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
 | `track 1 deck <audio-file> [--name <label>]` | Append a song, or create a paused one-song deck |
@@ -581,9 +582,14 @@ ranges. Return nudge to zero after nudging. Remaining controls are `play`, `pitc
 while audio is actually advancing; while unsynced it retains temporary ±2% speed.
 
 `get <track>` lists only the deck's get/set parameters, just like other sources;
-`get <track> <parameter>` reads one parameter. Use `track <track> deck status`
-for transport diagnostics and the indexed playlist. Empty `error` or `sync_error`
-fields in status are normal when no error is present.
+`get <track> <parameter>` reads one settable parameter. Use `show <track>` for
+compact operational info: title, transport, detected BPM, requested versus active
+sync and any load, analysis or sync errors. Detected BPM is the song's analyzed
+tempo, distinct from the shared/global tempo; pending or missing analysis displays
+analyzing/unavailable rather than 0. Add `--details` for full transport and grid
+diagnostics (including confidence and offsets), requested versus applied selection,
+and the indexed playlist with paths. Both views read cached state without waiting
+for the worker. Empty `error` or `sync_error` fields are normal when no error is present.
 
 Queen Mary DSP analyzes the entire selected file off the render thread, using
 complex-domain spectral onset detection and tempo tracking. vcpi fits a constant
@@ -713,7 +719,7 @@ To force fresh detection for the selected song:
 
 ```text
 track 1 deck reanalyze
-track 1 deck status
+show 1
 ```
 
 `reanalyze` pauses the selected deck, removes that song's persisted cache entry,
@@ -722,7 +728,8 @@ render thread. It retains position, cue, pitch, nudge, sync, `phase_offset`,
 playlist and effects; it does not resume playback automatically. Once status is `ready`, use
 `set 1 play true` to resume. Like a seek or selection, activating the prepared
 result requires an audio render block; if audio output is stopped, start it to
-complete activation. Cache-removal or analysis errors appear in deck status.
+complete activation. Cache-removal or analysis errors appear in compact `show 1`
+output; use `show 1 --details` for full diagnostics.
 
 Other decks and other songs' cache entries are not cleared. An already-loaded
 deck retains its own in-memory result until reloaded or reanalyzed. No music,

@@ -322,7 +322,7 @@ def _complete_track(ctx):
             return empty
         if mode == "deck":
             if len(args) == 2:
-                return choices(("status", "reanalyze", "seek", "cue", "phase", "remove"))
+                return choices(("reanalyze", "seek", "cue", "phase", "remove"))
             if args[2:] == ["cue"]:
                 return choices(("set",))
             if args[2:] == ["phase"]:
@@ -332,7 +332,7 @@ def _complete_track(ctx):
                 if track is not None and track.source_type == "deck":
                     return choices(str(index) for index in range(1, len(track.deck["tracks"]) + 1))
                 return empty
-            if len(args) == 3 and args[2] not in ("status", "reanalyze", "seek", "cue", "phase", "remove"):
+            if len(args) == 3 and args[2] not in ("reanalyze", "seek", "cue", "phase", "remove"):
                 return choices(("--name",))
             return empty
         if mode == "vcv":

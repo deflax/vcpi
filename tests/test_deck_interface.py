@@ -76,15 +76,10 @@ class DeckCLITests(unittest.TestCase):
         self.assertEqual(self.track.deck["phase_offset"], -0.125)
         self.engine.request.assert_not_called()
 
-    def test_get_status_and_completion_never_request_live_state(self):
-        self.cli.onecmd("track 1 deck status")
+    def test_get_and_completion_never_request_live_state(self):
         self.cli.onecmd("get 1")
-        text = self.output.getvalue()
-        self.assertIn("track_id = first", text)
-        self.assertIn("requested_track_id = second", text)
-        self.assertIn("Opening title", text)
-        self.assertIn("257: Title 256 — /music/256.wav", text)
         self.assertIn("deck", complete_line(self.cli, "track 1 ")["matches"])
+        self.assertNotIn("status", complete_line(self.cli, "track 1 deck ")["matches"])
         self.assertEqual(complete_line(self.cli, "track 1 deck cue ")["matches"], ["set"])
         self.assertEqual(complete_line(self.cli, "set 1 play ")["matches"], ["false", "true"])
         self.assertIn("sync", complete_line(self.cli, "set 1 ")["matches"])
@@ -95,7 +90,7 @@ class DeckCLITests(unittest.TestCase):
         self.engine.deck_command.assert_not_called()
         self.host.load_deck.assert_not_called()
 
-    def test_get_lists_only_parameters_while_status_retains_playlist(self):
+    def test_get_lists_only_parameters(self):
         self.cli.onecmd("get 1")
         lines = self.output.getvalue().splitlines()
         names = [line.strip().split(" = ", 1)[0] for line in lines]
@@ -108,13 +103,6 @@ class DeckCLITests(unittest.TestCase):
         self.assertIn("12.5 s", text)
         self.assertNotIn("Opening title", text)
         self.assertNotIn("/music/", text)
-
-        self.output.seek(0)
-        self.output.truncate(0)
-        self.cli.onecmd("track 1 deck status")
-        status = self.output.getvalue()
-        self.assertIn("Opening title", status)
-        self.assertIn("/music/256.wav", status)
 
     def test_sync_false_is_a_typed_parameter(self):
         self.cli.onecmd("set 1 sync false")

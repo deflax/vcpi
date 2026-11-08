@@ -319,8 +319,19 @@ def _build_flow_snapshot(host, engine, details):
             track_row("Mixer", f"gain {_value(track.gain)}; mute {_value(track.muted)}; solo {_value(track.solo)}",
                       f"enabled {_value(track.enabled)}")
             if track.source_type == "deck":
-                track_row("Deck transport", "playing" if track.deck.get("play") else "paused",
-                          f"{_value(track.deck.get('position', 0))} / {_value(track.deck.get('duration', 0))} s")
+                deck = track.deck
+                track_row("Deck transport", "playing" if deck.get("play") else "paused",
+                          f"{_value(deck.get('position', 0))} / {_value(deck.get('duration', 0))} s; "
+                          f"{deck.get('state', 'not cached')}")
+                bpm = deck.get("bpm")
+                detected = (f"{_value(bpm)} BPM" if bpm is not None and bpm > 0 else
+                            "analyzing" if deck.get("state") in {"loading", "analyzing"} else "unavailable")
+                track_row("Detected BPM", detected, "source grid, not global tempo")
+                track_row("Deck sync", f"requested {_value(deck.get('sync', 'not cached'))}; "
+                          f"active {_value(deck.get('sync_active', 'not cached'))}")
+                for field in ("error", "sync_error"):
+                    if deck.get(field):
+                        track_row(f"Deck {field}", deck[field], state="error" if field == "error" else "warning")
             if details:
                 track_row("Source path", track.path)
                 track_row("Worker", f"PID {track.worker_pid if track.worker_pid is not None else 'none'}",
@@ -333,10 +344,13 @@ def _build_flow_snapshot(host, engine, details):
                     if path:
                         track_row(field, path)
                 if track.source_type == "deck":
-                    for field in ("bank_id", "track_id", "track_title", "requested_track_id", "request_id", "state", "play", "position", "duration", "cue", "pitch", "nudge", "phase_offset", "error"):
+                    for field in ("bank_id", "track_id", "track_title", "requested_track_id", "request_id",
+                                  "cue", "pitch", "nudge", "phase_offset", "beat_offset",
+                                  "beat_confidence", "playback_speed", "beat_phase_error"):
                         track_row(f"Deck {field}", _value(track.deck.get(field, "not cached")))
                     for ordinal, entry in enumerate(track.deck.get("tracks", []), 1):
-                        track_row(f"Deck selection {ordinal}", entry.get("title") or entry["id"], entry["id"])
+                        track_row(f"Deck selection {ordinal}", entry.get("title") or entry["id"],
+                                  f"{entry['id']} — {entry.get('path', 'not cached')}")
                 for number in linked_banks[index]:
                     track_row(f"Bank {number}", _pattern(banks[number - 1]), f"velocity {banks[number - 1].velocity}")
         for binding in _visible_bindings([binding for binding in all_bindings if binding.track == index + 1], details):

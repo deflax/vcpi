@@ -1,6 +1,7 @@
 """Routing, metadata, and controller destinations from cached state only."""
 
 import copy
+import io
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, PropertyMock, patch
@@ -8,6 +9,7 @@ from unittest.mock import Mock, PropertyMock, patch
 from prompt_toolkit.keys import Keys
 
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
+from vcpi.commands.cli import HostCLI
 from vcpi.models import NUM_TRACKS, InstrumentTrack
 from vcpi.sequencer import SequenceBank
 from vcpi.presentation.signal_flow import build_flow_snapshot, render_flow_snapshot
@@ -147,21 +149,67 @@ class FlowTests(unittest.TestCase):
             "track_id": "opening", "track_title": "Opening title",
             "requested_track_id": "next", "state": "loading", "play": False,
             "position": 12, "duration": 90, "cue": 4, "pitch": -1.25,
-            "nudge": 0, "tracks": [{"id": "opening", "title": "Opening title"}],
+            "nudge": 0, "bpm": 123.5, "sync": True, "sync_active": False,
+            "sync_error": "Waiting for global clock", "error": "Could not load next song",
+            "beat_offset": 0.125, "beat_confidence": 0.9,
+            "playback_speed": 1.02, "beat_phase_error": -0.01,
+            "tracks": [{"id": "opening", "title": "Opening title", "path": "/music/opening.wav"}],
         }
         compact = self.rows("track1")
         self.assertTrue(any("Opening title" in cell for row in compact for cell in row))
         self.assertIn("deck paused", self.track_state())
+        by_label = {row[0]: row for row in compact}
+        self.assertEqual(by_label["Detected BPM"][1], "123.5 BPM")
+        self.assertIn("loading", by_label["Deck transport"][2])
+        self.assertEqual(by_label["Deck sync"][1], "requested true; active false")
+        self.assertEqual(by_label["Deck sync_error"][1], "Waiting for global clock")
+        self.assertEqual(by_label["Deck error"][1], "Could not load next song")
         self.assertNotIn("Deck requested_track_id", {row[0] for row in compact})
         detailed = {row[0]: row[1] for row in self.rows("track1", details=True)}
         self.assertEqual(detailed["Deck track_id"], "opening")
         self.assertEqual(detailed["Deck requested_track_id"], "next")
         self.assertEqual(detailed["Deck selection 1"], "Opening title")
+        playlist = next(row for row in self.rows("track1", details=True) if row[0] == "Deck selection 1")
+        self.assertIn("/music/opening.wav", playlist[2])
+        for field, expected in (("beat_offset", "0.125"), ("beat_confidence", "0.9"),
+                                ("playback_speed", "1.02"), ("beat_phase_error", "-0.01")):
+            self.assertEqual(detailed[f"Deck {field}"], expected)
         self.assertFalse(any(row[0].startswith("Deck note") for row in self.rows("midi")))
         midi = {row[0]: row[1] for row in self.rows("midi", details=True)}
         self.assertEqual(midi["Deck note 63"], "nudge_down")
         self.assertEqual(midi["Deck note 64"], "nudge_up")
         self.assertIn("pitch", midi["Deck CC 20"])
+
+    def test_deck_bpm_distinguishes_pending_and_unavailable_grid(self):
+        self.track.source_type = "deck"
+        for state, bpm, expected in (("loading", 0, "analyzing"), ("ready", 0, "unavailable"),
+                                     ("ready", None, "unavailable"), ("ready", 128, "128 BPM")):
+            with self.subTest(state=state, bpm=bpm):
+                self.track.deck = {"state": state, "bpm": bpm}
+                rows = {row[0]: row[1] for row in self.rows("track1")}
+                self.assertEqual(rows["Detected BPM"], expected)
+
+    def test_show_deck_reads_cached_state_and_retains_playlist_paths(self):
+        self.track.source_type = "deck"
+        self.track.deck = {
+            "track_id": "first", "requested_track_id": "second",
+            "track_title": "Opening", "bpm": 125, "play": True,
+            "tracks": [{"id": "first", "path": "/music/opening.wav"}],
+        }
+        self.engine.request = Mock(side_effect=AssertionError("read must be cache-only"))
+        output = io.StringIO()
+        cli = HostCLI(self.host, stdout=output, owns_host=False)
+        cli.onecmd("show 1")
+        compact = output.getvalue()
+        self.assertIn("125 BPM", compact)
+        self.assertNotIn("/music/", compact)
+        output.seek(0)
+        output.truncate()
+        cli.onecmd("show 1 --details")
+        detailed = output.getvalue()
+        self.assertIn("/music/opening.wav", detailed)
+        self.assertIn("second", detailed)
+        self.engine.request.assert_not_called()
 
     def test_output_eligibility_tracks_independent_blockers(self):
         self.assertEqual(self.track_state(), "eligible")
