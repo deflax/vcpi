@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import unittest
+from types import SimpleNamespace
 
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
 from vcpi.controllers.beatstep_pro import BeatStepProController, BeatStepProProfile
@@ -151,7 +152,7 @@ class BeatStepProTests(unittest.TestCase):
         self.button(6)
         self.assertEqual(self.engine.commands[-1], (0, "nudge", -1, None, 77))
 
-    def test_rotaries_cover_volume_pitch_coarse_and_fine_seek(self):
+    def test_rotaries_cover_gain_pitch_coarse_and_fine_seek(self):
         self.rotary(0, 127)
         self.rotary(1, 0)
         self.rotary(2, 64)
@@ -181,6 +182,14 @@ class BeatStepProTests(unittest.TestCase):
             PluginSnapshot(21, parameters={
                 "mode": ParameterSnapshot(kind="enum", valid_values=("A", "B", "C")),
                 "count": ParameterSnapshot(kind="int", range=(2, 10))})]
+        bindings = self.controller.control_bindings()[24:28]
+        self.assertEqual([binding.target for binding in bindings], [
+            "Track 1 deck: FX 1: amount", "Track 1 deck: FX 1: switch",
+            "Track 1 deck: FX 2: mode", "Track 1 deck: FX 2: count",
+        ])
+        self.assertEqual([binding.range for binding in bindings], [
+            "-2 .. 2", "false / true", "indices 0-2: A, B, C", "2 .. 10",
+        ])
         for ordinal in range(8, 12):
             self.rotary(ordinal, 127)
         self.assertEqual(self.engine.commands, [
@@ -191,6 +200,10 @@ class BeatStepProTests(unittest.TestCase):
         self.rotary(8, 0)
         self.assertEqual(self.engine.commands[-1], (0, "new", 10, 0, 7))
         self.assertEqual(self.engine.tracks[0].plugin.values, {"track_select": 1})
+        binding = self.controller.control_bindings()[24]
+        self.assertEqual(binding.target, "Track 1 deck: FX 1: new")
+        self.assertEqual(binding.range, "10 .. 20")
+        self.assertEqual(self.controller.control_bindings()[25].availability, "unbound")
 
     def test_deck_controls_do_nothing_on_non_decks_and_sequences_never_drive_decks(self):
         self.engine.tracks[0].source_type = "vst"
@@ -215,3 +228,34 @@ class BeatStepProTests(unittest.TestCase):
             BeatStepProProfile(control_channel=0)
 
 
+
+class BeatStepBindingTests(unittest.TestCase):
+    def test_cached_bindings_separate_profile_mode_values_and_availability(self):
+        engine = RecordingEngine()
+        controller = BeatStepProController(engine, MusicalTimeline(LinkSync()))
+        self.addCleanup(controller.close)
+        engine.tracks[0].muted = True
+        engine.tracks[0].enabled = False
+        engine.tracks[0].effects = [PluginSnapshot(20, parameters={
+            "amount": ParameterSnapshot(range=(-2, 2), units="dB"),
+            "unsupported": ParameterSnapshot(range=()),
+        }, values={"amount": 0.5})]
+        bindings = controller.control_bindings()
+        self.assertEqual(len(bindings), 32)
+        self.assertEqual(bindings[16].target, "Track 1 deck: gain")
+        self.assertEqual(bindings[16].range, "0 .. 1")
+        self.assertEqual(bindings[16].availability, "disconnected")
+        self.assertEqual(bindings[24].value, "0.5 dB")
+        self.assertEqual(bindings[24].range, "-2 .. 2")
+        self.assertEqual(bindings[24].mode, "absolute")
+        self.assertEqual(bindings[24].track, 1)
+        self.assertEqual(bindings[25].availability, "unsupported")
+        self.assertEqual(bindings[26].availability, "unbound")
+        controller._port = SimpleNamespace(name="Connected", close=lambda: None)
+        self.assertEqual(controller.control_bindings()[24].availability, "mapped")
+        engine.tracks[0].source_type = "vst"
+        self.assertEqual(controller.control_bindings()[16].availability, "unsupported")
+        engine.tracks[0] = None
+        self.assertEqual(controller.control_bindings()[16].availability, "unavailable")
+        self.assertEqual(engine.commands, [])
+        self.assertEqual(engine.midi, [])

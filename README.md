@@ -271,10 +271,10 @@ supports them. Quote names containing spaces. Free-form numeric values are left 
 
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
-focused `show` commands display tables. Plain `show` opens a read-only full-screen
-explorer for routing, mapped controls, audio output, and cached plugin metadata,
-with a highlighted tab bar, track/master/effect views, scrolling, and manual
-refresh. `get` includes
+`show` commands display tables. Bare `show` prints a compact eight-track overview;
+`show browse` opens the optional read-only full-screen explorer. Its root tabs
+cover routing, controllers, audio, tracks and master; effects and controller
+maps are child views. Refresh is manual. `get` includes
 parameter values, units, ranges, and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
 table; use `help <command>` or a focused topic such as `help track wav`,
@@ -349,10 +349,10 @@ plugin-side changes can remain stale until a full capture. `set` waits for
 the owning process and reports the actual applied value, including clamping.
 See [USAGE.md](USAGE.md#plugin-commands) for capture details and parameter examples.
 
-`show <track>` includes instrument vendor, version, category, type, ID, latency,
-description, and grouped parameter counts alongside routing, mixer, and worker state.
-Use `show <track> fx <index>` or `show master fx <index>` for full effect metadata;
-both require an explicit 1-based effect index.
+`show <track>` summarizes the chain, routing, mixer state and relevant controller
+bindings. Add `--details` for instrument metadata, paths and worker diagnostics.
+Use `show <track> fx <index> --details` or `show master fx <index> --details`
+for full effect metadata; both require an explicit 1-based effect index.
 
 ### Finding MIDI port indexes
 
@@ -606,11 +606,15 @@ vcpi> audio start
 vcpi> ableton link 120
 vcpi> status
 
-vcpi> show              # tabbed explorer: MIDI, controls, audio, tracks, master, effects
-vcpi> show controls     # exact MIDI Mix bindings and cached parameter targets
-vcpi> show 1            # track state and full cached instrument metadata
-vcpi> show 1 fx 1       # full metadata for track 1's first effect
-vcpi> show master fx 1  # full metadata for the first master effect
+vcpi> show                         # compact routing overview; stays at the prompt
+vcpi> show browse                  # optional explorer; Enter opens children
+vcpi> show controls                # controller connections and configured profiles
+vcpi> show controls midimix        # mapped controls and cached values
+vcpi> show controls beatstep --details # full expected profile, ranges and input modes
+vcpi> show 1                       # chain, routing, mixer and relevant controls
+vcpi> show 1 --details             # full cached instrument metadata and diagnostics
+vcpi> show 1 fx 1 --details        # full metadata for track 1's first effect
+vcpi> show master fx 1 --details   # full metadata for the first master effect
 vcpi> get 1             # instrument controls
 vcpi> get 1 --all       # controls, settings, MIDI, and unused slots, grouped
 vcpi> get 1 fx 1        # controls for track 1's first effect

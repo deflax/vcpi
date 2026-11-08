@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from io import StringIO
-import re
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Point
@@ -17,6 +16,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl, UIContent, UICo
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.output import Output
+from prompt_toolkit.utils import get_cwidth
 from rich import box
 from rich.console import Console
 from rich.table import Table
@@ -28,77 +28,58 @@ def _section_id(view: str) -> str:
 
 
 _STATE_COLOURS = {
-    "green": (
-        r"\b(?:on|true|active|connected|running|ready)\b"
-        r"|\beligible for output\b|\b(?:Link )?enabled\b"
-    ),
-    "red": (
-        r"\b(?:off|false|stopped|failed|failure|muted|disabled|blocked|solo-excluded)\b"
-        r"|\b(?:track|master) gain zero\b"
-    ),
-    "yellow": (
-        r"\b(?:inactive|disconnected|unlinked|unbound|undefined|unknown|empty|"
-        r"unavailable|pending)\b|\bnot (?:opened|cached|reported)\b"
-        r"|\bnone connected\b|\bno (?:instrument parameter|enum values)\b"
-    ),
+    "healthy": "green",
+    "warning": "yellow",
+    "error": "red",
+    "neutral": "dim",
 }
-_STATE_PATTERNS = [
-    (re.compile(pattern, re.IGNORECASE), colour)
-    for colour, pattern in _STATE_COLOURS.items()
-]
-_CONTROL_VALUE = re.compile(
-    r"^(true|false)\b|\b(?:LED|mute|solo|enabled)\s+(on|off|true|false)\b",
-    re.IGNORECASE,
-)
 
 
-def _cell_text(cell: str, column: str) -> Text:
-    """Colour state spans, never interpret daemon/plugin strings as markup."""
-    text = Text(cell)
-    if "state" in column.lower():
-        for pattern, colour in _STATE_PATTERNS:
-            for match in pattern.finditer(cell):
-                # A reported absence of failure is healthy, not a red failure.
-                if match.group().lower() == "failure" and cell[match.end():].startswith(": none"):
-                    continue
-                text.stylize(colour, match.start(), match.end())
-    elif "value" in column.lower() or "range" in column.lower():
-        for match in _CONTROL_VALUE.finditer(cell):
-            group = 1 if match.group(1) is not None else 2
-            value = match.group(group).lower()
-            text.stylize("green" if value in ("on", "true") else "red",
-                         match.start(group), match.end(group))
-    return text
+def _cell_text(cell: str, state: str | None = None) -> Text:
+    """Apply explicit snapshot semantics without interpreting literal cell text."""
+    return Text(cell, style=_STATE_COLOURS.get(state, ""))
 
 
 def _section_table(section: dict, width: int) -> Table:
     columns = section["columns"]
-    # Preserve every cell even when the terminal cannot fit all column borders.
-    stacked = width < len(columns) * 4 + 1
+    # Stack genuinely narrow tables instead of squeezing every column to letters.
+    stacked = width < len(columns) * 10
+    compact = section["id"] == "overview" and not stacked
     table = Table(
-        title=Text(section["title"]), box=box.SIMPLE, border_style="cyan",
+        title=Text(section["title"]),
+        box=None if compact else box.SIMPLE, border_style="cyan",
         padding=(0, 0 if stacked else 1), expand=True,
     )
+    states = section.get("cell_states", [])
+
+    def cell_state(row: int, column: int) -> str | None:
+        if row < len(states) and column < len(states[row]):
+            return states[row][column]
+        return None
+
     if stacked:
         table.add_column(Text("Details"), overflow="fold", min_width=1)
-        for row in section["rows"]:
+        for row_index, row in enumerate(section["rows"]):
             text = Text()
             for index, (column, cell) in enumerate(zip(columns, row)):
                 if index:
                     text.append("\n")
                 text.append(column, style="bold cyan")
                 text.append(": ")
-                text.append_text(_cell_text(cell, column))
+                text.append_text(_cell_text(cell, cell_state(row_index, index)))
             table.add_row(text)
     else:
         for index, column in enumerate(columns):
             table.add_column(
                 Text(column), style="cyan" if index == 0 else None,
-                overflow="fold", min_width=1,
+                overflow="ellipsis" if compact else "fold", no_wrap=compact,
+                min_width=1, max_width=max(10, width // 4) if index == 0 else None,
             )
-        for row in section["rows"]:
-            table.add_row(*(_cell_text(cell, column)
-                            for column, cell in zip(columns, row)))
+        for row_index, row in enumerate(section["rows"]):
+            table.add_row(*(
+                _cell_text(cell, cell_state(row_index, index))
+                for index, cell in enumerate(row)
+            ))
     return table
 
 
@@ -113,6 +94,8 @@ def display_flow(console: Console, snapshot: dict, view: str = "overview") -> No
         raise ValueError(f"No loaded show target: {view}")
     console.print(Text(snapshot["title"], style="bold cyan"))
     for section in sections:
+        if section.get("description"):
+            console.print(Text(section["description"], style="dim"))
         console.print(_section_table(section, console.width))
 
 
@@ -160,6 +143,42 @@ def explore_flow(
 
     def sections() -> list[dict]:
         return snapshot["sections"] if snapshot is not None else []
+
+    def section_by_id(section_id: str) -> dict | None:
+        return next((section for section in sections() if section["id"] == section_id), None)
+
+    def parent_id(section: dict) -> str | None:
+        parent = section.get("parent")
+        return parent if parent and section_by_id(parent) is not None else None
+
+    def roots() -> list[dict]:
+        available = [section for section in sections() if parent_id(section) is None]
+        order = ["overview", "midi", "controls", "audio",
+                 *(f"track{number}" for number in range(1, 9)), "master"]
+        return sorted(
+            available,
+            key=lambda section: order.index(section["id"]) if section["id"] in order else len(order),
+        )
+
+    def siblings() -> list[dict]:
+        current = section_by_id(selected_id)
+        parent = parent_id(current) if current is not None else None
+        return ([section for section in sections() if parent_id(section) == parent]
+                if parent is not None else roots())
+
+    def children() -> list[dict]:
+        return [section for section in sections() if parent_id(section) == selected_id]
+
+    def ancestry() -> list[dict]:
+        branch = []
+        current = section_by_id(selected_id)
+        seen = set()
+        while current is not None and current["id"] not in seen:
+            branch.append(current)
+            seen.add(current["id"])
+            parent = parent_id(current)
+            current = section_by_id(parent) if parent is not None else None
+        return list(reversed(branch))
 
     def refresh() -> None:
         nonlocal snapshot, selected_id, error, revision
@@ -210,51 +229,66 @@ def explore_flow(
     shortcuts = {section_id: key for key, section_id in jump_keys.items()}
 
     def tabs():
+        width = app.output.get_size().columns
         labels = {"overview": "Overview", "midi": "MIDI", "controls": "Controls",
                   "audio": "Audio", "master": "Master"}
-        fragments = []
-        for section in sections():
+        if width < 100:
+            labels.update(overview="View", controls="Ctrl", master="Mstr")
+        branch = ancestry()
+        root_id = branch[0]["id"] if branch else selected_id
+        items = []
+        for section in roots():
             section_id = section["id"]
-            label = labels.get(section_id, section["title"])
             shortcut = shortcuts.get(section_id)
-            if shortcut is not None:
-                label = f"{shortcut}: {label}"
-            selected = section_id == selected_id
-            style = (
-                "bg:ansicyan fg:ansiblack bold"
-                if selected else "fg:ansicyan bold"
-            )
-            fragments.append((style, f"[ {label} ]" if selected else f"  {label}  "))
-            fragments.append(("", " "))
-        return fragments
+            if section_id.startswith("track") and shortcut is not None:
+                label = shortcut
+            else:
+                label = labels.get(section_id, section["title"])
+                if shortcut is not None:
+                    label = f"{shortcut}:{label}"
+            selected = section_id == root_id
+            style = ("bg:ansicyan fg:ansiblack bold"
+                     if selected else "fg:ansicyan bold")
+            items.append((style, f"[{label}]" if selected else f" {label} "))
+        # Keep the active root visible on narrow terminals, without wrapping tabs.
+        active = next((index for index, section in enumerate(roots())
+                       if section["id"] == root_id), 0)
+        start, end = 0, len(items)
+        while end - start > 1 and sum(get_cwidth(text) for _, text in items[start:end]) + 2 > width:
+            if active - start > end - active - 1:
+                start += 1
+            else:
+                end -= 1
+        return ([("", "‹" if start else "")] + items[start:end]
+                + [("", "›" if end < len(items) else "")])
 
     tabs_window = Window(
-        content=FormattedTextControl(tabs), wrap_lines=True,
-        dont_extend_height=True,
+        content=FormattedTextControl(tabs), wrap_lines=False, height=1,
     )
 
     def footer():
-        available = sections()
+        available = siblings()
         index = next(
             (i for i, section in enumerate(available) if section["id"] == selected_id),
             None,
         )
-        current = (
-            f"{available[index]['title']} [{index + 1}/{len(available)}]"
-            if index is not None else "No snapshot"
-        )
+        current = " > ".join(section["title"] for section in ancestry()) or "No snapshot"
+        if index is not None:
+            current += f" [{index + 1}/{len(available)}]"
+        child_count = len(children())
+        if child_count:
+            current += f" | Enter: {child_count} children"
         fragments = [("bold", current + "\n")]
         if error:
             fragments.append(("fg:ansired bold", error + "\n"))
         fragments.extend([
-            ("", "←/→ Tab/Shift-Tab: sections | o/m/c/a 1–8 9: jump\n"),
-            ("", "↑/↓ PgUp/PgDn Home/End: scroll\n"),
-            ("", "r: refresh (manual only) | q Esc Ctrl-C/Ctrl-D: back"),
+            ("", "←/→ Tab: siblings  Enter: children  Backspace: parent  o/m/c/a 1–9: root\n"),
+            ("", "↑/↓ PgUp/PgDn Home/End: scroll  r: refresh  q/Esc/Ctrl-C/Ctrl-D: exit"),
         ])
         return fragments
 
     footer_window = Window(
-        content=FormattedTextControl(footer), wrap_lines=True,
+        content=FormattedTextControl(footer), wrap_lines=False,
         dont_extend_height=True, style="reverse",
     )
     bindings = KeyBindings()
@@ -267,7 +301,7 @@ def explore_flow(
             content_window.vertical_scroll = 0
 
     def cycle(delta: int) -> None:
-        available = sections()
+        available = siblings()
         if not available:
             return
         index = next(
@@ -289,6 +323,19 @@ def explore_flow(
         @bindings.add(key)
         def jump(event, target=section_id) -> None:
             select(target)
+
+    @bindings.add("enter")
+    def enter_child(event) -> None:
+        available = children()
+        if available:
+            select(available[0]["id"])
+
+    @bindings.add("backspace")
+    def return_to_parent(event) -> None:
+        current = section_by_id(selected_id)
+        parent = parent_id(current) if current is not None else None
+        if parent is not None:
+            select(parent)
 
     @bindings.add("up")
     def up(event) -> None:

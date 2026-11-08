@@ -180,8 +180,9 @@ class EffectControlLifecycleTests(unittest.TestCase):
                     self.assertEqual(self.client._last_input, 0)
                     self.assertIsNone(self.worker.failure)
                     binding = next(row for row in self.controller.control_bindings()
-                                   if row[0] == "Rotary 9")
-                    self.assertEqual(binding[4], "inactive: unsupported effect parameter range")
+                                   if row.control == "Rotary 9")
+                    self.assertEqual(binding.availability, "unsupported")
+                    self.assertEqual(binding.reason, "unsupported effect parameter range")
 
         # Unsupported controls retain their ordinal; the next insert still works.
         self.rotary(9, 127)

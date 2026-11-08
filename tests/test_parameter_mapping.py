@@ -3,11 +3,10 @@
 from dataclasses import replace
 import unittest
 
-from vcpi.controllers.akai_midimix import KNOB_CCS, MidiMixController
+from vcpi.controllers.akai_midimix import KNOB_CCS, MidiMixController, midimix_bindings
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
 from vcpi.models import InstrumentTrack
 from vcpi.presentation.plugin_info import plugin_metadata_rows
-from vcpi.presentation.signal_flow import _control_rows
 
 
 class RecordingEngine:
@@ -32,7 +31,7 @@ class ParameterMappingTests(unittest.TestCase):
         controller.on_midi(([0xB0, KNOB_CCS[0][knob], value], 0.0))
 
     def knob_rows(self, engine):
-        return _control_rows(0, engine.tracks[0], "MIDI Mix", None)[1:4]
+        return midimix_bindings(engine, "MIDI Mix", None)[1:4]
 
     def test_zero_and_nonautomatable_controls_keep_order_and_cc_ranges(self):
         plugin = PluginSnapshot(1, parameters={
@@ -54,14 +53,16 @@ class ParameterMappingTests(unittest.TestCase):
             (0, "mode", "Bright", 7),
         ])
         rows = self.knob_rows(engine)
-        self.assertEqual([row[2] for row in rows], [
+        self.assertEqual([row.target for row in rows], [
             "Track 1 instrument: zero", "Track 1 instrument: enabled",
             "Track 1 instrument: mode",
         ])
-        self.assertEqual(rows[0][3], "0; range -2 .. 2")
-        self.assertIn("false / true; CC 0-63 / 64-127", rows[1][3])
-        self.assertIn("indices 0-2: Soft, Hard, Bright", rows[2][3])
-        self.assertTrue(all(row[4] == "active" for row in rows))
+        self.assertEqual(rows[0].value, "0")
+        self.assertEqual(rows[0].range, "-2 .. 2")
+        self.assertEqual(rows[1].range, "false / true")
+        self.assertIn("CC 0-63 / 64-127", rows[1].mode)
+        self.assertEqual(rows[2].range, "indices 0-2: Soft, Hard, Bright")
+        self.assertTrue(all(row.availability == "mapped" for row in rows))
         # Dispatch queues changes; it does not pretend they have been applied.
         self.assertEqual(plugin.values["zero"], 0.0)
 
@@ -80,8 +81,8 @@ class ParameterMappingTests(unittest.TestCase):
             self.turn(controller, knob, 127)
         self.assertEqual(engine.commands, [])
         rows = self.knob_rows(engine)
-        self.assertTrue(all(row[2] == "Track 1: (unbound)" for row in rows))
-        self.assertTrue(all("inactive" in row[4] for row in rows))
+        self.assertTrue(all(row.target == "Track 1: (unbound)" for row in rows))
+        self.assertTrue(all(row.availability == "unbound" for row in rows))
         self.assertEqual(list(plugin.parameter_items("controls")),
                          [("volume", plugin.parameters["volume"])])
         self.assertEqual(plugin.values["volume"], 0.0)
@@ -117,15 +118,15 @@ class ParameterMappingTests(unittest.TestCase):
             (0, "envelope_amount", 0.0, 7), (0, "envelope_amount", 10000.0, 7),
         ])
         rows = self.knob_rows(engine)
-        self.assertEqual([row[2] for row in rows], [
+        self.assertEqual([row.target for row in rows], [
             "Track 1 instrument: cutoff", "Track 1 instrument: resonance",
             "Track 1 instrument: envelope_amount",
         ])
-        self.assertEqual([row[3] for row in rows], [
-            "300 Hz; range 20 .. 20000", "2.5; range 0.1 .. 10",
-            "2000 Hz; range 0 .. 10000",
+        self.assertEqual([row.value for row in rows], ["300 Hz", "2.5", "2000 Hz"])
+        self.assertEqual([row.range for row in rows], [
+            "20 .. 20000", "0.1 .. 10", "0 .. 10000",
         ])
-        self.assertTrue(all(row[4] == "active" for row in rows))
+        self.assertTrue(all(row.availability == "mapped" for row in rows))
         self.assertEqual(plugin.values["volume"], 0.8)
         self.assertEqual(plugin.parameters["volume"].raw_value, 0.8)
 
@@ -146,9 +147,9 @@ class ParameterMappingTests(unittest.TestCase):
                     self.turn(controller, knob, 127)
                 self.assertEqual(engine.commands, [] if excluded else [(0, "volume", 2.0, 7)])
                 rows = self.knob_rows(engine)
-                self.assertEqual(rows[0][2], "Track 1: (unbound)" if excluded
+                self.assertEqual(rows[0].target, "Track 1: (unbound)" if excluded
                                  else "Track 1 instrument: volume")
-                self.assertTrue(all(row[2] == "Track 1: (unbound)" for row in rows[1:]))
+                self.assertTrue(all(row.target == "Track 1: (unbound)" for row in rows[1:]))
 
     def test_cardinal_skips_all_midi_parameters_and_window_settings(self):
         parameters = {
@@ -170,7 +171,7 @@ class ParameterMappingTests(unittest.TestCase):
             (0, "parameter_1_v", -10.0, 7), (0, "parameter_2_v", 10.0, 7),
             (0, "parameter_3_v", 10.0, 7),
         ])
-        self.assertEqual([row[2] for row in self.knob_rows(engine)], [
+        self.assertEqual([row.target for row in self.knob_rows(engine)], [
             "Track 1 instrument: parameter_1_v", "Track 1 instrument: parameter_2_v",
             "Track 1 instrument: parameter_3_v",
         ])
@@ -206,11 +207,34 @@ class ParameterMappingTests(unittest.TestCase):
             (0, "slot", -5.0, 7), (0, "slot", 5.0, 7), (0, "resonance", 20.0, 7),
         ])
         rows = self.knob_rows(engine)
-        self.assertEqual(rows[0][2], "Track 1 instrument: slot")
-        self.assertIn("range -5 .. 5", rows[0][3])
-        self.assertEqual(rows[1][2], "Track 1 instrument: resonance")
-        self.assertIn("range 10 .. 20", rows[1][3])
-        self.assertEqual(rows[2][2], "Track 1: (unbound)")
+        self.assertEqual(rows[0].target, "Track 1 instrument: slot")
+        self.assertEqual(rows[0].range, "-5 .. 5")
+        self.assertEqual(rows[1].target, "Track 1 instrument: resonance")
+        self.assertEqual(rows[1].range, "10 .. 20")
+        self.assertEqual(rows[2].target, "Track 1: (unbound)")
+
+    def test_unusable_knob_keeps_ordinal_and_binding_availability(self):
+        plugin = PluginSnapshot(1, parameters={
+            "unsupported": ParameterSnapshot(kind="enum", valid_values=()),
+            "amount": ParameterSnapshot(range=(0, 10)),
+        }, values={"amount": 3.0})
+        engine, controller = self.controller(plugin)
+        engine.tracks[0].muted = True
+        engine.tracks[0].enabled = False
+        self.turn(controller, 0, 127)
+        self.turn(controller, 1, 127)
+        self.assertEqual(engine.commands, [(0, "amount", 10.0, 7)])
+        bindings = midimix_bindings(engine, "Connected", None)
+        self.assertEqual([row.availability for row in bindings[:4]],
+                         ["mapped", "unsupported", "mapped", "unbound"])
+        self.assertEqual(bindings[2].value, "3")
+        self.assertEqual(bindings[2].track, 1)
+        self.assertIn("output disconnected", bindings[4].feedback)
+        disconnected = controller.control_bindings()
+        self.assertEqual([row.availability for row in disconnected[:4]],
+                         ["disconnected", "unsupported", "disconnected", "unbound"])
+        self.assertEqual(disconnected[6].availability, "unavailable")
+        self.assertEqual(disconnected[-1].target, "Master gain")
 
     def test_refresh_removes_cached_destination_and_clears_all_controls(self):
         plugin = PluginSnapshot(1, parameters={"old": ParameterSnapshot(range=(0, 1))})
@@ -223,7 +247,7 @@ class ParameterMappingTests(unittest.TestCase):
         for knob in range(3):
             self.turn(controller, knob, 127)
         self.assertEqual(engine.commands, [(0, "old", 1.0, 7), (0, "new", 4.0, 7)])
-        self.assertTrue(all(row[2] == "Track 1: (unbound)" for row in self.knob_rows(engine)))
+        self.assertTrue(all(row.target == "Track 1: (unbound)" for row in self.knob_rows(engine)))
 
 
 if __name__ == "__main__":

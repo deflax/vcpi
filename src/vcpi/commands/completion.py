@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from vcpi import midi
 from vcpi.models import NUM_TRACKS
 from vcpi.sequencer import NUM_SEQ_BANKS
+from vcpi.presentation.show_request import SHOW_CONTROLLERS, SHOW_TARGETS, resolve_show
 
 
 from . import assets
@@ -180,17 +181,31 @@ def _complete_inspection(ctx):
     choices = ctx.choices
     empty = {"start_position": 0, "matches": []}
     if command == "show":
-        if not args:
-            return choices(("all", "midi", "controls", "audio", *_TRACKS, "master"))
-        target = args[0]
-        if target not in (*_TRACKS, "master"):
+        if args.count("--details") > 1:
             return empty
-        effects = _effects(ctx.host, target)
-        if len(args) == 1:
-            return choices(("fx",) if effects else ())
-        if len(args) == 2 and args[1] == "fx":
-            return choices(_indexes(effects))
-        return empty
+        targets = [arg for arg in args if arg != "--details"]
+        values = []
+        if not targets:
+            values.extend((*SHOW_TARGETS, "browse"))
+        elif targets == ["controls"]:
+            values.extend(SHOW_CONTROLLERS)
+        elif targets[0] in (*_TRACKS, "master"):
+            effects = _effects(ctx.host, targets[0])
+            if len(targets) == 1 and effects:
+                values.append("fx")
+            elif len(targets) == 2 and targets[1] == "fx":
+                values.extend(_indexes(effects))
+        try:
+            request = resolve_show(args)
+        except ValueError:
+            pass
+        else:
+            loaded = True
+            if "fx" in targets:
+                loaded = targets[-1] in _indexes(_effects(ctx.host, targets[0]))
+            if not request.details and loaded:
+                values.append("--details")
+        return choices(values)
     if command == "audio":
         if not args:
             return choices(("start", "stop", "devices", "diagnose"))

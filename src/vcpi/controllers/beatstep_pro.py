@@ -19,9 +19,14 @@ from threading import RLock
 
 from vcpi.deps import HAS_MIDO, mido
 from vcpi.midi import MidiInPort
+from vcpi.controllers.bindings import (
+    ControlBinding, cached_value, input_availability, parameter_range,
+    parameter_value, supported_parameter,
+)
 
 
 logger = logging.getLogger(__name__)
+PROFILE_NOTE = "Expected vcpi profile; device template not verified."
 BUTTON_ACTIONS = (
     "play_toggle", "cue", "cue_set", "sync", "previous", "next",
     "nudge_down", "nudge_up",
@@ -68,17 +73,17 @@ class BeatStepProProfile:
 DEFAULT_PROFILE = BeatStepProProfile()
 
 
-def _supported_effect_parameter(parameter):
-    if parameter.kind == "bool":
-        return True
-    if parameter.kind == "enum":
-        return bool(parameter.valid_values)
-    bounds = parameter.range
-    return (len(bounds) == 2
-            and all(isinstance(bound, (int, float)) and math.isfinite(bound)
-                    for bound in bounds)
-            and bounds[0] <= bounds[1]
-            and math.isfinite(bounds[1] - bounds[0]))
+def _deck_target(engine, index):
+    track = engine.tracks[index]
+    return track if track is not None and track.source_type == "deck" else None
+
+
+def _effect_binding(track, ordinal):
+    """Resolve one exposed insert parameter, retaining unsupported ordinals."""
+    candidates = ((fx_index, effect, name, parameter)
+                  for fx_index, effect in enumerate(track.effects)
+                  for name, parameter in effect.knob_parameter_items())
+    return next(islice(candidates, ordinal, ordinal + 1), None)
 
 
 class BeatStepProController:
@@ -106,55 +111,77 @@ class BeatStepProController:
     def port_name(self):
         return self.input_port_name
 
-    def control_bindings(self):
-        """Return cached [Control, Binding, Target, Detail, State] display rows."""
-        rows = []
+    def control_bindings(self) -> list[ControlBinding]:
+        """Describe expected profile bindings using only cached snapshots."""
+        bindings = []
         channel = self.profile.control_channel + 1
 
         def state(index):
-            if self.input_port_name is None:
-                return "inactive: BeatStep Pro input disconnected"
-            track = self._engine.tracks[index]
-            return ("inactive: empty" if track is None else
-                    "inactive: non-deck" if track.source_type != "deck" else "active")
+            if self._engine.tracks[index] is None:
+                return "unavailable", "empty track"
+            if _deck_target(self._engine, index) is None:
+                return "unsupported", "deck-only binding; target is not a deck"
+            return input_availability(self.input_port_name)
 
         for button, number in enumerate(self.profile.button_numbers):
             index, action = divmod(button, 8)
-            rows.append([
-                f"Button {button + 1}",
+            availability, reason = state(index)
+            track = _deck_target(self._engine, index)
+            field = ("play", "cue", "cue", "sync", "track_select", "track_select",
+                     "nudge", "nudge")[action]
+            value = "(not cached)"
+            if track is not None:
+                values = track.plugin.values if field == "track_select" else track.deck
+                if field in values:
+                    value = cached_value(values[field])
+            bindings.append(ControlBinding(
+                "beatstep", f"Button {button + 1}",
                 f"ch {channel} {self.profile.button_type.upper()} {number}",
-                f"Track {index + 1}: {BUTTON_ACTIONS[action]}",
-                "Gate: press/release", state(index),
-            ])
+                f"Track {index + 1} deck: {BUTTON_ACTIONS[action]}",
+                value, availability, reason, index + 1, mode="Gate: press/release",
+            ))
         for rotary, number in enumerate(self.profile.rotary_ccs):
             index = rotary // 4 if rotary < 8 else (rotary - 8) // 4
-            status = state(index)
-            detail = self.profile.rotary_modes[rotary]
+            availability, reason = state(index)
+            track = _deck_target(self._engine, index)
+            value, bounds = "(not cached)", ""
             if rotary < 8:
-                target = ("volume", "pitch", "coarse seek", "fine seek")[rotary % 4]
+                control = rotary % 4
+                target = ("gain", "pitch", "coarse seek", "fine seek")[control]
+                bounds = ("0 .. 1", "-16 .. 16", "", "")[control]
+                if track is not None:
+                    if control == 0:
+                        value = cached_value(track.gain)
+                    else:
+                        field = "pitch" if control == 1 else "position"
+                        if field in track.deck:
+                            value = cached_value(track.deck[field])
+                        if control >= 2 and "duration" in track.deck:
+                            bounds = f"0 .. {cached_value(track.deck['duration'])} s"
             else:
                 ordinal = (rotary - 8) % 4
-                track = self._engine.tracks[index]
-                candidates = (
-                    ((fx_index, name, parameter) for fx_index, effect in enumerate(track.effects)
-                     for name, parameter in effect.knob_parameter_items())
-                    if track is not None and track.source_type == "deck" else iter(())
-                )
-                binding = next(islice(candidates, ordinal, ordinal + 1), None)
+                binding = _effect_binding(track, ordinal) if track is not None else None
+                target = f"effect parameter {ordinal + 1} (unbound)"
                 if binding is None:
-                    target = f"effect parameter {ordinal + 1} (unbound)"
-                    if status == "active":
-                        status = "inactive: no exposed effect parameter"
+                    if track is not None:
+                        availability, reason = "unbound", "no exposed effect parameter"
                 else:
-                    fx_index, name, parameter = binding
+                    fx_index, effect, name, parameter = binding
                     target = f"FX {fx_index + 1}: {name}"
-                    if status == "active" and not _supported_effect_parameter(parameter):
-                        status = "inactive: unsupported effect parameter range"
-            rows.append([
-                f"Rotary {rotary + 1}", f"ch {channel} CC {number}",
-                f"Track {index + 1}: {target}", detail, status,
-            ])
-        return rows
+                    value = parameter_value(effect, name, parameter)
+                    bounds = parameter_range(parameter)
+                    if not supported_parameter(parameter):
+                        availability, reason = "unsupported", "unsupported effect parameter range"
+                    elif parameter.kind not in ("bool", "enum"):
+                        observed = effect.values.get(name, parameter.range[0])
+                        if not isinstance(observed, (int, float)) or not math.isfinite(observed):
+                            availability, reason = "unavailable", "cached effect value is not finite"
+            bindings.append(ControlBinding(
+                "beatstep", f"Rotary {rotary + 1}", f"ch {channel} CC {number}",
+                f"Track {index + 1} deck: {target}", value, availability, reason,
+                index + 1, bounds, self.profile.rotary_modes[rotary],
+            ))
+        return bindings
 
     def open_input(self, port_index: int) -> str:
         self.close()
@@ -291,8 +318,8 @@ class BeatStepProController:
                 self._rotary(rotary, message.value)
 
     def _deck(self, index):
-        track = self._engine.tracks[index]
-        if track is None or track.source_type != "deck":
+        track = _deck_target(self._engine, index)
+        if track is None:
             return None
         # Source replacement without an explicit lifecycle hook must not retain
         # stale optimism or suppress the new source's first physical press.
@@ -403,42 +430,36 @@ class BeatStepProController:
             self._set(index, track, "seek", target, observed)
 
     def _effect(self, index, track, ordinal, value, delta):
-        # Flatten the insert chain's exposed controls, NOT the deck source's
-        # transport parameters. Preserve each parameter's actual effect index.
-        remaining = ordinal
-        for fx_index, effect in enumerate(track.effects):
-            for name, parameter in islice(effect.knob_parameter_items(), remaining + 1):
-                if remaining:
-                    remaining -= 1
-                    continue
-                if not _supported_effect_parameter(parameter):
-                    return
-                if parameter.kind == "bool":
-                    normalized = float(bool(effect.values.get(name, False)))
-                elif parameter.kind == "enum":
-                    observed = effect.values.get(name, parameter.valid_values[0])
-                    normalized = (parameter.valid_values.index(observed)
-                                  / max(1, len(parameter.valid_values) - 1))
-                else:
-                    # Infinite display bounds do not define a usable linear
-                    # controller range. Never invent replacement endpoints.
-                    low, high = parameter.range
-                    observed = effect.values.get(name, low)
-                    if not isinstance(observed, (int, float)) or not math.isfinite(observed):
-                        return
-                    normalized = (observed - low) / (high - low) if high != low else 0.0
-                field = ("effect", effect.token, name)
-                current = self._current(index, track, field, normalized)
-                fraction = value / 127.0 if delta is None else max(0.0, min(1.0, current + delta / 127.0))
-                if parameter.kind == "bool":
-                    mapped = fraction >= 0.5
-                elif parameter.kind == "enum":
-                    mapped = parameter.valid_values[round(fraction * (len(parameter.valid_values) - 1))]
-                else:
-                    mapped = low + fraction * (high - low)
-                    if parameter.kind == "int":
-                        mapped = round(mapped)
-                self._pending[(index, track.generation, field)] = (normalized, fraction)
-                self._engine.enqueue_param_change(index, name, mapped, fx_index=fx_index,
-                                                 fx_token=effect.token, generation=track.generation)
+        binding = _effect_binding(track, ordinal)
+        if binding is None:
+            return
+        fx_index, effect, name, parameter = binding
+        if not supported_parameter(parameter):
+            return
+        if parameter.kind == "bool":
+            normalized = float(bool(effect.values.get(name, False)))
+        elif parameter.kind == "enum":
+            observed = effect.values.get(name, parameter.valid_values[0])
+            normalized = (parameter.valid_values.index(observed)
+                          / max(1, len(parameter.valid_values) - 1))
+        else:
+            # Infinite display bounds do not define a usable linear range.
+            low, high = parameter.range
+            observed = effect.values.get(name, low)
+            if not isinstance(observed, (int, float)) or not math.isfinite(observed):
                 return
+            normalized = (observed - low) / (high - low) if high != low else 0.0
+        field = ("effect", effect.token, name)
+        current = self._current(index, track, field, normalized)
+        fraction = value / 127.0 if delta is None else max(0.0, min(1.0, current + delta / 127.0))
+        if parameter.kind == "bool":
+            mapped = fraction >= 0.5
+        elif parameter.kind == "enum":
+            mapped = parameter.valid_values[round(fraction * (len(parameter.valid_values) - 1))]
+        else:
+            mapped = low + fraction * (high - low)
+            if parameter.kind == "int":
+                mapped = round(mapped)
+        self._pending[(index, track.generation, field)] = (normalized, fraction)
+        self._engine.enqueue_param_change(index, name, mapped, fx_index=fx_index,
+                                         fx_token=effect.token, generation=track.generation)

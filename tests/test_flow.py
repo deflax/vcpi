@@ -3,12 +3,12 @@
 import copy
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
 from vcpi.models import InstrumentTrack
 from vcpi.sequencer import SequenceBank
-from vcpi.presentation.signal_flow import build_flow_snapshot, render_flow_snapshot, show_view
+from vcpi.presentation.signal_flow import build_flow_snapshot, render_flow_snapshot
 from vcpi.link import LinkSync
 from vcpi.timeline import MusicalTimeline
 from vcpi.controllers.beatstep_pro import BeatStepProController
@@ -63,14 +63,40 @@ class FlowTests(unittest.TestCase):
         self.host.timeline = MusicalTimeline(self.host.link)
         self.host.beatstep = BeatStepProController(self.engine, self.host.timeline)
 
-    def rows(self, section):
-        return next(s['rows'] for s in build_flow_snapshot(self.host)['sections']
-                    if s['id'] == section)
+    def section(self, section_id, *, details=False):
+        return next(section for section in build_flow_snapshot(self.host, details=details)["sections"]
+                    if section["id"] == section_id)
+
+    def rows(self, section_id, *, details=False):
+        return self.section(section_id, details=details)["rows"]
 
     def track_state(self):
-        return self.rows('track1')[0][1]
+        return next(row[1] for row in self.rows("track1") if row[0] == "State")
 
-    def test_deck_titles_transport_and_midi_mapping_are_cached(self):
+    def test_overview_is_short_and_keeps_all_eight_tracks(self):
+        snapshot = build_flow_snapshot(self.host)
+        overview = next(section for section in snapshot["sections"] if section["id"] == "overview")
+        labels = [row[0] for row in overview["rows"]]
+        self.assertEqual(labels[:8], [f"Track {index}" for index in range(1, 9)])
+        self.assertTrue({"Master", "Output", "Controls", "Problems"} <= set(labels))
+        rendered = render_flow_snapshot(snapshot, "overview")
+        self.assertLessEqual(len(rendered.splitlines()), 24)
+        self.assertTrue(all(len(line) <= 80 for line in rendered.splitlines()))
+        self.assertNotIn("/plugins/", rendered)
+        self.assertNotIn("worker", rendered.lower())
+        self.assertNotIn(self.track.plugin.identifier, rendered)
+
+    def test_overview_keeps_problem_marker_when_source_names_are_long(self):
+        self.track.plugin.name = "Long source " * 30
+        self.track.worker_failure = "worker crashed " * 20
+        overview = self.section("overview")
+        self.assertEqual(overview["cell_states"][0][-1], "error")
+        text = render_flow_snapshot({"title": "Cached", "sections": [overview]}, "overview")
+        self.assertIn("worker failed", text)
+        self.assertIn("blocked track", text)
+        self.assertLessEqual(len(text.splitlines()), 24)
+
+    def test_deck_operational_state_is_compact_and_details_expand_reference(self):
         self.track.source_type = "deck"
         self.track.deck = {
             "track_id": "opening", "track_title": "Opening title",
@@ -78,68 +104,92 @@ class FlowTests(unittest.TestCase):
             "position": 12, "duration": 90, "cue": 4, "pitch": -1.25,
             "nudge": 0, "tracks": [{"id": "opening", "title": "Opening title"}],
         }
-        self.engine.request = Mock(side_effect=AssertionError("cache-only"))
-        snapshot = build_flow_snapshot(self.host)
-        text = render_flow_snapshot(snapshot)
-        self.assertIn("Deck: Opening title", text)
-        self.assertIn("deck paused", text)
-        rows = {row[0]: row[1] for row in self.rows("track1")}
-        self.assertEqual(rows["Deck track_id"], "opening")
-        self.assertEqual(rows["Deck requested_track_id"], "next")
-        self.assertEqual(rows["Deck selection 1"], "Opening title")
-        midi = {row[0]: row[1] for row in self.rows("midi")}
+        compact = self.rows("track1")
+        self.assertTrue(any("Opening title" in cell for row in compact for cell in row))
+        self.assertIn("deck paused", self.track_state())
+        self.assertNotIn("Deck requested_track_id", {row[0] for row in compact})
+        detailed = {row[0]: row[1] for row in self.rows("track1", details=True)}
+        self.assertEqual(detailed["Deck track_id"], "opening")
+        self.assertEqual(detailed["Deck requested_track_id"], "next")
+        self.assertEqual(detailed["Deck selection 1"], "Opening title")
+        self.assertFalse(any(row[0].startswith("Deck note") for row in self.rows("midi")))
+        midi = {row[0]: row[1] for row in self.rows("midi", details=True)}
         self.assertEqual(midi["Deck note 63"], "nudge_down")
         self.assertEqual(midi["Deck note 64"], "nudge_up")
         self.assertIn("pitch", midi["Deck CC 20"])
-        self.engine.request.assert_not_called()
 
     def test_output_eligibility_tracks_independent_blockers(self):
-        self.assertIn('eligible', self.track_state())
+        self.assertEqual(self.track_state(), "eligible")
         for field, value, reason in (
-            ('muted', True, 'muted'), ('enabled', False, 'disabled'),
-            ('worker_failure', 'worker crashed', 'worker crashed'), ('gain', 0, 'gain zero'),
+            ("muted", True, "muted"), ("enabled", False, "disabled"),
+            ("worker_failure", "worker crashed", "worker crashed"), ("gain", 0, "gain zero"),
         ):
             original = getattr(self.track, field)
             setattr(self.track, field, value)
             self.assertIn(reason, self.track_state())
-            self.assertNotIn('eligible', self.track_state())
+            self.assertNotIn("eligible", self.track_state())
             setattr(self.track, field, original)
-        self.engine.tracks[1] = InstrumentTrack('Solo', '', PluginSnapshot(3), solo=True)
-        self.assertIn('solo-excluded', self.track_state())
+        self.engine.tracks[1] = InstrumentTrack("Solo", "", PluginSnapshot(3), solo=True)
+        self.assertIn("solo-excluded", self.track_state())
         self.track.solo = True
-        self.assertIn('eligible', self.track_state())
-        self.engine._failure = 'owner crashed'
-        self.assertIn('audio owner failed', self.track_state())
-        self.assertNotIn('eligible', self.track_state())
+        self.assertEqual(self.track_state(), "eligible")
+        self.engine._failure = "owner crashed"
+        self.assertIn("audio owner failed", self.track_state())
+        self.assertEqual(self.section("track1")["cell_states"][0][-1], "error")
 
-    def test_knobs_target_instrument_parameters_not_inserts_or_extra_parameters(self):
-        knobs = [row for row in self.rows('controls') if row[0].startswith('Track 1 knob')]
-        self.assertEqual([row[2].split(': ', 1)[1] for row in knobs],
-                         ['cutoff', 'enabled', 'mode'])
-        self.assertIn('880', knobs[0][3])
-        self.assertIn('20 .. 20000', knobs[0][3])
-        self.assertIn('true', knobs[1][3])
-        self.assertIn('Soft, Hard', knobs[2][3])
+    def test_mapping_targets_survive_muting_and_controller_disconnect(self):
+        self.track.muted = True
+        connected = self.rows("controlsmidimix")
+        cutoff = next(row for row in connected if row[0] == "Track 1 knob 1")
+        self.assertEqual(cutoff[2], "Track 1 instrument: cutoff")
+        self.assertEqual(cutoff[-1], "mapped")
         self.host.midimix.input_port_name = None
-        self.assertTrue(all('inactive' in row[4] for row in self.rows('controls')
-                            if row[0].startswith('Track 1 knob')))
+        disconnected = self.rows("controlsmidimix")
+        cutoff = next(row for row in disconnected if row[0] == "Track 1 knob 1")
+        self.assertEqual(cutoff[2], "Track 1 instrument: cutoff")
+        self.assertEqual(cutoff[-1], "disconnected")
+        self.assertFalse(any("effect_mix" in row[2] for row in disconnected))
 
-    def test_empty_destinations_remain_visible_for_midi_and_sequencer(self):
-        rows = self.rows('midi')
-        channel = next(row for row in rows if row[0] == 'MIDI channel 16')
-        bank = next(row for row in rows if row[0] == 'Sequencer bank 1')
-        self.assertIn('Track 8', channel[1])
-        self.assertIn('empty', channel[2])
-        self.assertIn('Track 8', bank[1])
-        self.assertIn('empty', bank[2])
-        self.assertIn('C4 (60)', bank[2])
+    def test_track_contains_relevant_bindings_from_both_controllers(self):
+        self.track.source_type = "deck"
+        self.track.deck = {"play": True, "duration": 90, "position": 12,
+                           "tracks": [{"id": "opening", "title": "Opening"}]}
+        with patch.object(BeatStepProController, "input_port_name",
+                          new_callable=PropertyMock, return_value="BeatStep"):
+            rows = self.rows("track1")
+        labels = [row[0] for row in rows]
+        self.assertTrue(any(label.startswith("MIDI Mix:") for label in labels))
+        self.assertTrue(any(label.startswith("BeatStep Pro:") for label in labels))
+        self.assertTrue(any("play_toggle" in row[1] for row in rows))
+        self.assertTrue(any("instrument: cutoff" in row[1] or "deck source: cutoff" in row[1]
+                            for row in rows))
+        self.assertFalse(any("Track 2" in row[0] for row in rows))
 
-    def test_track_preserves_routing_mixer_worker_and_full_instrument_metadata(self):
-        rows = self.rows("track1")
-        labels = {row[0] for row in rows}
-        self.assertTrue({"State", "MIDI channels", "Generic MIDI inputs", "Sequencer banks",
-                         "Mixer", "Worker", "Worker buffering", "Audio destination"} <= labels)
-        self.assert_plugin_metadata(rows, self.track.plugin, (4, 3, 1, 2))
+    def test_midi_shows_configured_empty_destinations_without_full_reference(self):
+        rows = self.rows("midi")
+        channel = next(row for row in rows if row[0] == "MIDI channel 16")
+        bank = next(row for row in rows if row[0] == "Sequencer bank 1")
+        self.assertIn("Track 8", channel[1])
+        self.assertIn("empty", channel[2])
+        self.assertIn("Track 8", bank[1])
+        self.assertIn("empty", bank[2])
+        self.assertEqual(sum(row[0].startswith("MIDI channel ") for row in rows), 2)
+        self.assertEqual(next(row[1] for row in rows if row[0] == "Unused channels"), "14")
+        self.assertNotIn("C4 (60)", bank[2])
+        details = self.rows("midi", details=True)
+        self.assertEqual(sum(row[0].startswith("MIDI channel ") for row in details), 16)
+        self.assertEqual(sum(row[0].startswith("Sequencer bank ") for row in details), 16)
+        self.assertIn("C4 (60)", next(row[2] for row in details if row[0] == "Sequencer bank 1"))
+
+    def test_track_details_expand_metadata_and_worker_diagnostics(self):
+        compact = self.rows("track1")
+        labels = {row[0] for row in compact}
+        self.assertTrue({"State", "Chain", "MIDI channels", "Sequencer banks", "Mixer", "Output"} <= labels)
+        self.assertFalse({"Worker", "Worker buffering", "Path"} & labels)
+        self.assertNotIn(self.track.plugin.identifier, str(compact))
+        detailed = self.rows("track1", details=True)
+        self.assertTrue({"Worker", "Worker buffering"} <= {row[0] for row in detailed})
+        self.assert_plugin_metadata(detailed, self.track.plugin, (4, 3, 1, 2))
 
     def assert_plugin_metadata(self, rows, plugin, counts):
         text = "\n".join(" ".join(row) for row in rows)
@@ -153,36 +203,41 @@ class FlowTests(unittest.TestCase):
                                  "boolean parameters (reported)", "discrete parameters (reported)"), counts):
             self.assertEqual(by_field[field], str(count))
         self.assertEqual(by_field["sound controls"], str(counts[0]))
-        for field in ("plugin settings", "midi parameters", "unused parameters"):
-            self.assertEqual(by_field[field], "0")
 
-    def test_effect_sections_preserve_full_metadata_and_render_in_all(self):
-        snapshot = build_flow_snapshot(self.host)
-        sections = {section["id"]: section for section in snapshot["sections"]}
-        rendered = render_flow_snapshot(snapshot)
-        for section_id, plugin, counts in (
-                ("track1fx1", self.track.effects[0], (1, 1, 0, 0)),
-                ("masterfx1", self.engine.master_effects[0], (1, 0, 1, 1))):
+    def test_children_exist_in_both_modes_and_effect_details_expand_metadata(self):
+        compact = {section["id"]: section for section in build_flow_snapshot(self.host)["sections"]}
+        snapshot = build_flow_snapshot(self.host, details=True)
+        detailed = {section["id"]: section for section in snapshot["sections"]}
+        self.assertEqual(set(compact), set(detailed))
+        for section_id, parent, plugin, counts in (
+                ("track1fx1", "track1", self.track.effects[0], (1, 1, 0, 0)),
+                ("masterfx1", "master", self.engine.master_effects[0], (1, 0, 1, 1))):
             with self.subTest(section=section_id):
-                self.assert_plugin_metadata(sections[section_id]["rows"], plugin, counts)
-                selected = render_flow_snapshot(snapshot, section_id)
-                self.assertIn(plugin.identifier, selected)
-                self.assertIn(plugin.identifier, rendered)
-        self.assertNotIn(self.engine.master_effects[0].identifier,
-                         render_flow_snapshot(snapshot, "track1fx1"))
-        self.assertNotIn(self.track.effects[0].identifier,
-                         render_flow_snapshot(snapshot, "masterfx1"))
+                self.assertEqual(compact[section_id]["parent"], parent)
+                self.assertEqual(detailed[section_id]["parent"], parent)
+                self.assertNotIn(plugin.identifier, str(compact[section_id]["rows"]))
+                self.assert_plugin_metadata(detailed[section_id]["rows"], plugin, counts)
+                self.assertIn(plugin.identifier, render_flow_snapshot(snapshot, section_id))
+                self.assertIn(plugin.identifier, render_flow_snapshot(snapshot))
+        self.assertEqual(compact["controlsbeatstep"]["parent"], "controls")
 
-    def test_metadata_snapshot_is_cached_only_and_does_not_mutate_plugins(self):
+    def test_audio_is_output_configuration_not_repeated_track_chains(self):
+        rows = self.rows("audio")
+        self.assertTrue({"Output", "Backend", "Stream", "Problems"} <= {row[0] for row in rows})
+        self.assertFalse(any(row[0].startswith("Track ") for row in rows))
+        self.assertNotIn(self.track.plugin.name, str(rows))
+
+
+    def test_snapshot_is_cached_only_and_does_not_mutate_plugins(self):
         forbidden = Mock(side_effect=AssertionError("flow requested live state or mutation"))
         self.engine.request = forbidden
         self.engine.set_parameter = forbidden
         original = copy.deepcopy((self.track, self.engine.master_effects))
         with patch("vcpi.midi.list_midi_input_ports", forbidden), \
                 patch("vcpi.midi.list_midi_output_ports", forbidden):
-            snapshot = build_flow_snapshot(self.host)
-            for section_id in ("track1", "track1fx1", "masterfx1"):
-                render_flow_snapshot(snapshot, section_id)
+            for details in (False, True):
+                snapshot = build_flow_snapshot(self.host, details=details)
+                render_flow_snapshot(snapshot)
         forbidden.assert_not_called()
         self.assertEqual((self.track, self.engine.master_effects), original)
 
@@ -197,28 +252,6 @@ class FlowTests(unittest.TestCase):
             with self.subTest(section=section_id), self.assertRaises(ValueError):
                 render_flow_snapshot(snapshot, section_id)
 
-    def test_show_view_resolves_named_tracks_and_explicit_effect_indexes(self):
-        self.assertEqual(show_view([]), "overview")
-        for view in ("all", "midi", "controls", "audio", "master"):
-            self.assertEqual(show_view([view]), view)
-        for index in range(1, 9):
-            self.assertEqual(show_view([str(index)]), f"track{index}")
-            self.assertEqual(show_view([str(index), "fx", "2"]), f"track{index}fx2")
-        self.assertEqual(show_view(["master", "fx", "1"]), "masterfx1")
-        self.assertEqual(show_view(["master", "fx", "12"]), "masterfx12")
-
-    def test_show_view_rejects_missing_nonpositive_and_nonnumeric_effect_indexes(self):
-        for target in ("1", "master"):
-            for suffix in (["fx"], ["fx", "0"], ["fx", "-1"], ["fx", "1.5"],
-                           ["fx", "nope"], ["fx", ""], ["fx", "1", "extra"],
-                           ["1"], ["effect", "1"]):
-                arguments = [target, *suffix]
-                with self.subTest(arguments=arguments), self.assertRaises(ValueError):
-                    show_view(arguments)
-        for arguments in (["0"], ["9"], ["track1"], ["midi", "fx", "1"],
-                          ["explore"], ["0", "fx", "1"], ["9", "fx", "1"]):
-            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
-                show_view(arguments)
 
 
 if __name__ == '__main__':

@@ -126,7 +126,7 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(set(self.matches(before)), banks)
         self.assertEqual(set(self.matches("seq ")), banks | {"link", "cut", "clear"})
         for before, expected in (
-                ("show ", tracks | {"all", "midi", "controls", "audio", "master"}),
+                ("show ", tracks | {"all", "midi", "controls", "audio", "master", "browse", "--details"}),
                 ("audio ", {"start", "stop", "devices", "diagnose"}),
                 ("midi ", {"ports", "input", "link", "cut"}),
                 ("midi ports ", {"input", "output"}),
@@ -186,15 +186,21 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(self.matches(before), ["1"])
         self.assertEqual(self.matches("show master fx 2"), ["2"])
         for before in ("show 1 ", "show master "):
-            self.assertEqual(self.matches(before), ["fx"])
-        for before in ("show 2 ", "show all ", "show midi ", "show controls ",
-                       "show audio ", "show explore ", "show 0 ", "show 9 ",
-                       "show 1 fx 1 ", "show master fx 2 ", "show master 1 ",
-                       "show 1 fx 0", "show master fx 3", "show 1 fx -1"):
+            self.assertEqual(set(self.matches(before)), {"fx", "--details"})
+        self.assertEqual(set(self.matches("show controls ")), {"midimix", "beatstep", "--details"})
+        for before in ("show 2 ", "show all ", "show midi ", "show audio ",
+                       "show 1 fx 1 ", "show master fx 2 ", "show browse ",
+                       "show controls midimix ", "show controls beatstep "):
+            self.assertEqual(self.matches(before), ["--details"], before)
+        for before in ("show explore ", "show 0 ", "show 9 ", "show master 1 ",
+                       "show 1 fx 0", "show master fx 3", "show 1 fx -1",
+                       "show 1 fx 1 --details ", "show browse --details "):
             self.assertEqual(self.matches(before), [], before)
+        self.assertEqual(set(self.matches("show --details 1 ")), {"fx"})
+        self.assertEqual(set(self.matches("show controls --details ")), {"midimix", "beatstep"})
         self.track.effects.clear()
         self.engine.master_effects.pop()
-        self.assertEqual(self.matches("show 1 "), [])
+        self.assertEqual(self.matches("show 1 "), ["--details"])
         self.assertEqual(self.matches("show 1 fx "), [])
         self.assertEqual(self.matches("track 1 fx clear "), [])
         self.assertEqual(self.matches("show master fx "), ["1"])
@@ -202,7 +208,7 @@ class CompletionTests(unittest.TestCase):
         for before in ("show 1 fx 1 ", "set 1 fx 1 ", "get master 2 "):
             self.assertEqual(self.matches(before), [])
         self.engine.master_effects.clear()
-        self.assertEqual(self.matches("show master "), [])
+        self.assertEqual(self.matches("show master "), ["--details"])
         self.assertEqual(self.matches("show master fx "), [])
 
     def test_parameters_and_finite_values_use_cached_metadata(self):

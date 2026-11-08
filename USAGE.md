@@ -320,8 +320,8 @@ wrap to the terminal width; detailed help remains readable plain text.
 
 The interactive client uses `prompt_toolkit` for the `vcpi>` command line
 and Rich for terminal presentation. `help`, `get`, `status`, and
-`show <view>` use tables. Plain `show` opens a full-screen routing explorer
-with a visible tab bar, then returns to the prompt. Piped output remains plain text.
+`show` use tables. Bare `show` prints a compact overview; `show browse` explicitly
+opens the optional full-screen explorer. Piped output remains plain text.
 Other responses, including `help <command>`, retain their text.
 
 - Up/Down recall commands from the current client session.
@@ -379,9 +379,9 @@ hardware or empty plugin/effect lists may also yield no choices.
 | `set <track> <name> <value>` | Set instrument parameter |
 | `set <track> fx <fx_index> <name> <value>` | Set track-effect parameter |
 | `set master <fx_index> <name> <value>` | Set master-effect parameter; explicit index required |
-| `show <track>` | Show track state and full cached instrument metadata |
-| `show <track> fx <fx_index>` | Show full metadata for a track effect; explicit 1-based index required |
-| `show master fx <fx_index>` | Show full metadata for a master bus effect; explicit 1-based index required |
+| `show <track> [--details]` | Show chain, routing, mixer and mapped controls; details adds full instrument metadata |
+| `show <track> fx <fx_index> [--details]` | Inspect a track effect; details adds full metadata; explicit 1-based index required |
+| `show master fx <fx_index> [--details]` | Inspect a master effect; details adds full metadata; explicit 1-based index required |
 
 VST names and paths may contain spaces: `track 1 vst Acid V` loads the plugin
 named `Acid V` and uses that name as the track label. Quotes are also supported.
@@ -813,7 +813,7 @@ hardware-free rendering does not establish live hardware suitability.
 | `gain <track\|master> [value]` | Read or set linear gain (0.0–1.0) |
 | `mute <track> [on\|off\|toggle]` | Set mute explicitly; omitted state toggles |
 | `solo <track> [on\|off\|toggle]` | Set solo explicitly; omitted state toggles |
-| `show [all\|midi\|controls\|audio\|1-8\|master]` | Open the tabbed explorer, or print a focused routing/plugin view; see visualization commands |
+| `show [all\|midi\|controls\|audio\|1-8\|master] [--details]` | Print a compact cached view; `show browse` opens the optional explorer |
 
 `gain 1` reads without changing state. `mute 1 on` and `solo 1 off` are
 idempotent; bare `mute 1` and `solo 1` are convenient toggle shortcuts.
@@ -1156,17 +1156,19 @@ No software can distinguish identical channel/message combinations.
 
 | Track 1 rotary | Track 2 rotary | Function |
 |---|---|---|
-| 1 | 5 | Track volume |
+| 1 | 5 | Track gain |
 | 2 | 6 | Pitch, −16% to +16% |
 | 3 | 7 | Coarse seek; absolute mode spans the song |
 | 4 | 8 | Fine seek; 0.1 seconds per value increment after initial sample |
 | 9–12 | 13–16 | First four exposed insert-effect controls, in chain order |
 
-Deck-only controls are inactive on empty/non-deck tracks. `show controls` lists
-the active profile bindings. Hardware sequencers route directly, independently
-of generic `midi link` routes, and do not control vcpi sequence banks.
+Deck-only bindings cannot target empty/non-deck tracks. `show controls` summarizes
+controller connections and expected profiles; `show controls beatstep` displays
+usable mappings. Add `--details` for all slots, ranges, modes and reasons.
+Hardware sequencers route directly, independently of generic `midi link` routes,
+and do not control vcpi sequence banks.
 Numeric effect controls without a finite, ordered range remain inactive and are
-identified in `show controls`; vcpi does not invent bounds or send NaN values.
+identified in `show controls beatstep --details`; vcpi does not invent bounds or send NaN values.
 
 Use the BeatStep Pro's INT sync mode to supply its own clock. Received MIDI
 Clock/Start/Continue/Stop/SPP and MMC Play/Stop/Pause feed the selected timeline
@@ -1368,61 +1370,70 @@ display values and unit-qualified names (kHz displays use Hz values).
 Text choices and boolean switches are inferred at load even when a plugin
 omits VST3 step counts. `raw_value` remains normalized.
 
-**`show`** opens a read-only tabbed explorer in the interactive client, starting
-with a routing overview: connected MIDI inputs, MIDI Mix connections, sequencer
-clock, all eight instrument/FX chains, track eligibility, master bus, and audio
-output. Focused commands print individual tables:
-The command is named `show` (formerly `flow`); the old command name is not an alias.
+**`show`** prints a compact operational overview in both interactive and piped
+clients. It includes all eight tracks, routes, source/FX summaries, master/output,
+connected controllers and problems. It does not enter a full-screen interface.
+Inspection is read-only; parameters belong to `get`, not another parameter dump.
 
 | Command | View |
 |---|---|
-| `show` | Full-screen tabbed explorer; compact whole-system overview in plain output |
-| `show midi` | Open generic inputs, all 16 channel routes, sequencer bank destinations and patterns |
-| `show controls` | MIDI Mix CC/note bindings, knob targets, cached values/ranges, and LED feedback connection |
-| `show audio` | Ordered audio chains, output device/backend, stream format, and output health |
-| `show 1` … `show 8` | Track source/path, MIDI and sequencer inputs, inserts, mixer/worker state, controls, and full cached instrument metadata |
-| `show <track> fx <index>` | Full cached metadata for the selected track effect |
-| `show master` | Master effects, gain/control, and output |
-| `show master fx <index>` | Full cached metadata for the selected master effect |
-| `show all` | Every view, including empty tracks, unlinked routes, and loaded track/master effect metadata sections |
+| `show` | Compact whole-system overview |
+| `show midi` | Connected generic inputs, configured channel/bank routes, unused-channel count and cached clock |
+| `show controls` | Controller connections, configured profiles, bound/inactive counts |
+| `show controls midimix` | MIDI Mix mapped controls, targets and cached values |
+| `show controls beatstep` | BeatStep Pro mapped controls, grouped by target track |
+| `show audio` | Output device/backend, stream format, master path and audio problems |
+| `show 1` … `show 8` | Chain, MIDI/sequencer routes, mixer state, relevant bindings from both controllers |
+| `show <track> fx <index>` | Selected track-effect summary |
+| `show master` | Master chain, gain, control and output |
+| `show master fx <index>` | Selected master-effect summary |
+| `show all` | Every compact view, including controller and loaded effect children |
+| `show browse` | Optional hierarchical full-screen explorer |
+| Any of the above with `--details` | Expanded metadata, paths, diagnostics, ranges, feedback and inactive slots |
 
-Effect metadata views require an explicit 1-based index. `show master` remains
-the master routing/mixer/output view; it does not select an effect implicitly.
-Loaded effect sections also appear in the explorer's view cycle.
-Plugin metadata separates reported parameter totals from sound controls, plugin
-settings, MIDI parameters, and unused slots. Automatable, boolean, and discrete
-counts describe all reported parameters, not just the sound-control group.
+Effect selectors require an explicit 1-based index; `show master` never implicitly
+selects an effect. `--details` may precede or follow the target. Quoted arguments
+use the same shell parsing in interactive and plain clients. Piped `show browse`
+prints the overview; it does not attempt terminal navigation.
 
-Inside `show`:
+Controller views describe **configured expectations**, not mappings read from the
+hardware. The physical controller template must match vcpi's map; vcpi does not
+verify or upload it. MIDI Mix uses a fixed CC/note map and accepts all channels;
+BeatStep uses its configured application profile.
 
-- The tab bar at the top lists available views and highlights the active tab.
-  Tabs wrap to fit the terminal width.
-- Left/Right or Tab/Shift-Tab cycle through views.
-- `o`, `m`, `c`, `a` jump to overview, MIDI, controls, or audio.
-- `1`–`8` jump to a track; `9` opens the master bus.
-- Up/Down, PageUp/PageDown, Home/End scroll the selected view.
-- `r` refreshes the snapshot. Refresh is manual; navigation sends no requests.
-  A failed refresh leaves the previous snapshot visible with an error.
-- `q`, Escape, Ctrl-C, or Ctrl-D return to the command prompt.
+Each binding separates Control, Message, Target, Cached value and State.
+Detailed views add range, input mode, LED feedback and an unavailable reason.
+`mapped`, `disconnected`, `unbound`, `unsupported` and `unavailable` describe
+different conditions. A track being muted or audio being stopped does not disable
+its controller bindings. Unbound, unsupported and unavailable slots are hidden
+from compact binding lists and included with `--details`.
 
-Tables wrap to the terminal width. Redirected input/output uses plain-text
-tables; plain `show` prints the overview without opening a full-screen interface.
+Inside `show browse`:
 
-In colour-capable terminals, state words use **green** for on/true, active,
-connected, running, or ready; **red** for off/false, stopped, muted, disabled,
-blocked, or failed; and **yellow** for inactive, disconnected, unlinked, empty,
-unknown, or pending states. Boolean control values and LED on/off indicators
-use the same colours. Labels remain visible without colour; a reported
-`failure: none` is not marked as a failure.
+- The single-line tab bar shows root views, keeping the selected root visible.
+- Left/Right or Tab/Shift-Tab cycle siblings.
+- Enter opens the first child; cycle siblings to select another controller/effect.
+  Backspace returns to the parent. Effects belong to their track/master; controller
+  maps belong to Controls, rather than adding more top-level tabs.
+- `o`, `m`, `c`, `a` jump to overview, MIDI, controls or audio; `1`–`8` select tracks
+  and `9` selects master.
+- Up/Down, PageUp/PageDown and Home/End scroll.
+- `r` explicitly refreshes; navigation sends no requests. Failed refresh preserves
+  the previous view and displays an error.
+- `q`, Escape, Ctrl-C or Ctrl-D return to the prompt.
+- `show browse --details` browses expanded views.
+
+The overview keeps one row per stage; focused views retain full values through
+wrapping/scrolling. Colours come from explicit state: green for healthy/mapped,
+yellow for warnings/unavailable conditions, red for errors and dim for neutral
+entries—not words found inside plugin names or descriptions.
 
 Generic MIDI inputs share the channel map; sequencer banks target tracks directly.
 MIDI Mix knobs map to the first three **instrument sound controls** in insertion
-order, skipping plugin settings, MIDI parameters, unused slots, and plugdata's global
+order, skipping plugin settings, MIDI parameters, unused slots and plugdata's global
 volume—not insert or master-effect parameters. Zero and non-automatable sound
-controls remain eligible.
-Disconnected ports and unbound
-controls are explicit. Mute/solo, disabled tracks, zero gains, stopped audio, and
-worker/owner failures are shown as output blockers.
+controls remain eligible. Muting, solo exclusion, disabled tracks, zero gains,
+paused decks and worker/owner failures are output blockers, not binding states.
 
 MIDI Mix faders adjust track gains and the master gain. Adjacent queued mixer
 edits are combined into one snapshot at an audio callback boundary, keeping
@@ -1436,15 +1447,16 @@ changes. They show cached applied values and routing eligibility, **not live
 meters or proof of audible sound**. Link tempo is the cached configured tempo,
 not a fresh peer-tempo reading. There is no external audio-input path.
 
-`show <track>` combines existing routing, mixer, worker, and control state with
-the instrument's cached name, path, vendor, version, category, type, ID, latency,
-description, and parameter counts (total, automatable, boolean, and discrete).
-Effect views expose the same full cached plugin metadata for the selected effect:
+`show` deliberately reads cached owner health; `status` may detect a newly exited
+owner before a `show` snapshot does. Missing cached values are marked as such.
+`show <track> --details` adds the source path, worker diagnostics, and instrument
+vendor, version, category, type, ID, latency, description and parameter counts.
+Effect details expose the same full cached plugin metadata:
 
 ```text
-show 1             # track 1 state and instrument metadata
-show 1 fx 1        # track 1, first effect metadata
-show master fx 1   # first master bus effect metadata
+show 1 --details
+show 1 fx 1 --details
+show master fx 1 --details
 ```
 
 Metadata inspection is part of `show`; there is no `info` command or alias.

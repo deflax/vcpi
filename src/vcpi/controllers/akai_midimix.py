@@ -9,6 +9,10 @@ from typing import Optional
 
 from vcpi.midi import MidiInPort, MidiOutPort
 from vcpi.models import NUM_TRACKS
+from vcpi.controllers.bindings import (
+    ControlBinding, cached_value, input_availability, parameter_bounds,
+    parameter_range, parameter_value,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -44,6 +48,69 @@ def build_cc_lookups() -> tuple[dict[int, int], dict[int, tuple[int, int]]]:
         for knob_idx, cc in enumerate(KNOB_CCS[track_idx]):
             cc_to_knob[cc] = (track_idx, knob_idx)
     return cc_to_fader, cc_to_knob
+
+
+def _knob_parameters(track):
+    """Resolve the same three cached destinations for dispatch and display."""
+    if track is None or track.plugin is None:
+        return []
+    return list(islice(track.plugin.knob_parameter_items(), 3))
+
+
+def midimix_bindings(engine, input_name, output_name) -> list[ControlBinding]:
+    """Describe the expected MIDI Mix profile without querying any device."""
+    bindings = []
+    for index, track in enumerate(engine.tracks):
+        label = f"Track {index + 1}"
+        availability, reason = (input_availability(input_name) if track is not None
+                                else ("unavailable", "empty track"))
+        bindings.append(ControlBinding(
+            "midimix", f"{label} fader", f"CC {FADER_CCS[index]}",
+            f"{label} gain", cached_value(track.gain) if track is not None else "-",
+            availability, reason, index + 1, "0 .. 1", "absolute",
+        ))
+        parameters = _knob_parameters(track)
+        for knob, cc in enumerate(KNOB_CCS[index]):
+            state, why = availability, reason
+            value, bounds = "-", ""
+            mode = "absolute"
+            if knob < len(parameters):
+                name, parameter = parameters[knob]
+                source = "deck source" if track.source_type == "deck" else "instrument"
+                target = f"{label} {source}: {name}"
+                value = parameter_value(track.plugin, name, parameter)
+                bounds = parameter_range(parameter)
+                if parameter.kind == "bool":
+                    mode = "absolute; CC 0-63 / 64-127"
+                if parameter.kind == "enum" and not parameter.valid_values:
+                    state, why = "unsupported", "no enum values"
+            else:
+                target = f"{label}: (unbound)"
+                if track is not None:
+                    state, why = "unbound", "no exposed instrument parameter"
+            bindings.append(ControlBinding(
+                "midimix", f"{label} knob {knob + 1}", f"CC {cc}",
+                target, value, state, why, index + 1, bounds, mode,
+            ))
+        for field, notes, enabled in (
+                ("mute", MUTE_NOTES, bool(track is not None and track.muted)),
+                ("solo", SOLO_NOTES, bool(track is not None and track.solo))):
+            feedback = (f"LED {'on' if enabled else 'off'} "
+                        f"(velocity {127 if enabled else 0}); output "
+                        f"{'connected' if output_name else 'disconnected'}, channel 1")
+            bindings.append(ControlBinding(
+                "midimix", f"{label} {field}",
+                f"Note {notes[index]}", f"{label} {field} toggle",
+                cached_value(enabled) if track is not None else "-", availability,
+                reason, index + 1, "false / true", "toggle; note-on velocity > 0", feedback,
+            ))
+    availability, reason = input_availability(input_name)
+    bindings.append(ControlBinding(
+        "midimix", "Master fader", f"CC {MASTER_FADER_CC}", "Master gain",
+        cached_value(engine.master_gain) if hasattr(engine, "master_gain") else "(not cached)",
+        availability, reason, range="0 .. 1", mode="absolute",
+    ))
+    return bindings
 
 
 class MidiMixController:
@@ -82,19 +149,16 @@ class MidiMixController:
         if track is None or track.plugin is None:
             self.invalidate_param_cache(track_index)
             return []
-        entries: list[tuple[str, tuple[float, float]]] = []
-        for name, parameter in islice(track.plugin.knob_parameter_items(), 3):
-            if parameter.kind == "bool":
-                bounds = (0.0, 1.0)
-            elif parameter.kind == "enum":
-                bounds = (0.0, float(max(0, len(parameter.valid_values) - 1)))
-            else:
-                bounds = (float(parameter.range[0]), float(parameter.range[1]))
-            entries.append((name, bounds))
+        entries = [(name, parameter_bounds(parameter))
+                   for name, parameter in _knob_parameters(track)]
         self._param_cache[track_index] = entries
         self._param_generations[track_index] = track.generation
         self._param_metadata[track_index] = track.plugin.parameters
         return entries
+
+    def control_bindings(self) -> list[ControlBinding]:
+        """Return expected mappings and cached values, never hardware state."""
+        return midimix_bindings(self._engine, self.input_port_name, self.output_port_name)
 
     @property
     def input_port_name(self) -> Optional[str]:

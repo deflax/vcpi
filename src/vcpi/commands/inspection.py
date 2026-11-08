@@ -1,27 +1,26 @@
 """Inspection command handlers."""
 
 import logging
-import shlex
 from vcpi.deps import HAS_LINK, HAS_RTMIDI, HAS_MIDO
 from vcpi.logging_setup import set_log_level
 from vcpi.processes import render_processes
-from vcpi.presentation.signal_flow import build_flow_snapshot, render_flow_snapshot, show_view
+from vcpi.presentation.signal_flow import build_flow_snapshot, render_flow_snapshot
+from vcpi.presentation.show_request import parse_show
 from vcpi.presentation.status import render_status
 from .help import VCPI_ASCII_LOGO
 
 
 def show(ctx, arg):
-    """Inspect routing and plugin metadata: show [all|midi|controls|audio|1-8|master]
+    """Inspect cached routing: show [target] [--details]
 
-    show <track> includes instrument metadata and the track's routing/mixer state.
-    show <track> fx <index> or show master fx <index> inspects one effect.
-    With no argument, open the interactive client's read-only tabbed explorer.
-    Plain output uses the compact overview; all prints every cached table.
+    Bare show prints a compact overview. show browse opens the interactive
+    explorer; piped output uses the same overview. Use show controls
+    [midimix|beatstep] for mappings, or --details for metadata and diagnostics.
     """
     try:
-        view = show_view(shlex.split(arg))
-        snapshot = build_flow_snapshot(ctx.host)
-        ctx.emit(render_flow_snapshot(snapshot, None if view == "all" else view))
+        request = parse_show(arg)
+        snapshot = build_flow_snapshot(ctx.host, details=request.details)
+        ctx.emit(render_flow_snapshot(snapshot, None if request.view == "all" else request.view))
     except ValueError as error:
         ctx.emit(f"Error: {error}")
 

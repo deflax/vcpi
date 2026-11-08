@@ -30,7 +30,7 @@ from rich.console import Console
 
 from vcpi.presentation.client_display import display_response
 from vcpi.presentation.flow_display import display_flow, explore_flow
-from vcpi.presentation.signal_flow import show_view
+from vcpi.presentation.show_request import parse_show
 from vcpi.paths import DEFAULT_SOCK_PATH
 
 # Must match the sentinel used by server.py
@@ -86,17 +86,16 @@ def connect(sock_path: str | Path | None = None):
                 print()
                 break
 
-            # Rich flow views use the same cached snapshot as the text command.
-            # Navigation stays client-local; the daemon never owns terminal input.
-            tokens = line.strip().split()
-            if console is not None and tokens and tokens[0] == "show":
+            # Only presentation differs from the daemon's shared show grammar.
+            command = line.strip().split(maxsplit=1)
+            if console is not None and command and command[0] == "show":
                 try:
-                    view = show_view(tokens[1:])
-                    fetch = lambda: _fetch_flow_snapshot(rfile, wfile)
-                    if len(tokens) == 1:
+                    request = parse_show(command[1] if len(command) > 1 else "")
+                    fetch = lambda: _fetch_flow_snapshot(rfile, wfile, details=request.details)
+                    if request.browse:
                         explore_flow(fetch)
                     else:
-                        display_flow(console, fetch(), view)
+                        display_flow(console, fetch(), request.view)
                 except (OSError, ValueError) as error:
                     console.print(f"Error: {error}", markup=False, style="bold red")
                 continue
@@ -184,9 +183,9 @@ def _read_response(rfile, console: Console | None = None, command: str = "") -> 
     return True
 
 
-def _fetch_flow_snapshot(rfile, wfile) -> dict:
+def _fetch_flow_snapshot(rfile, wfile, *, details: bool = False) -> dict:
     """Consume a complete response before reporting a malformed flow snapshot."""
-    wfile.write("\x02\n")
+    wfile.write("\x02" + json.dumps({"details": details}) + "\n")
     wfile.flush()
     lines = _read_response_lines(rfile)
     if lines is None:
@@ -212,6 +211,18 @@ def _fetch_flow_snapshot(rfile, wfile) -> dict:
                 or any(not isinstance(row, list) or len(row) != len(columns)
                        or any(not isinstance(cell, str) for cell in row) for row in rows)):
             raise ValueError("invalid flow table")
+        parent = section.get("parent")
+        if parent is not None and not isinstance(parent, str):
+            raise ValueError("invalid flow parent")
+        if "description" in section and not isinstance(section["description"], str):
+            raise ValueError("invalid flow description")
+        states = section.get("cell_states")
+        if states is not None and (
+                not isinstance(states, list) or len(states) != len(rows)
+                or any(not isinstance(row, list) or len(row) != len(columns)
+                       or any(state not in (None, "healthy", "warning", "error", "neutral")
+                              for state in row) for row in states)):
+            raise ValueError("invalid flow cell states")
     return snapshot
 
 

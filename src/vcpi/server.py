@@ -272,9 +272,11 @@ class VcpiServer:
 
         if line.startswith("\x02"):
             try:
-                if line != "\x02":
-                    raise ValueError("flow snapshot request takes no arguments")
-                snapshot = build_flow_snapshot(self.host)
+                options = json.loads(line[1:])
+                if (not isinstance(options, dict) or set(options) != {"details"}
+                        or type(options["details"]) is not bool):
+                    raise ValueError("show snapshot request requires a details boolean")
+                snapshot = build_flow_snapshot(self.host, details=options["details"])
                 return json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")) + "\n", False
             except Exception as exc:
                 return f"Error: {exc}\n", False
