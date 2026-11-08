@@ -243,8 +243,6 @@ class PlugdataPatchTests(unittest.TestCase):
         plugin.load_preset(str(patch))
         transport, runner = self.runner(plugin, directory, "pad")
         snapshot = capture_plugin(plugin, {}, {})
-        self.assertEqual([name for name, _ in snapshot.knob_parameter_items()],
-                         ["cutoff", "attack", "release"])
         for name, default, bounds in (
             ("cutoff", 1800, (20, 12000)),
             ("attack", 800, (1, 5000)),
@@ -296,8 +294,6 @@ class PlugdataPatchTests(unittest.TestCase):
         restored = NativePlugin(str(bundle), 44100, 512, "instrument")
         restored.load_saved_state(saved)
         restored_snapshot = capture_plugin(restored, {}, {})
-        self.assertEqual([name for name, _ in restored_snapshot.knob_parameter_items()],
-                         list(values))
         for name, value in values.items():
             self.assertAlmostEqual(restored_snapshot.values[name], value, delta=0.01)
 

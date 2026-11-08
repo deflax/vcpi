@@ -82,7 +82,12 @@ def _effect_binding(track, ordinal):
     """Resolve one exposed insert parameter, retaining unsupported ordinals."""
     candidates = ((fx_index, effect, name, parameter)
                   for fx_index, effect in enumerate(track.effects)
-                  for name, parameter in effect.knob_parameter_items())
+                  for name, parameter in effect.parameter_items("controls")
+                  # Preserve this profile's preference for patch controls over volume.
+                  if not (name == "volume"
+                          and effect.manufacturer_name.casefold() == "plugdata"
+                          and effect.name.casefold().replace(" ", "")
+                          in {"plugdata", "plugdata-fx"}))
     return next(islice(candidates, ordinal, ordinal + 1), None)
 
 

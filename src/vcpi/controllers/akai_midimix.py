@@ -54,7 +54,17 @@ def _knob_parameters(track):
     """Resolve the same three cached destinations for dispatch and display."""
     if track is None or track.plugin is None:
         return []
-    return list(islice(track.plugin.knob_parameter_items(), 3))
+    plugin = track.plugin
+    # This profile uses the fader for track gain, not a knob for plugdata volume.
+    skip_volume = (
+        plugin.manufacturer_name.casefold() == "plugdata"
+        and plugin.name.casefold().replace(" ", "") in {"plugdata", "plugdata-fx"}
+    )
+    candidates = (
+        (name, parameter) for name, parameter in plugin.parameter_items("controls")
+        if not (skip_volume and name == "volume")
+    )
+    return list(islice(candidates, 3))
 
 
 def midimix_bindings(engine, input_name, output_name) -> list[ControlBinding]:

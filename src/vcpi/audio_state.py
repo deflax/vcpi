@@ -89,17 +89,6 @@ class PluginSnapshot:
             if group == "all" or self.parameter_group(name) == group:
                 yield name, parameter
 
-    def knob_parameter_items(self) -> Iterator[tuple[str, ParameterSnapshot]]:
-        """Select automatic knob candidates without hiding manually usable controls."""
-        skip_volume = (
-            self.manufacturer_name.casefold() == "plugdata"
-            and self.name.casefold().replace(" ", "") in {"plugdata", "plugdata-fx"}
-        )
-        for name, parameter in self.parameter_items("controls"):
-            if skip_volume and name == "volume":
-                continue
-            yield name, parameter
-
 
 def plain_value(value, value_type=None):
     """Strip native-backed scalar subclasses before caching or sending them."""

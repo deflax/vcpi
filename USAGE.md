@@ -479,10 +479,12 @@ automation controls, and Cardinal's host parameters must be wired inside the pat
 includes controls and settings, excluding MIDI and unused slots. Explicit MIDI
 names remain readable and writable; setting an unused slot fails before any
 engine mutation. MIDI CC input, raw cached parameters, and native plugin state
-chunks are unchanged. Automatic knob mapping uses controls only, skipping
-settings, MIDI parameters, unused slots, and plugdata's global `volume`.
-The MIDI Mix fader continues to control vcpi's track gain; the separate plugdata
-volume remains accessible through `get`/`set` but does not consume a knob.
+chunks are unchanged. Controller mappings select from the controls group, skipping
+settings, MIDI parameters, and unused slots. Exclusions beyond those groups belong
+to each controller profile, not the shared parameter inventory.
+The MIDI Mix profile skips plugdata's global `volume`: its fader controls vcpi's
+track gain. The separate plugdata volume remains accessible through `get`/`set`.
+The BeatStep Pro insert-effect profile also skips plugdata's global `volume`.
 
 ### Deck Commands
 

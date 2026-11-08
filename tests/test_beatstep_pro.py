@@ -175,7 +175,8 @@ class BeatStepProTests(unittest.TestCase):
 
     def test_effects_flatten_exposed_insert_parameters_with_typed_ranges(self):
         self.engine.tracks[0].effects = [
-            PluginSnapshot(20, parameters={
+            PluginSnapshot(20, name="plugdata-fx", manufacturer_name="plugdata", parameters={
+                "volume": ParameterSnapshot(range=(0, 2)),
                 "midi": ParameterSnapshot(label="MIDI CC 0|1"),
                 "amount": ParameterSnapshot(range=(-2, 2)),
                 "switch": ParameterSnapshot(kind="bool")}),
