@@ -134,12 +134,19 @@ class CompletionTests(unittest.TestCase):
                 ("ableton ", {"link", "cut"}),
                 ("debug ", {"on", "off"}),
                 ("track master ", {"fx"}),
-                ("track 8 ", {"vst", "wav", "deck", "vcv", "pd", "fx", "clear"})):
+                ("track 16 ", {"vst", "wav", "deck", "vcv", "pd", "fx", "clear"})):
             self.assertEqual(set(self.matches(before)), expected)
         for before in ("midi link 17 ", "midi link 0 ", "seq link 0 ",
-                       "seq link 17 ", "track 9 ", "track master clear ",
-                       "track 1 clear ", "get 0 ", "set 9 ", "show 1 nonsense "):
+                       "seq link 17 ", "track 17 ", "track master clear ",
+                       "track 1 clear ", "get 0 ", "set 17 ", "show 1 nonsense "):
             self.assertEqual(self.matches(before), [], before)
+
+    def test_last_track_parameters_and_effects_complete_from_cached_state(self):
+        self.engine.tracks[15] = self.track
+        for before in ("get 16 ", "set 16 "):
+            self.assertIn("cutoff", self.matches(before))
+        for before in ("show 16 fx ", "get 16 fx ", "set 16 fx ", "track 16 fx clear "):
+            self.assertEqual(self.matches(before), ["1"])
 
     def test_device_names_insert_as_single_arguments_and_follow_snapshot(self):
         inserted = self.inserted('audio start "Output', "'Output With Spaces'")
@@ -188,11 +195,11 @@ class CompletionTests(unittest.TestCase):
         for before in ("show 1 ", "show master "):
             self.assertEqual(set(self.matches(before)), {"fx", "--details"})
         self.assertEqual(set(self.matches("show controls ")), {"midimix", "beatstep", "--details"})
-        for before in ("show 2 ", "show all ", "show midi ", "show audio ",
+        for before in ("show 2 ", "show 9 ", "show 16 ", "show all ", "show midi ", "show audio ",
                        "show 1 fx 1 ", "show master fx 2 ", "show browse ",
                        "show controls midimix ", "show controls beatstep "):
             self.assertEqual(self.matches(before), ["--details"], before)
-        for before in ("show explore ", "show 0 ", "show 9 ", "show master 1 ",
+        for before in ("show explore ", "show 0 ", "show 17 ", "show master 1 ",
                        "show 1 fx 0", "show master fx 3", "show 1 fx -1",
                        "show 1 fx 1 --details ", "show browse --details "):
             self.assertEqual(self.matches(before), [], before)

@@ -22,7 +22,7 @@ class HostCLI(cmd.Cmd):
         "\n"
         f"{VCPI_ASCII_LOGO}\n"
         "Type 'help' for available commands.\n"
-        "Tracks are numbered 1-8.  MIDI channels are numbered 1-16."
+        "Tracks are numbered 1-16.  MIDI channels are numbered 1-16."
     )
     prompt = "vcpi> "
 
@@ -179,7 +179,7 @@ class HostCLI(cmd.Cmd):
         return sessions.load(CommandContext(self.host, self._print), arg)
 
     def do_show(self, arg):
-        """Inspect routing and plugin metadata: show [all|midi|controls|audio|1-8|master]"""
+        """Inspect routing and plugin metadata: show [all|midi|controls|audio|1-16|master]"""
         return inspection.show(CommandContext(self.host, self._print), arg)
 
     def do_debug(self, arg):

@@ -8,7 +8,6 @@ from threading import RLock
 from typing import Optional
 
 from vcpi.midi import MidiInPort, MidiOutPort
-from vcpi.models import NUM_TRACKS
 from vcpi.controllers.bindings import (
     ControlBinding, cached_value, input_availability, parameter_bounds,
     parameter_range, parameter_value,
@@ -43,7 +42,7 @@ def build_cc_lookups() -> tuple[dict[int, int], dict[int, tuple[int, int]]]:
     """Return (cc_to_fader_track, cc_to_knob_track_and_index) lookup dicts."""
     cc_to_fader: dict[int, int] = {}
     cc_to_knob: dict[int, tuple[int, int]] = {}
-    for track_idx in range(NUM_TRACKS):
+    for track_idx in range(len(FADER_CCS)):
         cc_to_fader[FADER_CCS[track_idx]] = track_idx
         for knob_idx, cc in enumerate(KNOB_CCS[track_idx]):
             cc_to_knob[cc] = (track_idx, knob_idx)
@@ -70,7 +69,7 @@ def _knob_parameters(track):
 def midimix_bindings(engine, input_name, output_name) -> list[ControlBinding]:
     """Describe the expected MIDI Mix profile without querying any device."""
     bindings = []
-    for index, track in enumerate(engine.tracks):
+    for index, track in enumerate(islice(engine.tracks, len(FADER_CCS))):
         label = f"Track {index + 1}"
         availability, reason = (input_availability(input_name) if track is not None
                                 else ("unavailable", "empty track"))
@@ -231,11 +230,11 @@ class MidiMixController:
     def refresh_leds(self, track_indices: Optional[list[int]] = None):
         """Reconcile immediate LED feedback with actual applied track state."""
         if track_indices is None:
-            indices = range(NUM_TRACKS)
+            indices = range(len(FADER_CCS))
         else:
             indices = track_indices
         for idx in indices:
-            if 0 <= idx < NUM_TRACKS:
+            if 0 <= idx < len(FADER_CCS):
                 with self._led_lock:
                     self._optimistic_state.pop(idx, None)
                     self._set_track_leds(idx)

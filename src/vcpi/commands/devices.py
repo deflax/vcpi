@@ -184,7 +184,7 @@ def midi(ctx, arg):
     # --- midi link <ch> <track> ------------------------------------------
     if sub == "link":
         if len(parts) != 3:
-            ctx.emit("Usage: midi link <channel 1-16> <track 1-8>")
+            ctx.emit("Usage: midi link <channel 1-16> <track 1-16>")
             return
         try:
             ch = channel_index(int(parts[1]))
@@ -256,7 +256,7 @@ def beatstep(ctx, arg):
 
 def note(ctx, arg):
     """Send a timed MIDI test note."""
-    usage = "note <track 1-8> <midi_note> [--velocity <0..127>] [--duration-ms <milliseconds>]"
+    usage = "note <track 1-16> <midi_note> [--velocity <0..127>] [--duration-ms <milliseconds>]"
     parts = ctx.tokens(arg, usage)
     if parts is None:
         return

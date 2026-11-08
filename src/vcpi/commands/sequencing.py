@@ -42,7 +42,7 @@ def seq(ctx, arg):
     # --- seq link <bank> <track> -----------------------------------------
     if parts[0].lower() == "link":
         if len(parts) != 3:
-            ctx.emit("Usage: seq link <bank 1-16> <track 1-8>")
+            ctx.emit("Usage: seq link <bank 1-16> <track 1-16>")
             return
         try:
             bi = int(parts[1]) - 1
@@ -66,7 +66,7 @@ def seq(ctx, arg):
     # --- seq cut <track> -------------------------------------------------
     if parts[0].lower() == "cut":
         if len(parts) != 2:
-            ctx.emit("Usage: seq cut <track 1-8>")
+            ctx.emit("Usage: seq cut <track 1-16>")
             return
         try:
             si = track_index(int(parts[1]))

@@ -11,9 +11,9 @@ from vcpi.models import NUM_TRACKS
 SHOW_TARGETS = ("all", "midi", "controls", "audio",
                 *(str(index) for index in range(1, NUM_TRACKS + 1)), "master")
 SHOW_CONTROLLERS = ("midimix", "beatstep")
-SHOW_USAGE = ("Usage: show [all|midi|controls|audio|1-8|master] [--details] | "
+SHOW_USAGE = ("Usage: show [all|midi|controls|audio|1-16|master] [--details] | "
               "show controls [midimix|beatstep] [--details] | "
-              "show <1-8|master> fx <fx_index> [--details] | show browse [--details]")
+              "show <1-16|master> fx <fx_index> [--details] | show browse [--details]")
 
 
 @dataclass(frozen=True)

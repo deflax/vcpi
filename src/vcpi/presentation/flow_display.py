@@ -22,9 +22,11 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from vcpi.models import NUM_TRACKS
+
 
 def _section_id(view: str) -> str:
-    return f"track{view}" if view in "12345678" and len(view) == 1 else view
+    return f"track{view}" if view in map(str, range(1, NUM_TRACKS + 1)) else view
 
 
 _STATE_COLOURS = {
@@ -154,7 +156,7 @@ def explore_flow(
     def roots() -> list[dict]:
         available = [section for section in sections() if parent_id(section) is None]
         order = ["overview", "midi", "controls", "audio",
-                 *(f"track{number}" for number in range(1, 9)), "master"]
+                 *(f"track{number}" for number in range(1, NUM_TRACKS + 1)), "master"]
         return sorted(
             available,
             key=lambda section: order.index(section["id"]) if section["id"] in order else len(order),
@@ -221,6 +223,7 @@ def explore_flow(
         height=Dimension(min=1), right_margins=[ScrollbarMargin()],
     )
 
+    # Keep the original single-key jumps; Tab/arrows reach all sixteen tracks.
     jump_keys = {
         "o": "overview", "m": "midi", "c": "controls", "a": "audio",
         **{str(number): f"track{number}" for number in range(1, 9)},

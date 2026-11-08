@@ -63,7 +63,7 @@ audio start
 note 1 60 --velocity 100 --duration-ms 500
 ```
 
-Mixer channels are called **tracks** (1–8). Use `track` in place of the former
+Mixer channels are called **tracks** (1–16). Use `track` in place of the former
 `slot` command; no command alias is retained. Existing version 1 and 2 sessions
 still load, and subsequent saves use version 3 with track-based keys.
 
@@ -271,7 +271,7 @@ supports them. Quote names containing spaces. Free-form numeric values are left 
 
 The client keeps a scrolling `vcpi>` prompt with session history and uses
 `prompt_toolkit` + Rich for enhanced terminal output. `help`, `get`, `status`, and
-`show` commands display tables. Bare `show` prints a compact eight-track overview;
+`show` commands display tables. Bare `show` prints a compact sixteen-track overview;
 `show browse` opens the optional read-only full-screen explorer. Its root tabs
 cover routing, controllers, audio, tracks and master; effects and controller
 maps are child views. Refresh is manual. `get` includes
@@ -322,7 +322,7 @@ set <track> fx <index> <name> <value>
 set master <index> <name> <value>
 ```
 
-Tracks are 1–8 and effect indexes are 1-based. Omit `name` to list musical
+Tracks are 1–16 and effect indexes are 1-based. Omit `name` to list musical
 controls, or supply one exact name to inspect any cached parameter, including
 MIDI and unused slots. Instead of a name, use one listing flag: `--controls`
 (the default), `--settings`, `--midi`, `--unused`, or `--all`. Flags cannot be
@@ -449,6 +449,9 @@ Deck beat detection still does not identify the recording's musical downbeat.
   - REC ARM buttons -> solo toggle
 
 Strip-to-track mapping is fixed: strip 1 controls track 1, ... strip 8 controls track 8.
+There is no banking: the eight physical strips always target tracks 1–8.
+Tracks 9–16 are available through CLI commands and routed generic MIDI inputs
+(for example, `midi link 16 16` routes MIDI channel 16 to track 16).
 
 MIDI Mix quick mapping (factory defaults):
 

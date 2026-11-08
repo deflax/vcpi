@@ -12,12 +12,13 @@ from vcpi.commands.cli import HostCLI
 from vcpi.commands.context import parse_named_source, source_args
 from vcpi.commands.help import HELP_TOPICS
 from vcpi.link import LinkSync
+from vcpi.models import NUM_TRACKS
 from vcpi.timeline import MusicalTimeline
 
 
 class MixerState:
     def __init__(self):
-        self.tracks = [SimpleNamespace(name="Bass", gain=0.5, muted=False, solo=False)] + [None] * 7
+        self.tracks = [SimpleNamespace(name="Bass", gain=0.5, muted=False, solo=False)] + [None] * (NUM_TRACKS - 1)
         self.master_gain = 0.75
 
     def set_track_state(self, index, **fields):
@@ -70,12 +71,27 @@ class CLICommandTests(unittest.TestCase):
             self.execute(command + " 1 yes")
             self.assertFalse(getattr(self.engine.tracks[0], field))
 
+    def test_last_track_mixer_commands_do_not_change_first_track(self):
+        self.engine.tracks[15] = SimpleNamespace(name="Last", gain=0.5, muted=False, solo=False)
+        self.execute("gain 16 0.25")
+        self.execute("mute 16 on")
+        self.execute("solo 16 on")
+        self.assertEqual(vars(self.engine.tracks[15]),
+                         dict(name="Last", gain=0.25, muted=True, solo=True))
+        self.assertEqual(vars(self.engine.tracks[0]),
+                         dict(name="Bass", gain=0.5, muted=False, solo=False))
+        for command in ("gain 17 0.5", "mute 17 on", "solo 17 on"):
+            with self.subTest(command=command):
+                _, text = self.execute(command)
+                self.assertIn("Error:", text)
+        self.assertEqual(self.engine.tracks[15].gain, 0.25)
+
     def test_note_options_defaults_units_and_rejection(self):
         self.execute("note 1 60")
-        self.execute("note 8 127 --duration-ms 125.5 --velocity 0")
-        self.assertEqual(self.notes, [(0, 60, 100, 0.3), (7, 127, 0, 0.1255)])
+        self.execute("note 16 127 --duration-ms 125.5 --velocity 0")
+        self.assertEqual(self.notes, [(0, 60, 100, 0.3), (15, 127, 0, 0.1255)])
         self.notes.clear()
-        for args in ("1 60 100 300", "1 -1", "1 128", "0 60", "9 60", "1 60.5",
+        for args in ("1 60 100 300", "1 -1", "1 128", "0 60", "17 60", "1 60.5",
                      "1 60 --velocity -1", "1 60 --velocity 128", "1 60 --velocity 1.5",
                      "1 60 --duration-ms 0", "1 60 --duration-ms -1",
                      "1 60 --duration-ms nan", "1 60 --duration-ms inf",

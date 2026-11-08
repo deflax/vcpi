@@ -55,13 +55,14 @@ struct EngineStats {
     RealtimeStats realtime;
 };
 class Engine {
+    static constexpr std::size_t trackCount = 16;
 public:
     Engine(double sampleRate, int frames);
     ~Engine();
     void attach(int index, std::shared_ptr<Transport> transport, double gain, bool muted, bool solo);
     void setTrack(int index, double gain, bool muted, bool solo);
     void setMasterGain(double gain);
-    void setMixer(const std::array<std::tuple<double, bool, bool>, 8>& mixing, double masterGain);
+    void setMixer(const std::array<std::tuple<double, bool, bool>, trackCount>& mixing, double masterGain);
     void setMasterEffects(const std::vector<std::shared_ptr<Plugin>>& effects);
     void start(int deviceIndex = -1, const std::string& deviceName = {});
     void stop();
@@ -70,7 +71,7 @@ public:
     EngineStats stats();
     std::vector<float> renderBlock();
 private:
-    static constexpr std::size_t trackCount = 8, commandCapacity = 128;
+    static constexpr std::size_t commandCapacity = 128;
     enum class CommandType { Attach, Track, MasterGain, Mixer, Barrier };
     struct MixerTrack {
         float gain = 1.0f;

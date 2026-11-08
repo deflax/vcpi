@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-NUM_TRACKS = 8  # matches the 8 channel strips on the Akai MIDI Mix
+NUM_TRACKS = 16
 
 
 @dataclass

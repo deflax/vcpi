@@ -72,7 +72,7 @@ void Engine::checkOperational() const {
                                  + "; callback ownership unproven, terminate the audio owner");
 }
 void Engine::validateTrack(int index) {
-    if (index < 0 || index >= static_cast<int>(trackCount)) throw std::invalid_argument("Track index must be 0..7");
+    if (index < 0 || index >= static_cast<int>(trackCount)) throw std::invalid_argument("Track index must be 0..15");
 }
 float Engine::validateGain(double gain) {
     if (!std::isfinite(gain) || gain < 0.0 || gain > static_cast<double>(std::numeric_limits<float>::max()))
@@ -176,7 +176,7 @@ void Engine::setMasterGain(double gain) {
     std::lock_guard<std::mutex> control(controls);
     submitControl({CommandType::MasterGain, 0, nullptr, scalar, false, false, 0});
 }
-void Engine::setMixer(const std::array<std::tuple<double, bool, bool>, 8>& mixing, double gain) {
+void Engine::setMixer(const std::array<std::tuple<double, bool, bool>, trackCount>& mixing, double gain) {
     Command command;
     command.type = CommandType::Mixer;
     command.gain = validateGain(gain);

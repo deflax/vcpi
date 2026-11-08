@@ -5,7 +5,7 @@ import unittest
 
 from vcpi.controllers.akai_midimix import KNOB_CCS, MidiMixController, midimix_bindings
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
-from vcpi.models import InstrumentTrack
+from vcpi.models import InstrumentTrack, NUM_TRACKS
 from vcpi.presentation.plugin_info import plugin_metadata_rows
 
 
@@ -13,7 +13,7 @@ class RecordingEngine:
     """Record commands at the controller's asynchronous engine boundary."""
 
     def __init__(self, plugin):
-        self.tracks = [InstrumentTrack("Synth", "", plugin, generation=7)] + [None] * 7
+        self.tracks = [InstrumentTrack("Synth", "", plugin, generation=7)] + [None] * (NUM_TRACKS - 1)
         self.commands = []
 
     def enqueue_param_change(self, index, name, value, *, generation):

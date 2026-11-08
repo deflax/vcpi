@@ -53,8 +53,8 @@ def parameter_target(host, parts, *, require_master_index=False):
 def get(ctx, arg):
     """Read cached plugin parameters, including units, ranges, and choices.
 
-    get <track 1-8> [name | <listing flag>]
-    get <track 1-8> fx <fx_index> [name | <listing flag>]
+    get <track 1-16> [name | <listing flag>]
+    get <track 1-16> fx <fx_index> [name | <listing flag>]
     get master [fx_index] [name | <listing flag>]
 
     Listing flags: --controls (default), --settings, --midi, --unused, --all.
@@ -115,8 +115,8 @@ def get(ctx, arg):
 def set(ctx, arg):
     """Set a plugin parameter and show its actual applied value.
 
-    set <track 1-8> <name> <value>
-    set <track 1-8> fx <fx_index> <name> <value>
+    set <track 1-16> <name> <value>
+    set <track 1-16> fx <fx_index> <name> <value>
     set master <fx_index> <name> <value>
 
     Boolean values accept true/false; quote enum values containing spaces.

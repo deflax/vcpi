@@ -75,19 +75,32 @@ class NativeAudioTests(unittest.TestCase):
 
     def test_gain_mute_solo_master_and_sparse_tracks(self):
         self.track(0)
-        self.track(7)
+        self.track(15)
         self.block()
         np.testing.assert_allclose(self.block(), 0.5, atol=1e-6)
         self.engine.set_track_state(0, gain=0.5)
         np.testing.assert_allclose(self.block(), 0.375, atol=1e-6)
-        self.engine.set_track_state(7, solo=True)
+        self.engine.set_track_state(15, solo=True)
         np.testing.assert_allclose(self.block(), 0.25, atol=1e-6)
-        self.engine.set_track_state(7, muted=True)
+        self.engine.set_track_state(15, muted=True)
         np.testing.assert_array_equal(self.block(), 0)
-        self.engine.set_track_state(7, muted=False, solo=False)
+        self.engine.set_track_state(15, muted=False, solo=False)
         self.engine.set_master_gain(8)
         np.testing.assert_allclose(self.block(), 1, atol=1e-6)
         self.assertAlmostEqual(self.engine.stats()["output_peak"], 1.0)
+
+    def test_native_track_bounds_and_final_track_state(self):
+        self.track(15)
+        self.block()
+        self.engine._native.set_track(15, 0.5, False, False)
+        np.testing.assert_allclose(self.block(), 0.125, atol=1e-6)
+        for index in (-1, 16):
+            with self.subTest(index=index):
+                with self.assertRaises(ValueError):
+                    self.engine._native.attach(index, None)
+                with self.assertRaises(ValueError):
+                    self.engine._native.set_track(index, 1.0, False, False)
+                np.testing.assert_allclose(self.block(), 0.125, atol=1e-6)
 
     def test_muted_track_still_consumes_midi_and_advances(self):
         self.track(0, velocity=64)
@@ -176,24 +189,29 @@ class NativeAudioTests(unittest.TestCase):
 
     def test_mixer_snapshot_applies_sparse_solo_and_rejects_partial_updates(self):
         self.track(0)
-        self.track(7)
+        self.track(15)
         self.block()
-        states = [(1.0, False, False)] * 8
+        states = [(1.0, False, False)] * 16
         states[0] = (0.5, False, False)
-        states[7] = (0.25, False, True)
+        states[15] = (0.25, False, True)
         self.engine._native.set_mixer(states, 0.5)
         np.testing.assert_allclose(self.block(), 0.03125, atol=1e-6)
         for invalid in (-1.0, float("nan"), float("inf"), 1e39):
             with self.subTest(gain=invalid):
                 rejected = list(states)
                 rejected[0] = (0.0, True, False)
-                rejected[7] = (invalid, False, False)
+                rejected[15] = (invalid, False, False)
                 with self.assertRaises(ValueError):
                     self.engine._native.set_mixer(rejected, 0.1)
                 np.testing.assert_allclose(self.block(), 0.03125, atol=1e-6)
         with self.assertRaises(ValueError):
-            self.engine._native.set_mixer([(0.0, True, False)] * 8, float("nan"))
+            self.engine._native.set_mixer([(0.0, True, False)] * 16, float("nan"))
         np.testing.assert_allclose(self.block(), 0.03125, atol=1e-6)
+        for count in (8, 15, 17):
+            with self.subTest(count=count):
+                with self.assertRaises(TypeError):
+                    self.engine._native.set_mixer([(0.0, True, False)] * count, 0.1)
+                np.testing.assert_allclose(self.block(), 0.03125, atol=1e-6)
 
     def test_gain_burst_preserves_fields_and_track_replacement_order(self):
         retired = self.track(0)

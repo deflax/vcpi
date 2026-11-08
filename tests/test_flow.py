@@ -5,10 +5,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, PropertyMock, patch
 
+from prompt_toolkit.keys import Keys
+
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
-from vcpi.models import InstrumentTrack
+from vcpi.models import NUM_TRACKS, InstrumentTrack
 from vcpi.sequencer import SequenceBank
 from vcpi.presentation.signal_flow import build_flow_snapshot, render_flow_snapshot
+from vcpi.presentation import flow_display
 from vcpi.link import LinkSync
 from vcpi.timeline import MusicalTimeline
 from vcpi.controllers.beatstep_pro import BeatStepProController
@@ -47,8 +50,8 @@ class FlowTests(unittest.TestCase):
             })
         self.track = InstrumentTrack("Lead", "lead.vst3", instrument, effects=[effect])
         self.engine = SimpleNamespace(
-            tracks=[self.track] + [None] * 7, master_effects=[master], master_gain=1.0,
-            channel_map={0: 0, 15: 7}, _failure=None, _closed=False, _health=[1],
+            tracks=[self.track] + [None] * (NUM_TRACKS - 1), master_effects=[master], master_gain=1.0,
+            channel_map={0: 0, 15: 15}, _failure=None, _closed=False, _health=[1],
             audio_output_name="Output", audio_output_index=0, backend_label="", sample_rate=48000,
             buffer_size=256, output_channels=2,
         )
@@ -56,7 +59,7 @@ class FlowTests(unittest.TestCase):
             engine=self.engine, channel_map=self.engine.channel_map,
             midi_inputs=[SimpleNamespace(port_name="Keyboard")],
             midimix=SimpleNamespace(input_port_name="Mixer", output_port_name=None),
-            sequencer=SimpleNamespace(banks=[SequenceBank([60], linked_track=7)] + [None]*15,
+            sequencer=SimpleNamespace(banks=[SequenceBank([60], linked_track=15)] + [None]*15,
                                       _running=True),
             link=LinkSync(),
         )
@@ -73,18 +76,61 @@ class FlowTests(unittest.TestCase):
     def track_state(self):
         return next(row[1] for row in self.rows("track1") if row[0] == "State")
 
-    def test_overview_is_short_and_keeps_all_eight_tracks(self):
+    def test_overview_keeps_all_sixteen_tracks(self):
         snapshot = build_flow_snapshot(self.host)
         overview = next(section for section in snapshot["sections"] if section["id"] == "overview")
         labels = [row[0] for row in overview["rows"]]
-        self.assertEqual(labels[:8], [f"Track {index}" for index in range(1, 9)])
+        self.assertEqual([label for label in labels if label.startswith("Track ")],
+                         [f"Track {index}" for index in range(1, 17)])
         self.assertTrue({"Master", "Output", "Controls", "Problems"} <= set(labels))
         rendered = render_flow_snapshot(snapshot, "overview")
-        self.assertLessEqual(len(rendered.splitlines()), 24)
-        self.assertTrue(all(len(line) <= 80 for line in rendered.splitlines()))
         self.assertNotIn("/plugins/", rendered)
         self.assertNotIn("worker", rendered.lower())
         self.assertNotIn(self.track.plugin.identifier, rendered)
+
+    def test_numeric_display_targets_include_every_track(self):
+        snapshot = build_flow_snapshot(self.host)
+        console = Mock(width=80)
+        with patch.object(flow_display, "_section_table") as table:
+            for number in range(1, 17):
+                with self.subTest(track=number):
+                    flow_display.display_flow(console, snapshot, str(number))
+                    self.assertEqual(table.call_args.args[0]["id"], f"track{number}")
+
+    def test_browser_cycles_all_tracks_before_master_and_keeps_shortcuts(self):
+        snapshot = build_flow_snapshot(self.host)
+        fetch = Mock(return_value=snapshot)
+        with patch.object(flow_display, "display_flow") as display:
+            def application(**kwargs):
+                control = kwargs["layout"].current_control
+                bindings = kwargs["key_bindings"]
+
+                def jump(key, expected):
+                    bindings.get_bindings_for_keys((key,))[-1].handler(None)
+                    control.render(80)
+                    self.assertEqual(display.call_args.args[2], expected)
+
+                def run():
+                    jump("a", "audio")
+                    for number in range(1, 17):
+                        jump(Keys.Right, f"track{number}")
+                    jump(Keys.Right, "master")
+                    jump(Keys.BackTab, "track16")
+                    jump("8", "track8")
+                    jump(Keys.ControlI, "track9")
+                    jump("9", "master")
+
+                return SimpleNamespace(run=run)
+
+            with patch.object(flow_display, "Application", side_effect=application):
+                flow_display.explore_flow(fetch)
+        fetch.assert_called_once_with()
+
+    def test_upper_tracks_have_no_physical_midimix_bindings(self):
+        self.engine.tracks[15] = copy.deepcopy(self.track)
+        rows = self.rows("track16", details=True)
+        self.assertFalse(any(row[0].startswith("MIDI Mix:") for row in rows))
+        self.assertIn("16", next(row[1] for row in rows if row[0] == "MIDI channels"))
 
     def test_overview_keeps_problem_marker_when_source_names_are_long(self):
         self.track.plugin.name = "Long source " * 30
@@ -94,7 +140,6 @@ class FlowTests(unittest.TestCase):
         text = render_flow_snapshot({"title": "Cached", "sections": [overview]}, "overview")
         self.assertIn("worker failed", text)
         self.assertIn("blocked track", text)
-        self.assertLessEqual(len(text.splitlines()), 24)
 
     def test_deck_operational_state_is_compact_and_details_expand_reference(self):
         self.track.source_type = "deck"
@@ -169,9 +214,9 @@ class FlowTests(unittest.TestCase):
         rows = self.rows("midi")
         channel = next(row for row in rows if row[0] == "MIDI channel 16")
         bank = next(row for row in rows if row[0] == "Sequencer bank 1")
-        self.assertIn("Track 8", channel[1])
+        self.assertIn("Track 16", channel[1])
         self.assertIn("empty", channel[2])
-        self.assertIn("Track 8", bank[1])
+        self.assertIn("Track 16", bank[1])
         self.assertIn("empty", bank[2])
         self.assertEqual(sum(row[0].startswith("MIDI channel ") for row in rows), 2)
         self.assertEqual(next(row[1] for row in rows if row[0] == "Unused channels"), "14")

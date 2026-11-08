@@ -5,11 +5,11 @@ from .context import track_index
 
 def gain(ctx, arg):
     """Read or set track/master gain."""
-    parts = ctx.tokens(arg, "gain <track 1-8|master> [value]")
+    parts = ctx.tokens(arg, "gain <track 1-16|master> [value]")
     if parts is None:
         return
     if not 1 <= len(parts) <= 2:
-        ctx.emit("Usage: gain <track 1-8|master> [value]")
+        ctx.emit("Usage: gain <track 1-16|master> [value]")
         return
     try:
         idx = None if parts[0] == "master" else track_index(int(parts[0]))
@@ -31,7 +31,7 @@ def gain(ctx, arg):
 
 
 def _switch_track(ctx, arg, command, field):
-    usage = f"{command} <track 1-8> [on|off|toggle]"
+    usage = f"{command} <track 1-16> [on|off|toggle]"
     parts = ctx.tokens(arg, usage)
     if parts is None:
         return

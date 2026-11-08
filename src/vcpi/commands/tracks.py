@@ -64,7 +64,7 @@ def track(ctx, arg):
 
 def clear_source(ctx, track_num, parts):
     if len(parts) != 2:
-        ctx.emit("Usage: track <1-8> clear")
+        ctx.emit("Usage: track <1-16> clear")
         return
     idx = track_index(track_num)
     try:
@@ -78,7 +78,7 @@ def clear_source(ctx, track_num, parts):
 
 def effect(ctx, track_num, parts, text):
     if len(parts) < 3:
-        ctx.emit(f"Usage: track <1-8|master> fx <path|vst_name> [--name <label>] | track <1-8|master> fx clear <fx_index>")
+        ctx.emit(f"Usage: track <1-16|master> fx <path|vst_name> [--name <label>] | track <1-16|master> fx clear <fx_index>")
         return
 
     track_idx = None if track_num is None else track_index(track_num)
@@ -86,7 +86,7 @@ def effect(ctx, track_num, parts, text):
     # track <num|master> fx clear <fx_index>
     if parts[2].lower() == "clear":
         if len(parts) != 4:
-            ctx.emit(f"Usage: track <1-8|master> fx clear <fx_index>")
+            ctx.emit(f"Usage: track <1-16|master> fx clear <fx_index>")
             return
         try:
             fx_idx = int(parts[3]) - 1
@@ -164,7 +164,7 @@ def vst(ctx, track_num, parts, text):
     idx = track_index(track_num)
     rest = text.split(maxsplit=2)
     if len(rest) < 3:
-        ctx.emit(f"Usage: track <1-8> vst <path|vst_name> [--name <label>]")
+        ctx.emit(f"Usage: track <1-16> vst <path|vst_name> [--name <label>]")
         return
     try:
         path_token, name = parse_named_source(rest[2])
@@ -200,7 +200,7 @@ def pd(ctx, track_num, parts, text):
     idx = track_index(track_num)
     rest = text.split(maxsplit=2)
     if len(rest) < 3:
-        ctx.emit("Usage: track <1-8> pd <patch_name[.pd]> [--name <label>]")
+        ctx.emit("Usage: track <1-16> pd <patch_name[.pd]> [--name <label>]")
         return
     try:
         patch_name, name = parse_named_source(rest[2])
@@ -224,7 +224,7 @@ def wav(ctx, track_num, parts, text):
         sources, display_name = source_args(parts[2:], 2)
     except ValueError as error:
         ctx.emit(f"Error: {error}")
-        ctx.emit("Usage: track <1-8> wav <pack> <sample> [--name <label>]")
+        ctx.emit("Usage: track <1-16> wav <pack> <sample> [--name <label>]")
         return
     pack_name = sources[0].strip().strip("/")
     sample_name = sources[1].strip()

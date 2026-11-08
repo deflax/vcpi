@@ -69,7 +69,7 @@ Hidden directories present in the workspace:
 
 ## Core repo conventions
 
-- Tracks are `1-8`.
+- Tracks are `1-16`.
 - MIDI channels are `1-16`.
 - `fx_index` values in CLI commands are `1-based`.
 - `master` refers to the global master effects bus.

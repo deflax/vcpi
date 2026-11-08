@@ -12,10 +12,13 @@ Source of truth:
 
 ## Conventions
 
-- Tracks are **1-8**.
+- Tracks are **1-16**.
 - MIDI channels are **1-16**.
 - `fx_index` values are **1-based** in CLI commands.
 - `master` means the global master effects bus.
+- MIDI Mix has eight physical strips fixed to tracks **1-8**, with no banking.
+  Use CLI commands or routed generic MIDI for tracks **9-16**, for example
+  `midi link 16 16` to route channel 16 to track 16.
 - Hardware audio/MIDI port indexes are **0-based**; use the indexes printed by discovery.
 - Closing a MIDI input uses its **1-based active-input number**, not its hardware port index.
 - Main targets and values are positional; optional labels and modifiers use `--flags`.
@@ -492,7 +495,7 @@ Decks play continuous tracks, not MIDI-triggered `wav` sampler voices. They dete
 a beat grid automatically and follow the global tempo and beat phase by default,
 using the selected timing authority (internal, BeatStep Pro MIDI, or Ableton Link).
 Play/pause is still controlled per deck, independently of global transport
-start/stop. Create up to eight ordinary mixer tracks:
+start/stop. Create up to sixteen ordinary mixer tracks:
 
 ```text
 track 1 deck /music/opening.wav --name Deck-A
@@ -815,7 +818,7 @@ hardware-free rendering does not establish live hardware suitability.
 | `gain <track\|master> [value]` | Read or set linear gain (0.0–1.0) |
 | `mute <track> [on\|off\|toggle]` | Set mute explicitly; omitted state toggles |
 | `solo <track> [on\|off\|toggle]` | Set solo explicitly; omitted state toggles |
-| `show [all\|midi\|controls\|audio\|1-8\|master] [--details]` | Print a compact cached view; `show browse` opens the optional explorer |
+| `show [all\|midi\|controls\|audio\|1-16\|master] [--details]` | Print a compact cached view; `show browse` opens the optional explorer |
 
 `gain 1` reads without changing state. `mute 1 on` and `solo 1 off` are
 idempotent; bare `mute 1` and `solo 1` are convenient toggle shortcuts.
@@ -1373,7 +1376,7 @@ Text choices and boolean switches are inferred at load even when a plugin
 omits VST3 step counts. `raw_value` remains normalized.
 
 **`show`** prints a compact operational overview in both interactive and piped
-clients. It includes all eight tracks, routes, source/FX summaries, master/output,
+clients. It includes all sixteen tracks, routes, source/FX summaries, master/output,
 connected controllers and problems. It does not enter a full-screen interface.
 Inspection is read-only; parameters belong to `get`, not another parameter dump.
 
@@ -1385,7 +1388,7 @@ Inspection is read-only; parameters belong to `get`, not another parameter dump.
 | `show controls midimix` | MIDI Mix mapped controls, targets and cached values |
 | `show controls beatstep` | BeatStep Pro mapped controls, grouped by target track |
 | `show audio` | Output device/backend, stream format, master path and audio problems |
-| `show 1` … `show 8` | Chain, MIDI/sequencer routes, mixer state, relevant bindings from both controllers |
+| `show 1` … `show 16` | Chain, MIDI/sequencer routes, mixer state, relevant controller bindings |
 | `show <track> fx <index>` | Selected track-effect summary |
 | `show master` | Master chain, gain, control and output |
 | `show master fx <index>` | Selected master-effect summary |
@@ -1418,7 +1421,8 @@ Inside `show browse`:
   Backspace returns to the parent. Effects belong to their track/master; controller
   maps belong to Controls, rather than adding more top-level tabs.
 - `o`, `m`, `c`, `a` jump to overview, MIDI, controls or audio; `1`–`8` select tracks
-  and `9` selects master.
+  1–8 and `9` still selects master, not track 9. All sixteen tracks are available
+  with Left/Right or Tab/Shift-Tab, in numeric order before master.
 - Up/Down, PageUp/PageDown and Home/End scroll.
 - `r` explicitly refreshes; navigation sends no requests. Failed refresh preserves
   the previous view and displays an error.
