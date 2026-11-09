@@ -1,8 +1,7 @@
-"""Hardware-free BeatStep bytes through fixed routing and typed control APIs."""
+"""Hardware-free BeatStep bytes through focused routing and typed control APIs."""
 
 from dataclasses import replace
 import unittest
-from types import SimpleNamespace
 
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
 from vcpi.controllers.beatstep_pro import BeatStepProController, BeatStepProProfile
@@ -24,7 +23,7 @@ class RecordingEngine:
     def __init__(self):
         self.tracks = [deck(), deck(8)] + [
             InstrumentTrack("Synth", "", PluginSnapshot(n), generation=n)
-            for n in (9, 10, 11)] + [None] * 3
+            for n in (9, 10, 11)] + [None] * 11
         # Deliberately misleading generic map: BeatStep must never consult it.
         self.channel_map = {0: 0, 1: 7, 9: 1, 15: 4}
         self.commands = []
@@ -65,6 +64,30 @@ class BeatStepProTests(unittest.TestCase):
 
     def rotary(self, ordinal, value):
         self.send(0xBF, self.controller.profile.rotary_ccs[ordinal], value)
+
+    def pad(self, ordinal, value=127, *, note_off=False):
+        profile = self.controller.profile
+        if profile.pad_type == "cc":
+            self.send(0xB0 | profile.control_channel, profile.pad_numbers[ordinal], value)
+        else:
+            status = 0x80 if note_off else 0x90
+            self.send(status | profile.control_channel, profile.pad_numbers[ordinal], value)
+
+    def tap_pad(self, ordinal):
+        self.pad(ordinal)
+        self.pad(ordinal, 0)
+
+    def configure(self, **fields):
+        self.controller.close()
+        self.controller = BeatStepProController(
+            self.engine, self.timeline, profile=replace(BeatStepProProfile(), **fields))
+        self.addCleanup(self.controller.close)
+
+    def synth(self, count, *, generation=30):
+        return InstrumentTrack("Synth", "", PluginSnapshot(
+            generation, parameters={
+                f"p{n}": ParameterSnapshot(range=(0, 127)) for n in range(count)}),
+            generation=generation)
 
     def test_mmc_stop_and_resume_preserve_unknown_external_position(self):
         for _ in range(110):
@@ -121,59 +144,125 @@ class BeatStepProTests(unittest.TestCase):
         self.send(0x81, 61, 0)
         self.assertEqual(self.engine.midi[-1][0], 3)
 
-    def test_button_edges_both_decks_and_rapid_sync_selection(self):
-        self.button(0)
-        self.button(0)
-        self.button(0, 0)
-        self.press(9)
-        self.press(10)
-        self.press(3)
-        self.press(3)
-        self.press(5)
-        self.press(5)
-        self.press(4)
-        self.assertEqual(self.engine.commands, [
-            (0, "play_toggle", 0, None, 7), (1, "cue", 0, None, 8),
-            (1, "cue_set", 0, None, 8), (0, "sync", True, None, 7),
-            (0, "sync", False, None, 7), (0, "track_select", 2, None, 7),
-            (0, "track_select", 3, None, 7), (0, "track_select", 2, None, 7)])
-        self.assertFalse(any(command[1] == "play" for command in self.engine.commands))
-
-    def test_opposed_nudges_release_and_replacement_generation(self):
-        self.button(6)
-        self.button(7)
-        self.button(6, 0)
-        self.controller.clear_deck_holds(channel=15)
-        self.assertEqual([command[2] for command in self.engine.commands], [-1, 0, 1, 0])
-        self.button(6)
-        self.engine.tracks[0] = deck(77)
-        self.button(6, 0)  # Old release must not nudge the replacement.
-        self.assertEqual(self.engine.commands[-1][-1], 7)
-        self.button(6)
-        self.assertEqual(self.engine.commands[-1], (0, "nudge", -1, None, 77))
-
-    def test_rotaries_cover_gain_pitch_coarse_and_fine_seek(self):
+    def test_focus_starts_on_track_one_and_all_sixteen_steps_only_select(self):
+        self.assertEqual(self.controller.focused_track, 0)
+        self.engine.tracks[15] = deck(80)
+        for index in range(16):
+            self.press(index)
+            self.assertEqual(self.controller.focused_track, index)
+        self.assertEqual(self.engine.commands, [])
         self.rotary(0, 127)
-        self.rotary(1, 0)
-        self.rotary(2, 64)
-        self.rotary(3, 64)  # First absolute sample seeds fine movement.
-        self.rotary(3, 65)
-        self.rotary(4, 0)
-        self.rotary(5, 127)
+        self.tap_pad(0)
         self.assertEqual(self.engine.commands, [
-            (0, "mixer", {"gain": 1.0}, None, 7), (0, "pitch", -16, None, 7),
-            (0, "seek", 64, None, 7), (0, "seek", 64.1, None, 7),
-            (1, "mixer", {"gain": 0.0}, None, 8), (1, "pitch", 16, None, 8)])
+            (15, "mixer", {"gain": 1.0}, None, 80),
+            (15, "play_toggle", 0, None, 80)])
 
-    def test_relative_wire_encoding_uses_deltas_not_absolute_values(self):
-        self.controller = BeatStepProController(self.engine, self.timeline, profile=replace(
-            BeatStepProProfile(), rotary_modes=("twos_complement",) * 16))
-        self.rotary(2, 1)
-        self.rotary(2, 127)
-        self.rotary(3, 1)
-        self.assertEqual([command[2] for command in self.engine.commands], [17, 12, 12.1])
+    def test_empty_track_remains_selected_without_commands(self):
+        self.press(14)
+        for ordinal in range(16):
+            self.rotary(ordinal, 127)
+        for ordinal in range(7):
+            self.tap_pad(ordinal)
+        self.assertEqual(self.controller.focused_track, 14)
+        self.assertEqual(self.engine.commands, [])
+        self.assertEqual(self.engine.midi, [])
 
-    def test_effects_flatten_exposed_insert_parameters_with_typed_ranges(self):
+    def test_pad_edges_actions_and_rapid_sync_toggle(self):
+        self.pad(0)
+        self.pad(0)
+        self.pad(0, 0, note_off=True)
+        for ordinal in (1, 2, 3, 3, 6):
+            self.tap_pad(ordinal)
+        self.assertEqual(self.engine.commands, [
+            (0, "play_toggle", 0, None, 7), (0, "cue", 0, None, 7),
+            (0, "cue_set", 0, None, 7), (0, "sync", True, None, 7),
+            (0, "sync", False, None, 7), (0, "phase_reset", 0, None, 7)])
+
+    def test_opposed_nudges_release_original_track_after_focus_change(self):
+        self.pad(4)
+        self.pad(5)
+        self.press(1)
+        self.pad(4, 0)
+        self.pad(5, 0, note_off=True)
+        self.assertEqual(self.engine.commands, [
+            (0, "nudge", -1, None, 7), (0, "nudge", 0, None, 7),
+            (0, "nudge", 1, None, 7), (0, "nudge", 0, None, 7)])
+        self.pad(4)
+        self.controller.clear_deck_holds(channel=15)
+        self.assertEqual(self.engine.commands[-2:], [
+            (1, "nudge", -1, None, 8), (1, "nudge", 0, None, 8)])
+
+    def test_nudge_release_preserves_replaced_source_generation(self):
+        self.pad(4)
+        self.engine.tracks[0] = deck(77)
+        self.rotary(0, 127)  # Observe replacement before the old physical release.
+        self.pad(4, 0)
+        self.assertEqual(self.engine.commands[-1], (0, "nudge", 0, None, 7))
+        self.pad(4)
+        self.assertEqual(self.engine.commands[-1], (0, "nudge", -1, None, 77))
+        self.controller.close()
+        self.assertEqual(self.engine.commands[-1], (0, "nudge", 0, None, 77))
+
+    def test_rotaries_cover_gain_pitch_coarse_fine_and_phase(self):
+        self.press(1)
+        for ordinal, value in ((0, 127), (1, 0), (2, 64), (3, 64),
+                               (3, 65), (4, 0), (4, 127)):
+            self.rotary(ordinal, value)
+        for ordinal in (5, 6, 7):
+            self.rotary(ordinal, 127)
+        self.assertEqual(self.engine.commands, [
+            (1, "mixer", {"gain": 1.0}, None, 8), (1, "pitch", -16, None, 8),
+            (1, "seek", 64, None, 8), (1, "seek", 64.1, None, 8),
+            (1, "phase_offset", -.5, None, 8), (1, "phase_offset", .5, None, 8)])
+
+    def test_all_relative_encodings_use_signed_seek_deltas(self):
+        for mode, positive, negative in (
+                ("twos_complement", 1, 127), ("offset", 65, 63),
+                ("sign_magnitude", 1, 65)):
+            with self.subTest(mode=mode):
+                self.configure(rotary_modes=(mode,) * 16)
+                self.engine.commands.clear()
+                self.rotary(2, positive)
+                self.rotary(2, negative)
+                self.rotary(3, positive)
+                self.assertEqual([command[2] for command in self.engine.commands],
+                                 [17, 12, 12.1])
+
+    def test_song_steps_are_immediate_accumulate_and_clamp(self):
+        for expected in (2, 3, 4, 4):
+            self.rotary(8, 1)
+            self.assertEqual(self.engine.commands[-1], (0, "track_select", expected, None, 7))
+        for expected in (3, 2, 1, 1):
+            self.rotary(8, 127)
+            self.assertEqual(self.engine.commands[-1], (0, "track_select", expected, None, 7))
+        self.assertEqual(self.engine.tracks[0].plugin.values["track_select"], 1)
+        self.engine.tracks[0] = deck(77)
+        self.rotary(8, 1)
+        self.assertEqual(self.engine.commands[-1], (0, "track_select", 2, None, 77))
+
+    def test_absolute_delta_controls_seed_again_after_focus_change(self):
+        self.configure(rotary_modes=("absolute",) * 16)
+        self.rotary(8, 64)
+        self.rotary(3, 64)
+        self.assertEqual(self.engine.commands, [])
+        self.rotary(8, 65)
+        self.rotary(3, 65)
+        self.assertEqual(self.engine.commands, [
+            (0, "track_select", 2, None, 7), (0, "seek", 12.1, None, 7)])
+        self.press(1)
+        self.rotary(8, 10)
+        self.rotary(3, 10)
+        self.assertEqual(len(self.engine.commands), 2)
+        self.rotary(8, 11)
+        self.rotary(3, 11)
+        self.assertEqual(self.engine.commands[-2:], [
+            (1, "track_select", 2, None, 8), (1, "seek", 12.1, None, 8)])
+        self.press(0)
+        self.rotary(8, 100)
+        self.rotary(3, 100)
+        self.assertEqual(len(self.engine.commands), 4)
+
+    def test_deck_inserts_flatten_seven_exposed_typed_parameters(self):
         self.engine.tracks[0].effects = [
             PluginSnapshot(20, name="plugdata-fx", manufacturer_name="plugdata", parameters={
                 "volume": ParameterSnapshot(range=(0, 2)),
@@ -182,81 +271,129 @@ class BeatStepProTests(unittest.TestCase):
                 "switch": ParameterSnapshot(kind="bool")}),
             PluginSnapshot(21, parameters={
                 "mode": ParameterSnapshot(kind="enum", valid_values=("A", "B", "C")),
-                "count": ParameterSnapshot(kind="int", range=(2, 10))})]
-        bindings = self.controller.control_bindings()[24:28]
-        self.assertEqual([binding.target for binding in bindings], [
-            "Track 1 deck: FX 1: amount", "Track 1 deck: FX 1: switch",
-            "Track 1 deck: FX 2: mode", "Track 1 deck: FX 2: count",
-        ])
-        self.assertEqual([binding.range for binding in bindings], [
-            "-2 .. 2", "false / true", "indices 0-2: A, B, C", "2 .. 10",
-        ])
-        for ordinal in range(8, 12):
+                "count": ParameterSnapshot(kind="int", range=(2, 10)),
+                **{f"extra{n}": ParameterSnapshot(range=(0, 1)) for n in range(4)}})]
+        for ordinal in range(9, 16):
             self.rotary(ordinal, 127)
         self.assertEqual(self.engine.commands, [
             (0, "amount", 2, 0, 7), (0, "switch", True, 0, 7),
-            (0, "mode", "C", 1, 7), (0, "count", 10, 1, 7)])
+            (0, "mode", "C", 1, 7), (0, "count", 10, 1, 7),
+            *[(0, f"extra{n}", 1, 1, 7) for n in range(3)]])
         self.engine.tracks[0].effects = [PluginSnapshot(22, parameters={
             "new": ParameterSnapshot(range=(10, 20))})]
-        self.rotary(8, 0)
+        self.rotary(9, 0)
         self.assertEqual(self.engine.commands[-1], (0, "new", 10, 0, 7))
-        self.assertEqual(self.engine.tracks[0].plugin.values, {"track_select": 1})
-        binding = self.controller.control_bindings()[24]
-        self.assertEqual(binding.target, "Track 1 deck: FX 1: new")
-        self.assertEqual(binding.range, "10 .. 20")
-        self.assertEqual(self.controller.control_bindings()[25].availability, "unbound")
 
-    def test_deck_controls_do_nothing_on_non_decks_and_sequences_never_drive_decks(self):
-        self.engine.tracks[0].source_type = "vst"
-        for ordinal in range(8):
-            self.press(ordinal)
-            self.rotary(ordinal if ordinal < 4 else ordinal + 4, 127)
+    def test_non_deck_banks_have_fourteen_controls_and_clamp(self):
+        self.engine.tracks[2] = self.synth(29)
+        self.press(2)
+        slots = (*range(1, 8), *range(9, 16))
+        for ordinal in slots:
+            self.rotary(ordinal, 127)
+        self.assertEqual([command[1] for command in self.engine.commands],
+                         [f"p{n}" for n in range(14)])
+        self.rotary(8, 1)
+        for ordinal in slots:
+            self.rotary(ordinal, 0)
+        self.assertEqual([command[1] for command in self.engine.commands[-14:]],
+                         [f"p{n}" for n in range(14, 28)])
+        self.rotary(8, 63)
+        self.rotary(1, 127)
+        self.assertEqual(self.engine.commands[-1], (2, "p28", 127, None, 30))
+        count = len(self.engine.commands)
+        self.rotary(2, 127)
+        self.assertEqual(len(self.engine.commands), count)
+        self.rotary(8, 64)
+        self.rotary(1, 0)
+        self.assertEqual(self.engine.commands[-1], (2, "p0", 0, None, 30))
+
+    def test_banks_persist_per_track_clamp_on_metadata_and_reset_on_generation(self):
+        self.engine.tracks[2] = self.synth(29)
+        self.engine.tracks[3] = self.synth(29, generation=31)
+        self.press(2)
+        self.rotary(8, 2)
+        self.press(3)
+        self.rotary(1, 127)
+        self.assertEqual(self.engine.commands[-1], (3, "p0", 127, None, 31))
+        self.press(2)
+        self.rotary(1, 127)
+        self.assertEqual(self.engine.commands[-1], (2, "p28", 127, None, 30))
+        self.engine.tracks[2].plugin = self.synth(15).plugin
+        self.rotary(1, 127)
+        self.assertEqual(self.engine.commands[-1], (2, "p14", 127, None, 30))
+        self.engine.tracks[2] = self.synth(29, generation=99)
+        self.rotary(1, 127)
+        self.assertEqual(self.engine.commands[-1], (2, "p0", 127, None, 99))
+
+    def test_absolute_bank_delta_tracks_each_step_and_reseeds_on_focus(self):
+        self.configure(rotary_modes=("absolute",) * 16)
+        self.engine.tracks[2] = self.synth(43)
+        self.press(2)
+        self.rotary(8, 64)
+        self.rotary(8, 65)
+        self.rotary(1, 127)
+        self.assertEqual(self.engine.commands[-1], (2, "p14", 127, None, 30))
+        self.rotary(8, 66)
+        self.rotary(1, 0)
+        self.assertEqual(self.engine.commands[-1], (2, "p28", 0, None, 30))
+        self.rotary(8, 67)
+        self.rotary(1, 127)
+        self.assertEqual(self.engine.commands[-1], (2, "p42", 127, None, 30))
+        self.press(0)
+        self.press(2)
+        self.rotary(8, 10)
+        self.rotary(1, 0)
+        self.assertEqual(self.engine.commands[-1], (2, "p42", 0, None, 30))
+
+    def test_relative_plugin_parameters_preserve_types_and_skip_global_volume(self):
+        self.configure(rotary_modes=("twos_complement",) * 16)
+        self.engine.tracks[2].plugin = PluginSnapshot(
+            40, name="plugdata", manufacturer_name="plugdata", parameters={
+                "volume": ParameterSnapshot(range=(0, 2)),
+                "amount": ParameterSnapshot(range=(-2, 2)),
+                "switch": ParameterSnapshot(kind="bool"),
+                "mode": ParameterSnapshot(kind="enum", valid_values=("A", "B", "C")),
+                "count": ParameterSnapshot(kind="int", range=(2, 10))})
+        self.press(2)
+        for ordinal in range(1, 5):
+            for delta in (63, 63, 1):
+                self.rotary(ordinal, delta)
+        self.assertEqual(self.engine.commands[2::3], [
+            (2, "amount", 2, None, 9), (2, "switch", True, None, 9),
+            (2, "mode", "C", None, 9), (2, "count", 10, None, 9)])
+        self.assertIs(type(self.engine.commands[5][2]), bool)
+        self.assertIs(type(self.engine.commands[11][2]), int)
+        for ordinal in range(1, 5):
+            for delta in (64, 65):
+                self.rotary(ordinal, delta)
+        self.assertEqual(self.engine.commands[13::2], [
+            (2, "amount", -2, None, 9), (2, "switch", False, None, 9),
+            (2, "mode", "A", None, 9), (2, "count", 2, None, 9)])
+
+    def test_non_deck_gain_works_but_pads_and_sequence_to_decks_do_not(self):
+        self.press(2)
+        self.rotary(0, 127)
+        self.assertEqual(self.engine.commands, [(2, "mixer", {"gain": 1.0}, None, 9)])
+        self.engine.commands.clear()
+        for ordinal in range(7):
+            self.tap_pad(ordinal)
         self.engine.tracks[2] = deck(90)
         self.send(0x90, 60, 100)
         self.assertEqual(self.engine.commands, [])
         self.assertEqual(self.engine.midi, [])
 
-    def test_existing_note_template_and_channel_separation(self):
-        self.controller = BeatStepProController(self.engine, self.timeline, profile=replace(
-            BeatStepProProfile(), button_type="note", button_numbers=tuple(range(60, 76))))
-        self.send(0x9F, 60, 127)
-        self.send(0x9F, 60, 0)
-        self.send(0x9F, 60, 127)
-        self.assertEqual(len(self.engine.commands), 2)
+    def test_configurable_note_steps_cc_pads_and_channel_separation(self):
+        self.configure(button_type="note", button_numbers=tuple(range(80, 96)),
+                       pad_type="cc", pad_numbers=tuple(range(60, 67)))
+        self.send(0x9F, 81, 127)
+        self.send(0x9F, 81, 0)
+        self.assertEqual(self.controller.focused_track, 1)
+        self.pad(0)
+        self.pad(0)
+        self.pad(0, 0)
+        self.tap_pad(0)
+        self.assertEqual(self.engine.commands, [(1, "play_toggle", 0, None, 8)] * 2)
         self.send(0x90, 60, 127)
         self.assertEqual(self.engine.midi[-1][0], 2)
         with self.assertRaises(ValueError):
             BeatStepProProfile(control_channel=0)
-
-
-
-class BeatStepBindingTests(unittest.TestCase):
-    def test_cached_bindings_separate_profile_mode_values_and_availability(self):
-        engine = RecordingEngine()
-        controller = BeatStepProController(engine, MusicalTimeline(LinkSync()))
-        self.addCleanup(controller.close)
-        engine.tracks[0].muted = True
-        engine.tracks[0].enabled = False
-        engine.tracks[0].effects = [PluginSnapshot(20, parameters={
-            "amount": ParameterSnapshot(range=(-2, 2), units="dB"),
-            "unsupported": ParameterSnapshot(range=()),
-        }, values={"amount": 0.5})]
-        bindings = controller.control_bindings()
-        self.assertEqual(len(bindings), 32)
-        self.assertEqual(bindings[16].target, "Track 1 deck: gain")
-        self.assertEqual(bindings[16].range, "0 .. 1")
-        self.assertEqual(bindings[16].availability, "disconnected")
-        self.assertEqual(bindings[24].value, "0.5 dB")
-        self.assertEqual(bindings[24].range, "-2 .. 2")
-        self.assertEqual(bindings[24].mode, "absolute")
-        self.assertEqual(bindings[24].track, 1)
-        self.assertEqual(bindings[25].availability, "unsupported")
-        self.assertEqual(bindings[26].availability, "unbound")
-        controller._port = SimpleNamespace(name="Connected", close=lambda: None)
-        self.assertEqual(controller.control_bindings()[24].availability, "mapped")
-        engine.tracks[0].source_type = "vst"
-        self.assertEqual(controller.control_bindings()[16].availability, "unsupported")
-        engine.tracks[0] = None
-        self.assertEqual(controller.control_bindings()[16].availability, "unavailable")
-        self.assertEqual(engine.commands, [])
-        self.assertEqual(engine.midi, [])

@@ -5,7 +5,7 @@ manual, sections 2.2 and 11.1, lists controller numbers as 'Varies'. Match this
 profile in code to the existing device template: no learning or SysEx uploads.
 CONTROL must use a channel distinct from all sequencers (default here: 16).
 Select CONTROL, hold CHAN and press step 16; controls must follow USER channel.
-Step buttons must send Gate CC (not Scenes), rotaries absolute CC, range 0..127.
+Step buttons and pads must send Gate messages, not Scenes.
 The profile also accepts Gate notes and explicitly selected relative encodings.
 """
 
@@ -27,9 +27,9 @@ from vcpi.controllers.bindings import (
 
 logger = logging.getLogger(__name__)
 PROFILE_NOTE = "Expected vcpi profile; device template not verified."
-BUTTON_ACTIONS = (
-    "play_toggle", "cue", "cue_set", "sync", "previous", "next",
-    "nudge_down", "nudge_up",
+PAD_ACTIONS = (
+    "play_toggle", "cue", "cue_set", "sync", "nudge_down", "nudge_up",
+    "phase_reset",
 )
 
 
@@ -47,8 +47,10 @@ class BeatStepProProfile:
     sequence_channels: tuple[int, int, int] = (0, 1, 9)
     button_numbers: tuple[int, ...] = tuple(range(36, 52))
     button_type: str = "cc"
+    pad_numbers: tuple[int, ...] = tuple(range(60, 67))
+    pad_type: str = "note"
     rotary_ccs: tuple[int, ...] = tuple(range(20, 36))
-    rotary_modes: tuple[str, ...] = ("absolute",) * 16
+    rotary_modes: tuple[str, ...] = ("absolute",) * 8 + ("twos_complement",) + ("absolute",) * 7
     fine_seek_seconds: float = 0.1
     coarse_seek_seconds: float = 5.0
 
@@ -65,6 +67,14 @@ class BeatStepProProfile:
             raise ValueError("button_type must be cc or note")
         if self.button_type == "cc" and set(self.button_numbers) & set(self.rotary_ccs):
             raise ValueError("button and rotary CC numbers must not overlap")
+        if (self.pad_type not in ("cc", "note") or len(self.pad_numbers) != len(PAD_ACTIONS)
+                or len(set(self.pad_numbers)) != len(self.pad_numbers)
+                or any(not 0 <= number <= 127 for number in self.pad_numbers)):
+            raise ValueError("supply seven distinct Gate pad messages")
+        if self.pad_type == self.button_type and set(self.pad_numbers) & set(self.button_numbers):
+            raise ValueError("pad and step messages must not overlap")
+        if self.pad_type == "cc" and set(self.pad_numbers) & set(self.rotary_ccs):
+            raise ValueError("pad and rotary CC numbers must not overlap")
         modes = {"absolute", "twos_complement", "offset", "sign_magnitude"}
         if len(self.rotary_modes) != 16 or any(mode not in modes for mode in self.rotary_modes):
             raise ValueError("supply 16 supported rotary wire encodings")
@@ -73,21 +83,17 @@ class BeatStepProProfile:
 DEFAULT_PROFILE = BeatStepProProfile()
 
 
-def _deck_target(engine, index):
-    track = engine.tracks[index]
-    return track if track is not None and track.source_type == "deck" else None
+def _parameter_items(plugin):
+    return ((name, parameter) for name, parameter in plugin.parameter_items("controls")
+            if not (name == "volume"
+                    and plugin.manufacturer_name.casefold() == "plugdata"
+                    and plugin.name.casefold().replace(" ", "") in {"plugdata", "plugdata-fx"}))
 
 
 def _effect_binding(track, ordinal):
-    """Resolve one exposed insert parameter, retaining unsupported ordinals."""
     candidates = ((fx_index, effect, name, parameter)
                   for fx_index, effect in enumerate(track.effects)
-                  for name, parameter in effect.parameter_items("controls")
-                  # Preserve this profile's preference for patch controls over volume.
-                  if not (name == "volume"
-                          and effect.manufacturer_name.casefold() == "plugdata"
-                          and effect.name.casefold().replace(" ", "")
-                          in {"plugdata", "plugdata-fx"}))
+                  for name, parameter in _parameter_items(effect))
     return next(islice(candidates, ordinal, ordinal + 1), None)
 
 
@@ -101,7 +107,11 @@ class BeatStepProController:
         self._routes = dict(zip(profile.sequence_channels, (2, 3, 4)))
         self._buttons = {number: index for index, number in enumerate(profile.button_numbers)}
         self._rotaries = {number: index for index, number in enumerate(profile.rotary_ccs)}
-        self._holds = {}  # (channel, index, generation) -> pressed button ordinals
+        self._pads = {number: index for index, number in enumerate(profile.pad_numbers)}
+        self.focused_track = 0
+        self._banks = {}  # track index -> (generation, bank)
+        self._pad_targets = {}  # pad ordinal -> original (track, generation)
+        self._holds = {}  # (channel, index, generation) -> pressed pad ordinals
         self._notes = {}  # (channel, note) -> (index, generation)
         self._sustain = {}  # channel -> (index, generation)
         self._pending = {}  # (index, generation, field) -> (observed, requested)
@@ -116,75 +126,95 @@ class BeatStepProController:
     def port_name(self):
         return self.input_port_name
 
+    def _source_bank(self, index, track):
+        parameters = list(_parameter_items(track.plugin))
+        generation, bank = self._banks.get(index, (track.generation, 0))
+        if generation != track.generation:
+            bank = 0
+        last = max(0, (len(parameters) - 1) // 14)
+        bank = min(bank, last)
+        self._banks[index] = (track.generation, bank)
+        return parameters, bank, last
+
+    def _binding(self, index, track, rotary):
+        if track.source_type == "deck":
+            return _effect_binding(track, rotary - 9) if rotary >= 9 else None
+        parameters, bank, _ = self._source_bank(index, track)
+        ordinal = rotary - 1 if rotary < 8 else rotary - 2
+        ordinal += bank * 14
+        if 0 <= ordinal < len(parameters):
+            name, parameter = parameters[ordinal]
+            return None, track.plugin, name, parameter
+        return None
+
     def control_bindings(self) -> list[ControlBinding]:
-        """Describe expected profile bindings using only cached snapshots."""
+        """Describe focused controls using cached snapshots, never live DSP."""
+        with self._lock:
+            return self._control_bindings()
+
+    def _control_bindings(self):
         bindings = []
         channel = self.profile.control_channel + 1
-
-        def state(index):
-            if self._engine.tracks[index] is None:
-                return "unavailable", "empty track"
-            if _deck_target(self._engine, index) is None:
-                return "unsupported", "deck-only binding; target is not a deck"
-            return input_availability(self.input_port_name)
-
+        connected = input_availability(self.input_port_name)
+        index = self.focused_track
+        track = self._engine.tracks[index]
+        base = connected if track is not None else ("unavailable", "empty track")
         for button, number in enumerate(self.profile.button_numbers):
-            index, action = divmod(button, 8)
-            availability, reason = state(index)
-            track = _deck_target(self._engine, index)
-            field = ("play", "cue", "cue", "sync", "track_select", "track_select",
-                     "nudge", "nudge")[action]
-            value = "(not cached)"
-            if track is not None:
-                values = track.plugin.values if field == "track_select" else track.deck
-                if field in values:
-                    value = cached_value(values[field])
             bindings.append(ControlBinding(
                 "beatstep", f"Button {button + 1}",
                 f"ch {channel} {self.profile.button_type.upper()} {number}",
-                f"Track {index + 1} deck: {BUTTON_ACTIONS[action]}",
-                value, availability, reason, index + 1, mode="Gate: press/release",
+                f"Focus track {button + 1}", cached_value(button == index),
+                *connected, button + 1, mode="Gate: press",
+            ))
+        for pad, number in enumerate(self.profile.pad_numbers):
+            state = base
+            if track is not None and track.source_type != "deck":
+                state = ("unsupported", "deck-only performance control")
+            bindings.append(ControlBinding(
+                "beatstep", f"Pad {pad + 1}",
+                f"ch {channel} {self.profile.pad_type.upper()} {number}",
+                f"Track {index + 1}: {PAD_ACTIONS[pad]}", "", *state,
+                index + 1, mode="Gate: press/release",
             ))
         for rotary, number in enumerate(self.profile.rotary_ccs):
-            index = rotary // 4 if rotary < 8 else (rotary - 8) // 4
-            availability, reason = state(index)
-            track = _deck_target(self._engine, index)
-            value, bounds = "(not cached)", ""
-            if rotary < 8:
-                control = rotary % 4
-                target = ("gain", "pitch", "coarse seek", "fine seek")[control]
-                bounds = ("0 .. 1", "-16 .. 16", "", "")[control]
-                if track is not None:
-                    if control == 0:
-                        value = cached_value(track.gain)
+            state, value, bounds = base, "", ""
+            target = "unassigned"
+            if track is not None:
+                deck = track.source_type == "deck"
+                if rotary == 0:
+                    target, value, bounds = "gain", cached_value(track.gain), "0 .. 1"
+                elif rotary == 8:
+                    if deck:
+                        target = "track_select"
+                        value = cached_value(track.plugin.values.get("track_select", 1))
+                        bounds = f"1 .. {len(track.deck.get('tracks', ()))}"
                     else:
-                        field = "pitch" if control == 1 else "position"
-                        if field in track.deck:
-                            value = cached_value(track.deck[field])
-                        if control >= 2 and "duration" in track.deck:
-                            bounds = f"0 .. {cached_value(track.deck['duration'])} s"
-            else:
-                ordinal = (rotary - 8) % 4
-                binding = _effect_binding(track, ordinal) if track is not None else None
-                target = f"effect parameter {ordinal + 1} (unbound)"
-                if binding is None:
-                    if track is not None:
-                        availability, reason = "unbound", "no exposed effect parameter"
+                        _, bank, last = self._source_bank(index, track)
+                        target, value, bounds = "parameter bank", str(bank + 1), f"1 .. {last + 1}"
+                elif deck and rotary in (1, 2, 3, 4):
+                    target = ("pitch", "coarse seek", "fine seek", "phase_offset")[rotary - 1]
+                    field = "position" if rotary in (2, 3) else target
+                    value = cached_value(track.deck.get(field, 0))
+                    bounds = ("-16 .. 16" if rotary == 1 else "-0.5 .. 0.5"
+                              if rotary == 4 else f"0 .. {track.deck.get('duration', 0)} s")
                 else:
-                    fx_index, effect, name, parameter = binding
-                    target = f"FX {fx_index + 1}: {name}"
-                    value = parameter_value(effect, name, parameter)
-                    bounds = parameter_range(parameter)
-                    if not supported_parameter(parameter):
-                        availability, reason = "unsupported", "unsupported effect parameter range"
-                    elif parameter.kind not in ("bool", "enum"):
-                        observed = effect.values.get(name, parameter.range[0])
-                        if not isinstance(observed, (int, float)) or not math.isfinite(observed):
-                            availability, reason = "unavailable", "cached effect value is not finite"
+                    binding = self._binding(index, track, rotary)
+                    if binding is None:
+                        state = ("unbound", "no control assigned")
+                    else:
+                        fx_index, plugin, name, parameter = binding
+                        target = f"FX {fx_index + 1}: {name}" if fx_index is not None else name
+                        value, bounds = parameter_value(plugin, name, parameter), parameter_range(parameter)
+                        if not supported_parameter(parameter):
+                            state = ("unsupported", "unsupported parameter range")
+                        elif parameter.kind not in ("bool", "enum"):
+                            observed = plugin.values.get(name, parameter.range[0])
+                            if not isinstance(observed, (int, float)) or not math.isfinite(observed):
+                                state = ("unavailable", "cached parameter value is not finite")
             bindings.append(ControlBinding(
                 "beatstep", f"Rotary {rotary + 1}", f"ch {channel} CC {number}",
-                f"Track {index + 1} deck: {target}", value, availability, reason,
-                index + 1, bounds, self.profile.rotary_modes[rotary],
+                f"Track {index + 1}: {target}", value, *state, index + 1,
+                bounds, self.profile.rotary_modes[rotary],
             ))
         return bindings
 
@@ -213,8 +243,14 @@ class BeatStepProController:
                 ch, index, generation = key
                 if matches(ch, index):
                     held = self._holds.pop(key)
-                    if any(button % 8 in (6, 7) for button in held):
+                    if held & {4, 5}:
                         self._engine.enqueue_param_change(index, "nudge", 0.0, generation=generation)
+            for pad, (index, _) in list(self._pad_targets.items()):
+                if matches(self.profile.control_channel, index):
+                    self._pad_targets.pop(pad)
+            for index in list(self._banks):
+                if matches(self.profile.control_channel, index):
+                    self._banks.pop(index)
             for key, (index, generation) in list(self._notes.items()):
                 ch, note = key
                 if matches(ch, index):
@@ -307,34 +343,39 @@ class BeatStepProController:
                     index, generation = original
         self._engine.enqueue_midi(index, message, generation=generation)
 
+    @staticmethod
+    def _gate(message, kind):
+        if kind == "cc" and message.type == "control_change":
+            return message.control, message.value > 0
+        if kind == "note" and message.type in ("note_on", "note_off"):
+            return message.note, message.type == "note_on" and message.velocity > 0
+        return None, False
+
     def _control(self, message):
-        button = None
-        if self.profile.button_type == "cc" and message.type == "control_change":
-            button = self._buttons.get(message.control)
-            pressed = message.value > 0
-        elif self.profile.button_type == "note" and message.type in ("note_on", "note_off"):
-            button = self._buttons.get(message.note)
-            pressed = message.type == "note_on" and message.velocity > 0
+        number, pressed = self._gate(message, self.profile.button_type)
+        button = self._buttons.get(number)
         if button is not None:
-            self._button(button, pressed)
+            if pressed and button != self.focused_track:
+                self.focused_track = button
+                self._last_rotary.clear()
+            return
+        number, pressed = self._gate(message, self.profile.pad_type)
+        pad = self._pads.get(number)
+        if pad is not None:
+            self._pad(pad, pressed)
         elif message.type == "control_change":
             rotary = self._rotaries.get(message.control)
             if rotary is not None:
                 self._rotary(rotary, message.value)
 
-    def _deck(self, index):
-        track = _deck_target(self._engine, index)
+    def _track(self, index):
+        track = self._engine.tracks[index]
         if track is None:
             return None
-        # Source replacement without an explicit lifecycle hook must not retain
-        # stale optimism or suppress the new source's first physical press.
         for mapping in (self._pending, self._last_rotary):
             for key in list(mapping):
                 if key[0] == index and key[1] != track.generation:
                     mapping.pop(key)
-        for key in list(self._holds):
-            if key[1] == index and key[2] != track.generation:
-                self._holds.pop(key)
         return track
 
     def _current(self, index, track, field, observed):
@@ -352,37 +393,41 @@ class BeatStepProController:
         self._pending[(index, track.generation, field)] = (observed, value)
         self._engine.enqueue_param_change(index, field, value, generation=track.generation)
 
-    def _button(self, button, pressed):
-        index, action_index = divmod(button, 8)
-        track = self._deck(index)
-        if track is None:
-            return
-        key = (self.profile.control_channel, index, track.generation)
-        held = self._holds.setdefault(key, set())
-        was_pressed = button in held
+    def _pad(self, pad, pressed):
+        original = self._pad_targets.get(pad)
         if pressed:
-            held.add(button)
+            if original is not None:
+                return
+            index = self.focused_track
+            track = self._track(index)
+            if track is None or track.source_type != "deck":
+                return
+            generation = track.generation
+            self._pad_targets[pad] = (index, generation)
         else:
-            held.discard(button)
-        if pressed == was_pressed:
-            return
-        action = BUTTON_ACTIONS[action_index]
-        if action_index in (6, 7):
-            value = float((index * 8 + 7 in held) - (index * 8 + 6 in held))
-            self._engine.enqueue_param_change(index, "nudge", value, generation=track.generation)
+            if original is None:
+                return
+            index, generation = self._pad_targets.pop(pad)
+        key = (self.profile.control_channel, index, generation)
+        held = self._holds.setdefault(key, set())
+        if pressed:
+            held.add(pad)
+        else:
+            held.discard(pad)
+        action = PAD_ACTIONS[pad]
+        if pad in (4, 5):
+            value = float((5 in held) - (4 in held))
+            self._engine.enqueue_param_change(index, "nudge", value, generation=generation)
         elif pressed:
             if action == "sync":
                 observed = bool(track.deck.get("sync", False))
                 self._set(index, track, "sync", not self._current(index, track, "sync", observed), observed)
-            elif action in ("previous", "next"):
-                count = len(track.deck.get("tracks", ()))
-                if count:
-                    observed = int(track.plugin.values.get("track_select", 1))
-                    current = self._current(index, track, "track_select", observed)
-                    selected = max(1, min(count, current + (1 if action == "next" else -1)))
-                    self._set(index, track, "track_select", selected, observed)
+            elif action == "phase_reset":
+                observed = float(track.deck.get("phase_offset", 0))
+                self._pending[(index, track.generation, "phase_offset")] = (observed, 0.0)
+                self._engine.enqueue_deck_command(index, action, generation=generation)
             else:
-                self._engine.enqueue_deck_command(index, action, generation=track.generation)
+                self._engine.enqueue_deck_command(index, action, generation=generation)
         if not held:
             self._holds.pop(key, None)
 
@@ -394,48 +439,74 @@ class BeatStepProController:
             return -(value - 64) if value >= 64 else value
         return value - 128 if value >= 64 else value
 
+    def _absolute_delta(self, index, track, rotary, value):
+        key = (index, track.generation, rotary)
+        previous = self._last_rotary.get(key)
+        self._last_rotary[key] = value
+        return None if previous is None else value - previous
+
     def _rotary(self, rotary, value):
-        index = rotary // 4 if rotary < 8 else (rotary - 8) // 4
-        track = self._deck(index)
+        index = self.focused_track
+        track = self._track(index)
         if track is None:
             return
         mode = self.profile.rotary_modes[rotary]
         delta = self._delta(mode, value) if mode != "absolute" else None
-        if rotary >= 8:
-            self._effect(index, track, (rotary - 8) % 4, value, delta)
+        if rotary == 8:
+            if delta is None:
+                delta = self._absolute_delta(index, track, rotary, value)
+            if not delta:
+                return
+            if track.source_type == "deck":
+                count = len(track.deck.get("tracks", ()))
+                if count:
+                    observed = int(track.plugin.values.get("track_select", 1))
+                    current = self._current(index, track, "track_select", observed)
+                    selected = max(1, min(count, current + delta))
+                    if selected != current:
+                        self._set(index, track, "track_select", selected, observed)
+            else:
+                _, bank, last = self._source_bank(index, track)
+                selected = max(0, min(last, bank + delta))
+                if selected != bank:
+                    self._banks[index] = (track.generation, selected)
+                    self._last_rotary.clear()
+                    if mode == "absolute":
+                        self._last_rotary[(index, track.generation, rotary)] = value
             return
-        control = rotary % 4
-        if control == 0:
+        if rotary == 0:
             observed = track.gain
             current = self._current(index, track, "gain", observed)
             gain = value / 127.0 if delta is None else max(0.0, min(1.0, current + delta / 127.0))
             self._pending[(index, track.generation, "gain")] = (observed, gain)
             self._engine.enqueue_track_change(index, gain=gain, generation=track.generation)
-        elif control == 1:
-            observed = float(track.deck.get("pitch", 0))
-            current = self._current(index, track, "pitch", observed)
-            pitch = -16 + 32 * value / 127.0 if delta is None else max(-16, min(16, current + delta * 32 / 127.0))
-            self._set(index, track, "pitch", pitch, observed)
-        else:
+        elif track.source_type != "deck" or rotary >= 9:
+            self._parameter(index, track, rotary, value, delta)
+        elif rotary in (1, 4):
+            field = "pitch" if rotary == 1 else "phase_offset"
+            low, high = (-16.0, 16.0) if rotary == 1 else (-0.5, 0.5)
+            observed = float(track.deck.get(field, 0))
+            current = self._current(index, track, field, observed)
+            target = (low + (high - low) * value / 127.0 if delta is None
+                      else max(low, min(high, current + delta * (high - low) / 127.0)))
+            self._set(index, track, field, target, observed)
+        elif rotary in (2, 3):
             observed = float(track.deck.get("position", 0))
             current = self._current(index, track, "seek", observed)
             duration = float(track.deck.get("duration", 0))
-            if control == 2 and delta is None:
+            if rotary == 2 and delta is None:
                 target = duration * value / 127.0
             else:
                 if delta is None:
-                    key = (index, track.generation, rotary)
-                    previous = self._last_rotary.get(key)
-                    self._last_rotary[key] = value
-                    if previous is None:
+                    delta = self._absolute_delta(index, track, rotary, value)
+                    if delta is None:
                         return
-                    delta = value - previous
-                step = self.profile.fine_seek_seconds if control == 3 else self.profile.coarse_seek_seconds
+                step = self.profile.fine_seek_seconds if rotary == 3 else self.profile.coarse_seek_seconds
                 target = max(0.0, min(duration, current + delta * step))
             self._set(index, track, "seek", target, observed)
 
-    def _effect(self, index, track, ordinal, value, delta):
-        binding = _effect_binding(track, ordinal)
+    def _parameter(self, index, track, rotary, value, delta):
+        binding = self._binding(index, track, rotary)
         if binding is None:
             return
         fx_index, effect, name, parameter = binding
@@ -445,6 +516,8 @@ class BeatStepProController:
             normalized = float(bool(effect.values.get(name, False)))
         elif parameter.kind == "enum":
             observed = effect.values.get(name, parameter.valid_values[0])
+            if observed not in parameter.valid_values:
+                return
             normalized = (parameter.valid_values.index(observed)
                           / max(1, len(parameter.valid_values) - 1))
         else:
@@ -467,4 +540,5 @@ class BeatStepProController:
                 mapped = round(mapped)
         self._pending[(index, track.generation, field)] = (normalized, fraction)
         self._engine.enqueue_param_change(index, name, mapped, fx_index=fx_index,
-                                         fx_token=effect.token, generation=track.generation)
+                                         fx_token=effect.token if fx_index is not None else None,
+                                         generation=track.generation)

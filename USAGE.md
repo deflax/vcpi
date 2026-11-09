@@ -487,7 +487,8 @@ settings, MIDI parameters, and unused slots. Exclusions beyond those groups belo
 to each controller profile, not the shared parameter inventory.
 The MIDI Mix profile skips plugdata's global `volume`: its fader controls vcpi's
 track gain. The separate plugdata volume remains accessible through `get`/`set`.
-The BeatStep Pro insert-effect profile also skips plugdata's global `volume`.
+The focused BeatStep Pro profile also skips plugdata's global `volume` when
+mapping source-plugin and insert-effect controls; rotary 1 controls track gain.
 
 ### Deck Commands
 
@@ -1133,7 +1134,7 @@ reconnect by name after replug, not by unstable hardware index. `beatstep close`
 releases held notes/nudges and disables reconnection until explicitly opened.
 Do not open the same port as generic MIDI input.
 
-The code profile in `src/vcpi/controllers/beatstep_pro.py` describes the existing
+The code profile in `src/vcpi/controllers/beatstep_pro.py` defines the required
 hardware template. No MIDI learn, template upload or hardware rewriting occurs.
 Its explicit application defaults are:
 
@@ -1142,45 +1143,94 @@ Its explicit application defaults are:
 | SEQUENCER 1 | Channel 1 | Track 3 |
 | SEQUENCER 2 | Channel 2 | Track 4 |
 | DRUM | Channel 10 | Track 5 |
-| CONTROL step buttons | Channel 16, Gate CCs 36–51 in button order | Decks on tracks 1/2 |
-| CONTROL rotaries | Channel 16, absolute CCs 20–35 in rotary order, range 0–127 | Decks on tracks 1/2 |
+| CONTROL step buttons 1–16 | Channel 16, Gate CCs 36–51 in button order | Select focused track 1–16 only |
+| CONTROL rotaries 1–16 | Channel 16, CCs 20–35 in rotary order | Focused track; absolute 0–127 except rotary 9 |
+| CONTROL performance pads 1–7 | Channel 16, Gate notes 60–66 in pad order | Focused deck actions |
 
 **These numerical assignments are not claimed to be Arturia factory defaults.**
 The [Arturia 2.0 manual](https://dl.arturia.net/products/beatstep-pro/manual/beatstep-pro_Manual_2_0_EN.pdf),
 sections 2.2, 9 and 11, lists controller CC numbers as “Varies” and the default
-USER channel as 1. Match `BeatStepProProfile` to the existing template once in
-code. CONTROL must have a distinct channel from the sequencers; controls using
-USER follow the channel chosen with CONTROL → hold CHAN → step number. Step
-buttons must transmit MIDI rather than recall Scenes. The profile supports
-Gate note buttons and explicit relative encoder wire formats as alternatives.
-No software can distinguish identical channel/message combinations.
+USER channel as 1. Match `BeatStepProProfile` to the hardware template in code.
+CONTROL must have a distinct channel from the sequencers; controls using USER
+follow the channel chosen with CONTROL → hold CHAN → step number. Step buttons
+must transmit MIDI rather than recall Scenes. Configure step buttons and pads
+as Gate controls, with press and release messages. `button_type` and `pad_type`
+each support `"cc"` or `"note"`; the default `pad_type` is `"note"` and
+`pad_numbers` is `tuple(range(60, 67))`. Pads use the same CONTROL channel.
+Avoid overlapping channel/message assignments: software cannot distinguish them.
 
-| Deck on track 1 | Deck on track 2 | Button function |
+All rotaries follow one focused track, initially track 1 (`focused_track == 0`
+in the zero-based Python API). Step buttons select focus only: they never change
+MIDI routing, playback, song selection or global transport. Empty tracks are
+selectable, but their rotaries and performance pads make no changes.
+
+| Rotary | Focused deck | Focused non-deck source |
 |---|---|---|
-| 1 | 9 | Play/pause |
-| 2 | 10 | Return to cue, paused |
-| 3 | 11 | Set cue |
-| 4 | 12 | Toggle sync |
-| 5 | 13 | Previous playlist entry, paused |
-| 6 | 14 | Next playlist entry, paused |
-| 7 | 15 | Nudge slower while held |
-| 8 | 16 | Nudge faster while held |
+| 1 | Track gain | Track gain |
+| 2 | Pitch, −16% to +16% | Bank control 1 |
+| 3 | Coarse seek; absolute mode spans the song | Bank control 2 |
+| 4 | Fine seek; 0.1 seconds per increment | Bank control 3 |
+| 5 | Phase offset, −0.5 to +0.5 beats | Bank control 4 |
+| 6 | Unassigned | Bank control 5 |
+| 7 | Unassigned | Bank control 6 |
+| 8 | Unassigned | Bank control 7 |
+| 9 | Immediate stepped `track_select` | Previous/next source-control bank |
+| 10 | Insert-effect control 1 | Bank control 8 |
+| 11 | Insert-effect control 2 | Bank control 9 |
+| 12 | Insert-effect control 3 | Bank control 10 |
+| 13 | Insert-effect control 4 | Bank control 11 |
+| 14 | Insert-effect control 5 | Bank control 12 |
+| 15 | Insert-effect control 6 | Bank control 13 |
+| 16 | Insert-effect control 7 | Bank control 14 |
 
-| Track 1 rotary | Track 2 rotary | Function |
+Deck insert controls are the first seven exposed controls in chain order.
+Non-deck banks contain fourteen exposed **source-plugin** controls, assigned in
+order to rotaries 2–8 and 10–16; they do not target inserts. Both mappings skip
+settings, MIDI helpers, unused slots and plugdata's global `volume`. Unsupported
+controls retain their ordinals rather than shifting later controls into their
+slots. Numeric controls without a finite, ordered range remain inactive; vcpi
+does not invent bounds or send NaN values. Bank selection is remembered per
+track generation, resets for a replacement source, and clamps to available banks
+when control metadata changes.
+
+`rotary_modes` defaults to `"absolute"` for every rotary except rotary 9, which
+defaults to relative `"twos_complement"` (1 means +1, 127 means −1). The template
+must match these wire encodings. Alternative relative modes are `"offset"`
+(65 means +1, 63 means −1) and `"sign_magnitude"` (1 means +1, 65 means −1);
+these names describe wire formats, not Arturia mode numbers. If rotary 9 is
+configured absolute, its first sample seeds a baseline and later value changes
+step songs or banks. Absolute fine seek uses the same seed-then-delta behavior,
+not an absolute position. Focus changes clear absolute baselines. Bank changes
+clear other baselines but retain rotary 9's sample so consecutive turns keep
+stepping through banks.
+
+Song selection is immediate, without a confirmation button: rotary 9 requests
+the selected playlist entry asynchronously. Accepted requests do not immediately
+pause playback; a successful commit switches songs and pauses at cue. A failed
+load leaves the current song playing, and the newest selection wins.
+
+| Performance pad | Default note | Focused deck action |
 |---|---|---|
-| 1 | 5 | Track gain |
-| 2 | 6 | Pitch, −16% to +16% |
-| 3 | 7 | Coarse seek; absolute mode spans the song |
-| 4 | 8 | Fine seek; 0.1 seconds per value increment after initial sample |
-| 9–12 | 13–16 | First four exposed insert-effect controls, in chain order |
+| 1 | 60 | `play_toggle`: play/pause |
+| 2 | 61 | `cue`: return to cue, paused |
+| 3 | 62 | `cue_set`: set cue |
+| 4 | 63 | `sync`: toggle sync |
+| 5 | 64 | `nudge_down`: slower while held |
+| 6 | 65 | `nudge_up`: faster while held |
+| 7 | 66 | `phase_reset`: reset phase correction |
 
-Deck-only bindings cannot target empty/non-deck tracks. `show controls` summarizes
-controller connections and expected profiles; `show controls beatstep` displays
-usable mappings. Add `--details` for all slots, ranges, modes and reasons.
-Hardware sequencers route directly, independently of generic `midi link` routes,
-and do not control vcpi sequence banks.
-Numeric effect controls without a finite, ordered range remain inactive and are
-identified in `show controls beatstep --details`; vcpi does not invent bounds or send NaN values.
+Performance pads do nothing on non-decks. A held nudge belongs to the original
+track generation: changing focus does not redirect its release to another deck
+or a replacement source. Disconnect, close and lifecycle clearing release held
+notes/nudges. While disconnected, mappings remain configured expectations, not
+active hardware input.
+
+`show controls` summarizes connections and expected profiles;
+`show controls beatstep` displays usable mappings for the current focus.
+Add `--details` for unassigned, unsupported, empty and disconnected slots, ranges,
+modes and unavailable reasons. Hardware sequencers retain their fixed routing,
+independently of focus and generic `midi link` routes, and do not control vcpi
+sequence banks.
 
 Use the BeatStep Pro's INT sync mode to supply its own clock. Received MIDI
 Clock/Start/Continue/Stop/SPP and MMC Play/Stop/Pause feed the selected timeline
@@ -1393,7 +1443,7 @@ Inspection is read-only; parameters belong to `get`, not another parameter dump.
 | `show midi` | Connected generic inputs, configured channel/bank routes, unused-channel count and cached clock |
 | `show controls` | Controller connections, configured profiles, bound/inactive counts |
 | `show controls midimix` | MIDI Mix mapped controls, targets and cached values |
-| `show controls beatstep` | BeatStep Pro mapped controls, grouped by target track |
+| `show controls beatstep` | BeatStep Pro focus selectors, focused rotaries and performance pads |
 | `show audio` | Output device/backend, stream format, master path and audio problems |
 | `show 1` … `show 16` | Chain, MIDI/sequencer routes, mixer state, relevant controller bindings |
 | `show <track> fx <index>` | Selected track-effect summary |
