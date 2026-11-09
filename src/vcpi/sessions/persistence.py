@@ -4,7 +4,9 @@ Saved state includes:
   - Per-track: source kind (plugin/wav/deck/vcv/pd), instrument path, name, gain,
     enabled, muted, solo, insert effect paths/names, and opaque native VST3 state
   - Master effects: paths, names, and opaque native VST3 state
-  - Decks: full inline playlist, stable active ID, cue, pitch and sync; no VST chunk
+  - Decks: inline playlist, stable active ID, position/play and durable per-song
+    cue, pitch, sync and phase correction; no transient nudge or VST chunk
+  - Shared track focus (one-based, defaults to track 1 in older sessions)
   - Master gain
   - MIDI channel -> track routing
   - Shared timeline BPM and source selection, Link enabled state
@@ -21,6 +23,7 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from vcpi.link import validate_bpm
+from vcpi.models import NUM_TRACKS
 
 from . import restore as _restore_phases
 from .snapshot import snapshot as _snapshot
@@ -65,6 +68,9 @@ def restore(host: VcpiCore, path: Optional[Path] = None, *,
         return
 
     # Validate before changing live state, including pausing a running output.
+    focus = data.get("focus", 1)
+    if type(focus) is not int or not 1 <= focus <= NUM_TRACKS:
+        raise ValueError(f"focus must be an integer between 1 and {NUM_TRACKS}")
     bpm = None
     if "bpm" in data and "bpm" not in skip_settings:
         bpm = validate_bpm(data["bpm"])
@@ -104,6 +110,7 @@ def restore(host: VcpiCore, path: Optional[Path] = None, *,
     _restore_phases._restore_master_effects(host, data, version, errors)
     _restore_phases._restore_routing(host, data, errors)
     _restore_phases._restore_sequences(host, data, version)
+    host.track_focus.select(focus - 1)
     _restore_phases._restore_connections(
         host, data, errors,
         start_audio=start_audio,

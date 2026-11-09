@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import math
 import pickle
+from collections import deque
 from pathlib import Path
 from uuid import uuid4
+
+from vcpi.state_transport import receive_frame, send_frame
 
 # Catalogs use the existing multipart pipe framing, never a larger frame limit.
 CATALOG_LIMIT = 512 * 1024
@@ -23,7 +26,7 @@ def _text(value, label):
 
 
 def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=True,
-              phase_offset=0):
+              phase_offset=0, position=None, play=False, song_states=None):
     """Resolve ordered assets without opening them; select saved identity exactly."""
     path = Path(bank_path).expanduser().resolve()
     with path.open("rb") as source:
@@ -53,7 +56,8 @@ def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=Tr
         title = _text(entry.get("title", identity_track), "track title")
         tracks.append({"id": identity_track, "path": str(asset.resolve()), "title": title})
     return make_catalog(identity, tracks, bank_path=str(path), track_id=track_id,
-                        cue=cue, pitch=pitch, sync=sync, phase_offset=phase_offset)
+                        cue=cue, pitch=pitch, sync=sync, phase_offset=phase_offset,
+                        position=position, play=play, song_states=song_states)
 
 
 def audio_entry(audio_path):
@@ -66,9 +70,28 @@ def audio_entry(audio_path):
     return {"id": uuid4().hex, "path": str(path), "title": path.stem}
 
 
+def _song_state(*, cue, pitch, sync, phase_offset, position=None, play=False):
+    cue, pitch = float(cue), float(pitch)
+    if not math.isfinite(cue) or cue < 0:
+        raise ValueError("deck cue must be finite and nonnegative")
+    if not math.isfinite(pitch) or not -16 <= pitch <= 16:
+        raise ValueError("deck pitch must be between -16 and 16")
+    phase_offset = float(phase_offset)
+    if not math.isfinite(phase_offset) or not -0.5 <= phase_offset <= 0.5:
+        raise ValueError("deck phase offset must be finite and between -0.5 and 0.5")
+    position = cue if position is None else float(position)
+    if not math.isfinite(position) or position < 0:
+        raise ValueError("deck position must be finite and nonnegative")
+    if type(sync) is not bool or type(play) is not bool:
+        raise ValueError("deck sync and play must be booleans")
+    return {"position": position, "cue": cue, "pitch": pitch, "sync": sync,
+            "phase_offset": phase_offset, "play": play}
+
+
 def make_catalog(identity, tracks, *, bank_path=None, track_id=None,
-                 cue=0, pitch=0, sync=True, phase_offset=0):
-    """Encode a playlist with selected-song phase correction in bounded beats."""
+                 cue=0, pitch=0, sync=True, phase_offset=0,
+                 position=None, play=False, song_states=None):
+    """Encode bounded playlist and durable song state, accepting legacy defaults."""
     identity = _text(identity, "playlist ID")
     if not isinstance(tracks, list) or not tracks:
         raise ValueError("deck playlist must contain at least one track")
@@ -90,20 +113,26 @@ def make_catalog(identity, tracks, *, bank_path=None, track_id=None,
         if track_id not in seen:
             raise ValueError(f"deck track ID not found: {track_id}")
         initial = next(i for i, entry in enumerate(entries, 1) if entry["id"] == track_id)
-    cue, pitch = float(cue), float(pitch)
-    if not math.isfinite(cue) or cue < 0:
-        raise ValueError("deck cue must be finite and nonnegative")
-    if not math.isfinite(pitch) or not -16 <= pitch <= 16:
-        raise ValueError("deck pitch must be between -16 and 16")
-    phase_offset = float(phase_offset)
-    if not math.isfinite(phase_offset) or not -0.5 <= phase_offset <= 0.5:
-        raise ValueError("deck phase offset must be finite and between -0.5 and 0.5")
-    if type(sync) is not bool:
-        raise ValueError("deck sync must be a boolean")
+    initial_state = _song_state(cue=cue, pitch=pitch, sync=sync,
+                                phase_offset=phase_offset, position=position, play=play)
+    states = {}
+    if song_states is not None:
+        if not isinstance(song_states, dict):
+            raise ValueError("deck song_states must be an object")
+        for song_id, state in song_states.items():
+            if song_id not in seen:
+                raise ValueError(f"deck song state track ID not found: {song_id}")
+            if not isinstance(state, dict) or set(state) != set(initial_state):
+                raise ValueError("deck song state must contain position, cue, pitch, sync, phase_offset and play")
+            if state["position"] is None:
+                raise ValueError("deck position must be finite and nonnegative")
+            states[song_id] = _song_state(**state)
+    selected_id = entries[initial - 1]["id"]
+    initial_state = states.get(selected_id, initial_state)
     catalog = {"version": 1, "id": identity,
                "bank_path": _text(bank_path or f"session:{identity}", "playlist locator"),
-               "tracks": entries, "initial_track": initial, "cue": cue, "pitch": pitch,
-               "sync": sync, "phase_offset": phase_offset}
+               "tracks": entries, "initial_track": initial, **initial_state,
+               "song_states": states}
     return validate_catalog(json.dumps(catalog, ensure_ascii=False, separators=(",", ":")))
 
 
@@ -128,3 +157,57 @@ def encode_deck_message(message, ordinary_limit):
     if len(data) > CATALOG_LIMIT + ordinary_limit:
         raise ValueError("deck catalog transfer exceeds bounded message allowance")
     return data
+
+
+def encode_deck_status(status, ordinary_limit, state_limit):
+    """Keep ordinary metadata bounded while carrying a full song-state map."""
+    metadata = {**status, "song_states": None}
+    if len(pickle.dumps(metadata, protocol=pickle.HIGHEST_PROTOCOL)) > ordinary_limit:
+        raise BufferError(f"deck status metadata exceeds {ordinary_limit} bytes")
+    data = pickle.dumps(status, protocol=pickle.HIGHEST_PROTOCOL)
+    if len(data) > state_limit:
+        raise BufferError(f"deck status exceeds {state_limit} bytes")
+    return data
+
+
+def encode_deck_update(message, ordinary_limit, state_limit):
+    """Only a single deck status may use the existing state-transfer allowance."""
+    kind, epoch, serial, updates = message
+    if kind != "updates" or len(updates) != 1 or updates[0][0] != "deck":
+        raise BufferError("oversized ordinary update")
+    _, index, generation, status = updates[0]
+    encode_deck_status(status, ordinary_limit, state_limit)
+    metadata = (kind, epoch, serial, [("deck", index, generation,
+                                     {**status, "song_states": None})])
+    if len(pickle.dumps(metadata, protocol=pickle.HIGHEST_PROTOCOL)) > ordinary_limit:
+        raise BufferError(f"deck update metadata exceeds {ordinary_limit} bytes")
+    data = pickle.dumps(message, protocol=pickle.HIGHEST_PROTOCOL)
+    if len(data) > state_limit:
+        raise BufferError(f"deck update exceeds {state_limit} bytes")
+    return data
+
+
+class _StatusFrames:
+    """Adapt one bounded queue item to the existing multipart pipe framing."""
+
+    def __init__(self, frames=()):
+        self.frames = deque(frames)
+
+    def send_bytes(self, frame):
+        self.frames.append(bytes(frame))
+
+    def recv_bytes(self, limit):
+        frame = self.frames.popleft()
+        if len(frame) > limit:
+            raise ValueError("deck status frame exceeds existing limit")
+        return frame
+
+
+def deck_status_frames(status, ordinary_limit, state_limit):
+    frames = _StatusFrames()
+    send_frame(frames, encode_deck_status(status, ordinary_limit, state_limit), ordinary_limit)
+    return tuple(frames.frames)
+
+
+def receive_deck_status(frames, ordinary_limit):
+    return receive_frame(_StatusFrames(frames), ordinary_limit, native_state=True)

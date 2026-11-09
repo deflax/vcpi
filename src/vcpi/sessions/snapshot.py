@@ -49,15 +49,24 @@ def _snapshot_cached(host: VcpiCore) -> dict:
         }
         if track.source_type == "deck":
             status = track.deck
+            active_state = {
+                "position": status.get("position", status["cue"]),
+                "cue": status["cue"],
+                "pitch": status["pitch"],
+                "sync": status.get("sync", True),
+                "phase_offset": status.get("phase_offset", 0),
+                "play": status.get("play", False),
+            }
+            song_states = {identity: dict(state)
+                           for identity, state in status.get("song_states", {}).items()}
+            song_states[status["track_id"]] = dict(active_state)
             track_entry["deck"] = {
                 "bank_path": status["bank_path"],
                 "bank_id": status["bank_id"],
                 "tracks": [dict(entry) for entry in status["tracks"]],
                 "track_id": status["track_id"],
-                "cue": status["cue"],
-                "pitch": status["pitch"],
-                "sync": status.get("sync", True),
-                "phase_offset": status.get("phase_offset", 0),
+                **active_state,
+                "song_states": song_states,
             }
         elif track.source_type != "wav":
             track_entry["native_state"] = _saved_plugin_state(track.plugin)
@@ -92,6 +101,7 @@ def _snapshot_cached(host: VcpiCore) -> dict:
 
     return {
         "version": 3,
+        "focus": host.track_focus.snapshot()[0] + 1,
         "sample_rate": host.sample_rate,
         "buffer_size": host.buffer_size,
         "bpm": host.timeline.bpm,

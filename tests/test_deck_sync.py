@@ -444,6 +444,55 @@ class NativeDeckSyncTests(unittest.TestCase):
         self.render([deck], 6)
         self.assertLess(abs(plugin.deck_status()["beat_phase_error"]), 0.015)
 
+    def test_switch_retains_outgoing_live_phase_and_restores_incoming_sync_and_pitch(self):
+        songs = {
+            "0": dict(position=1, cue=0.2, pitch=-3, sync=True, phase_offset=0.1, play=True),
+            "1": dict(position=2, cue=0.4, pitch=8, sync=False, phase_offset=-0.2, play=True),
+        }
+        deck = self.deck([self.percussion("remember-synced"), self.percussion("remember-manual", 100)],
+                         song_states=songs)
+        plugin, runner = deck
+        self.clock([deck], 120)
+        self.render([deck], 0.4)
+        plugin.set_parameter("nudge", 1)
+        before = plugin.deck_status()
+        plugin.set_parameter("track_select", 2)
+        deadline = time.monotonic() + 5
+        manual = plugin.deck_status()
+        while manual["loading"]:
+            self.assertLess(time.monotonic(), deadline, manual)
+            block_phase = manual["phase_offset"]
+            runner.render_once()
+            manual = plugin.deck_status()
+            if manual["loading"]:
+                time.sleep(0.001)
+        remembered = manual["song_states"]["0"]
+        # The outgoing ramp continues advancing phase within the commit block.
+        # Saving the last published block's phase would lose that correction.
+        self.assertGreater(remembered["phase_offset"], block_phase)
+        self.assertGreater(remembered["position"], before["position"])
+        self.assertTrue(remembered["play"])
+        self.assertEqual((manual["sync"], manual["sync_active"], manual["pitch"]), (False, False, 8))
+        self.assertAlmostEqual(manual["playback_speed"], 1.08, places=8)
+        self.assertEqual((manual["phase_offset"], manual["nudge"]), (-0.2, 0))
+        start = manual["position"]
+        runner.render_once()
+        self.assertAlmostEqual(plugin.deck_status()["position"] - start,
+                               self.frames / self.rate * 1.08, places=8)
+        plugin.set_parameter("track_select", 1)
+        synced = self.settle_request(deck)
+        self.assertTrue(synced["sync"])
+        self.assertTrue(synced["sync_active"])
+        self.assertTrue(synced["play"])
+        self.assertEqual(synced["pitch"], -3)
+        self.assertEqual(synced["phase_offset"], remembered["phase_offset"])
+        self.assertEqual(synced["nudge"], 0)
+        self.assertGreater(synced["position"], remembered["position"])
+        self.assertEqual(synced["song_states"]["1"]["phase_offset"], -0.2)
+        self.assertFalse(synced["song_states"]["1"]["sync"])
+        self.render([deck], 6)
+        self.assertLess(abs(plugin.deck_status()["beat_phase_error"]), 0.015)
+
     def test_unsupported_sync_ratio_is_explicit_and_manual(self):
         deck = self.deck([self.percussion("unsupported")])
         plugin, _ = deck

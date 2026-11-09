@@ -149,7 +149,7 @@ class DeckOwnerTests(unittest.TestCase):
         self.assertGreater(statuses[0]["position"], 10)
         self.assertAlmostEqual(statuses[0]["position"], statuses[1]["position"], delta=0.012)
 
-    def test_directory_playlist_is_shallow_ordered_and_deduplicated(self):
+    def test_directory_playlist_replacement_resets_songs_and_retains_owner(self):
         engine = self.remote()
         host = VcpiCore.__new__(VcpiCore)
         host.engine = engine
@@ -177,22 +177,28 @@ class DeckOwnerTests(unittest.TestCase):
         self.assertFalse(track.deck["play"])
         selected = track.deck["track_id"]
         owner = (track.worker_pid, track.generation)
-        host.load_deck(0, str(folder / "a.wav"))
-        host.load_deck(0, str(folder))
-        self.assertEqual(engine.tracks[0].deck["tracks"], original)
+        engine.set_parameter(0, "phase_offset", 0.25)
+        engine.set_parameter(0, "pitch", 2)
         engine.set_parameter(0, "play", True)
+        engine.set_track_state(0, gain=0.375, muted=True)
         (folder / "c.wav").write_bytes(self.wav.read_bytes())
         updated = host.load_deck(0, str(folder))
-        self.assertEqual(updated.deck["tracks"][:2], original)
         self.assertEqual([entry["path"] for entry in updated.deck["tracks"]],
                          [str(folder / name) for name in ("a.wav", "b.WAV", "c.wav")])
-        self.assertEqual(updated.deck["track_id"], selected)
+        self.assertNotEqual(updated.deck["track_id"], selected)
+        self.assertTrue({entry["id"] for entry in original}.isdisjoint(
+            entry["id"] for entry in updated.deck["tracks"]))
         self.assertEqual((updated.worker_pid, updated.generation), owner)
-        self.assertTrue(updated.deck["play"])
+        self.assertFalse(updated.deck["play"])
+        self.assertEqual(updated.deck["position"], 0)
+        self.assertEqual(updated.deck["phase_offset"], 0)
+        self.assertEqual(updated.deck["pitch"], 0)
+        self.assertEqual(updated.gain, 0.375)
+        self.assertTrue(updated.muted)
         self.assertEqual(updated.name, "Directory deck")
-        renamed = host.load_deck(0, str(folder), "Renamed")
+        renamed = host.load_deck(0, str(folder / "a.wav"), "Renamed")
         self.assertEqual(renamed.name, "Renamed")
-        self.assertEqual(renamed.deck["tracks"], updated.deck["tracks"])
+        self.assertEqual([entry["path"] for entry in renamed.deck["tracks"]], [str(folder / "a.wav")])
         empty = self.root / "empty"
         empty.mkdir()
         (empty / "notes.txt").write_text("no supported files")
@@ -220,7 +226,7 @@ class DeckOwnerTests(unittest.TestCase):
         worker.request("set_parameter", name="track_select", value=3)
         status = self.await_status(worker, lambda s: s["track_id"] == "3", engine)
         self.assertFalse(status["play"])
-        self.assertEqual(status["pitch"], 2)
+        self.assertEqual(status["pitch"], 0)
         worker.request("set_parameter", name="track_select", value=4)
         status = self.await_status(worker, lambda s: bool(s["error"]), engine)
         self.assertEqual(status["track_id"], "3")

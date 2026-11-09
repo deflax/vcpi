@@ -11,10 +11,15 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unordered_map>
 
 namespace vcpi {
 static_assert(std::atomic<double>::is_always_lock_free && std::atomic<std::uint64_t>::is_always_lock_free,
               "Deck rendering requires lock-free scalar snapshots");
+struct DeckSongState {
+    double position = 0, cue = 0, pitch = 0, phaseOffset = 0;
+    bool sync = true, play = false;
+};
 struct DeckStatus {
     std::string bankId, trackId, trackTitle, requestedTrackId, state, error, syncError;
     int trackSelect = 1, requestedTrackSelect = 1;
@@ -23,6 +28,7 @@ struct DeckStatus {
     double position = 0, duration = 0, cue = 0, pitch = 0, nudge = 0, phaseOffset = 0;
     bool sync = true, syncActive = false;
     double bpm = 0, beatOffset = 0, beatConfidence = 0, playbackSpeed = 1, beatPhaseError = 0;
+    std::unordered_map<std::string, DeckSongState> songStates;
 };
 
 // Readers and ring storage belong to this object until its worker joins.
@@ -51,14 +57,33 @@ private:
     static constexpr int decodeFrames = 4096, history = 200;
     enum State { free, preparing, ready, held, active, retired };
     enum Mode { selection, seek, recall, restore, reanalysis };
+    // Atomic scalars keep concurrent status snapshots race-free. Only the
+    // render owner writes remembered state, at successful selection commits.
+    struct SongMemory {
+        std::atomic<double> position{0}, cue{0}, pitch{0}, phaseOffset{0};
+        std::atomic<bool> sync{true}, play{false};
+        DeckSongState load() const noexcept;
+        void store(const DeckSongState& state) noexcept;
+    };
     struct Track {
         std::string id, path, title;
         std::optional<BeatAnalysis> grid;
         std::shared_ptr<BeatAnalysisCache> gridSource;
+        std::unique_ptr<SongMemory> memory = std::make_unique<SongMemory>();
     };
-    struct Catalog { std::string bank, locator; std::vector<Track> tracks; };
+    struct Catalog {
+        std::string bank, locator;
+        std::vector<Track> tracks;
+        int initialTrack = 1;
+    };
     static Catalog parseCatalog(const juce::var& catalog);
-    struct Request { std::uint64_t id = 0; int track = 1; double seconds = 0; Mode mode = selection; };
+    struct Request {
+        std::uint64_t id = 0;
+        int track = 1;
+        double seconds = 0;
+        Mode mode = selection;
+        DeckSongState song;
+    };
     struct Stream {
         std::atomic<int> state{free};
         Request request;
@@ -77,7 +102,8 @@ private:
     bool analyze(Stream& stream, BeatAnalysis& grid);
     void publishGrid(const Stream& stream) noexcept;
     void work() noexcept;
-    void commit(int index, double& phase) noexcept;
+    void rememberSong(double phase) noexcept;
+    void commit(int index, double& phase, bool rememberOutgoing = true) noexcept;
     void retirePending() noexcept;
     void setError(std::uint64_t id, const std::string& error);
     bool cancelled(std::uint64_t id) const noexcept;

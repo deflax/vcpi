@@ -81,6 +81,19 @@ py::dict deckDict(const DeckStatus& info) {
     result["playback_speed"] = info.playbackSpeed;
     result["beat_phase_error"] = info.beatPhaseError;
     result["error"] = info.error;
+    py::dict songs;
+    for (const auto& entry : info.songStates) {
+        const auto& state = entry.second;
+        py::dict song;
+        song["position"] = state.position;
+        song["cue"] = state.cue;
+        song["pitch"] = state.pitch;
+        song["sync"] = state.sync;
+        song["phase_offset"] = state.phaseOffset;
+        song["play"] = state.play;
+        songs[py::str(entry.first)] = std::move(song);
+    }
+    result["song_states"] = std::move(songs);
     return result;
 }
 py::dict realtimeDict(const RealtimeStats& info) {

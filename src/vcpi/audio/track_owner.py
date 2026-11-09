@@ -11,7 +11,7 @@ import time
 from multiprocessing.connection import wait as wait_connections
 
 from vcpi.audio_state import capture_plugin
-from vcpi.deck_bank import encode_deck_message
+from vcpi.deck_bank import deck_status_frames, encode_deck_message
 from vcpi.logging_setup import configure_logging, set_log_level
 from vcpi.native_output import native_output
 from vcpi.state_transport import (
@@ -237,7 +237,7 @@ def _run_track_owner(sample_rate, frames, index, operation, arguments,
                 # A single pending snapshot bounds memory and never stalls DSP
                 # or control if the output owner is busy staging another source.
                 try:
-                    status.put_nowait(_encode(current, CONTROL_LIMIT))
+                    status.put_nowait(deck_status_frames(current, CONTROL_LIMIT, STATE_LIMIT))
                 except queue.Full:
                     pass
             if not control.poll(0.05):

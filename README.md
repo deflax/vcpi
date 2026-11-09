@@ -122,16 +122,17 @@ missing track blocks as well as output timing and underruns. See
 platform-specific states and Linux permissions.
 
 Sessions save native VST3 state chunks for instruments, track inserts, and master
-effects; WAV tracks remain path-based, while decks embed their playlists, selected
-song identity, cue, pitch, sync mode and phase correction and restore paused. See [session commands](USAGE.md#session-commands)
+effects; WAV tracks remain path-based. Sessions save track focus, while decks embed
+their playlists and each song's position, play/pause, cue, pitch, sync and phase
+correction. Playing decks resume when audio starts. See [session commands](USAGE.md#session-commands)
 for save/restore behavior and legacy session compatibility.
 
 Native decks stream mono/stereo AIFF, WAV, MP3 and FLAC tracks from session-owned
 playlists. Load an audio file with `track 1 deck song.wav`, or a directory with
-`track 1 deck "/music/Live Set"` to add its supported audio files in filename
-order without scanning subdirectories. Repeat either command to append new files;
-already-listed resolved paths are skipped. Use `track 1 deck remove <index>` to
-remove a song. Queen Mary DSP analyzes the whole selected file for tempo and a stable beat grid; decks
+`track 1 deck "/music/Live Set"` to load its supported audio files in filename
+order without scanning subdirectories. Repeat either command to replace the
+whole playlist and reset song memory; mixer, routing and inserts are retained.
+Use `track 1 deck remove <index>` to remove a song. Queen Mary DSP analyzes the whole selected file for tempo and a stable beat grid; decks
 follow the shared musical timeline's tempo and beat phase by default.
 Same-tempo regions that switch to offbeat accents can support analysis through
 an explicit half-beat alternative without doubling BPM. The output retains one
@@ -541,8 +542,7 @@ Patches use the same working-directory/checkout rule for `assets/patches`, unles
 For continuous deck playback instead of MIDI-triggered sample voices:
 
 ```text
-vcpi> track 1 deck /music/opening.wav --name Deck-A
-vcpi> track 1 deck /music/second.flac
+vcpi> track 1 deck "/music/Live Set" --name Deck-A
 vcpi> track 2 deck /music/other.mp3 --name Deck-B
 vcpi> tempo 120
 vcpi> audio start
@@ -551,10 +551,11 @@ vcpi> set 2 play true
 vcpi> show 2
 ```
 
-Both decks initially load paused; the second command appends to Deck A without
-changing its selected song. Select playlist entries with `set 1 track_select 2`;
-selection is asynchronous and commits paused without
-replacing the worker or inserts. Inspect `show 1` for compact operational info,
+Both decks initially load paused. Select playlist entries with
+`set 1 track_select 2`; switching is asynchronous and restores each song's
+remembered position, play/pause and calibration without replacing the worker or
+inserts. Repeating `track 1 deck <path>` replaces the list and resets that memory.
+Inspect `show 1` for compact operational info,
 including errors. Detected BPM is the song's analyzed tempo, distinct from the
 shared/global tempo; pending or missing analysis reads analyzing/unavailable,
 not 0. Use `show 1 --details` for requested versus applied selection, confidence,

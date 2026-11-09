@@ -371,7 +371,7 @@ hardware or empty plugin/effect lists may also yield no choices.
 |---|---|
 | `track <track> vst <path\|vst_name> [--name <label>]` | Load VST instrument into track |
 | `track <track> wav <pack> <sample> [--name <label>]` | Load `assets/samples/<pack>/<sample>.wav` as one-shot sampler into track |
-| `track <track> deck <audio-file\|directory> [--name <label>]` | Create a paused streaming deck, or append a file or directory's audio files to its session-owned playlist |
+| `track <track> deck <audio-file\|directory> [--name <label>]` | Replace the session-owned playlist and reset its song memory, initially paused |
 | `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `assets/patches/<patch_name>.vcv` |
 | `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `assets/patches/` or an absolute path |
 | `track <track\|master> fx <path\|vst_name> [--name <label>]` | Load effect into track insert chain or master bus |
@@ -501,7 +501,7 @@ mapping source-plugin and insert-effect controls; rotary 1 controls track gain.
 Focus belongs to the application and is shared by the CLI and controllers.
 It starts at track 1, accepts empty tracks, and does not change MIDI routing,
 playback, song selection or transport. Invalid or excess arguments leave focus
-unchanged. Focus is runtime-only and is not saved or restored with sessions.
+unchanged. Focus is saved and restored with sessions; older sessions default to track 1.
 
 ### Deck Commands
 
@@ -512,8 +512,7 @@ Play/pause is still controlled per deck, independently of global transport
 start/stop. Create up to sixteen ordinary mixer tracks:
 
 ```text
-track 1 deck /music/opening.wav --name Deck-A
-track 1 deck /music/second.flac
+track 1 deck "/music/Live Set" --name Deck-A
 track 2 deck /music/other.mp3 --name Deck-B
 tempo 120
 audio start
@@ -522,18 +521,22 @@ set 2 play true
 ```
 
 Each deck owns an ordered playlist saved inside the session; no separate JSON
-bank file is required. The first audio-file or directory command creates a paused
-deck. Repeating it appends new songs without replacing the deck, interrupting the
-selected song, or losing mixer settings, routing or inserts. An existing name
-is preserved unless `--name` is supplied.
+bank file is required. `track <n> deck <path>` replaces the entire playlist and
+resets its remembered song state, even when loading the same path again. It
+retains the track's mixer settings, routing, inserts and existing name unless
+`--name` is supplied. A new list starts on its first song, paused at zero.
 
-Use `track 1 deck "/music/Live Set"` to add a directory's supported WAV, AIFF,
+Use `track 1 deck "/music/Live Set"` to load a directory's supported WAV, AIFF,
 MP3 and FLAC files in filename order. Subdirectories and unsupported files are
-ignored; a directory with no supported audio files reports an error. Paths already
-in the playlist are skipped, including symlinks resolving to the same file.
-Loading the same file or directory again does not duplicate entries; rescanning
-a directory appends only newly discovered paths. Existing song IDs and playlist
-order are retained.
+ignored; a directory with no supported audio files reports an error. Symlinks
+resolving to the same file produce only one entry within the new list.
+
+Each song independently remembers position, play/pause, cue, pitch, sync and
+phase correction. Switching away captures its state; switching back resumes
+that remembered state. Unvisited songs start paused at zero with default
+settings. Beat detection uses the source-validated analysis cache, so returning
+to a song retains its detected BPM/grid without sharing another song's phase
+correction. Momentary nudge is reset, not remembered. Looping is not implemented.
 
 ```text
 show 1 --details
@@ -545,7 +548,7 @@ save live-set
 `show 1 --details` lists song titles, paths and 1-based selection indexes. Removing an
 unselected song preserves playback; indexes close up around the removed entry.
 Removing the selected song prepares the next song at that index (or the previous
-song when removing the last entry), paused at zero. The final song cannot be
+song when removing the last entry), using that song's remembered state. The final song cannot be
 removed individually: use `track 1 clear` to remove the deck.
 
 Audio paths are expanded and saved as absolute paths. Stable song IDs preserve
@@ -574,7 +577,7 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 | `show 1 --details` | Full cached deck diagnostics, requested versus applied selection, detected grid and indexed playlist paths |
 | `track 1 deck reanalyze` | Pause at the current position, discard this song's cached grid and run detection again |
 | `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
-| `track 1 deck <audio-file> [--name <label>]` | Append a song, or create a paused one-song deck |
+| `track 1 deck <audio-file|directory> [--name <label>]` | Replace the playlist, resetting its song memory; retain mixer, routing and inserts |
 | `track 1 deck remove 2` | Remove playlist entry 2; final-entry removal requires `track 1 clear` |
 | `set 1 seek 90` | Seek in source seconds, retaining play state; range follows selected song duration |
 | `set 1 play true` / `set 1 play false` | Resume / pause, preserving source position |
@@ -781,8 +784,9 @@ track 1 deck phase reset
 shared analysis cache. Its range is -0.5..+0.5 beats, and continued nudging wraps
 at half a beat. This adjusts beat phase, not bar/downbeat position. Direct setting
 or resetting changes the target without seeking; active sync realigns smoothly.
-The correction survives pause, seek, cue recall, reanalysis, sync/tempo changes
-and session save/restore, but a different song selection starts at zero.
+The correction survives pause, seek, cue recall, reanalysis, sync/tempo changes,
+song switching and session save/restore. Each song has its own correction;
+replacing the whole playlist resets it.
 
 When sync is off or unavailable, pitch and temporary ±2% speed nudge work as
 before; the stored phase correction is retained but ignored. For manual beatmatching:
@@ -796,9 +800,10 @@ set 1 nudge 0
 
 Manual pitch and nudge are smoothed; pitch changes pitch as well as speed.
 Selections/seek prepare outside rendering; the old track remains usable until an
-audio-side commit. Successful selection fades out, resets cue/position to zero,
-clears nudge and phase correction and pauses, retaining pitch, mixer, routing
-and inserts. Newest selection wins; selecting the active entry cancels a pending
+audio-side commit. Successful selection fades out and restores the selected
+song's remembered position, play state, cue, pitch, sync and phase correction;
+momentary nudge is cleared. Mixer, routing and inserts are retained. Newest
+selection wins; selecting the active entry cancels a pending
 selection. A failed load keeps current playback and reports the requested identity and error.
 
 Mute continues transport. Stopping output freezes position without changing the
@@ -1174,8 +1179,8 @@ Avoid overlapping channel/message assignments: software cannot distinguish them.
 
 All rotaries follow the application's shared focused track, initially track 1.
 The `focus [1-16]` command and CONTROL step buttons read or select the same
-application-owned state; focus is not a controller property and is not persisted
-in sessions. Step buttons select focus only: they never change MIDI routing,
+application-owned state; focus is saved with sessions, not owned by a controller.
+Step buttons select focus only: they never change MIDI routing,
 playback, song selection or global transport. Empty tracks are selectable,
 but their rotaries and performance pads make no changes.
 
@@ -1221,7 +1226,7 @@ stepping through banks.
 
 Song selection is immediate, without a confirmation button: rotary 9 requests
 the selected playlist entry asynchronously. Accepted requests do not immediately
-pause playback; a successful commit switches songs and pauses at cue. A failed
+pause playback; a successful commit restores the chosen song's remembered state. A failed
 load leaves the current song playing, and the newest selection wins.
 
 | Performance pad | Default note | Focused deck action |
@@ -1365,6 +1370,7 @@ by explicit `save`.
 Saved/restored session state includes:
 
 - Per-track instruments, native VST3 state, effects, gain, mute/solo
+- Shared track focus (1–16)
 - Native master-effect state and master gain
 - MIDI channel routing
 - BPM, timing-source selection and Ableton Link enabled state (not live position/transport)
@@ -1380,14 +1386,17 @@ retaining its original location for resolving external files. Abstractions and
 sample files must remain installed separately.
 Decks instead store an explicit `deck` payload containing the full ordered
 `tracks` list (stable ID, absolute audio path and title), playlist identity,
-committed stable `track_id`, `cue` seconds, `pitch`, boolean `sync` and
-`phase_offset` in beats. They do not store a VST3 chunk for the source; insert
-chunks are preserved normally. Restore needs no external playlist manifest: it
-resolves the saved selection, prepares
-at cue paused, sets nudge to zero and reanalyzes the selected audio.
+committed stable `track_id`, and `song_states` keyed by song ID. Every song's
+state contains position and cue in source seconds, play/pause, pitch, sync and
+phase correction in beats. Active-song fields are also recorded at the top level.
+They do not store a VST3 chunk for the source; insert chunks are preserved normally.
+Restore prepares the selected song at its saved position and restores its play
+flag: saved playing decks become audible when audio output starts. Nudge resets
+to zero; derived BPM/grid data uses the source-validated analysis cache.
 Legacy bank-based deck sessions are still readable; their manifests are resolved
 on restore and subsequent saves embed the playlist. Older payloads without
-`sync` default to automatic sync; missing `phase_offset` defaults to zero.
+position/play restore paused at cue, missing `sync` means true, and missing
+`phase_offset` means zero.
 Missing audio, IDs or legacy banks are reported per track; unaffected tracks
 continue restoring. A pending selection is never persisted in place of the committed track.
 

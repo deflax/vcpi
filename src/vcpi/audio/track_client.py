@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
-import pickle
 import queue
 import tempfile
 import threading
 import time
 
 from vcpi.audio_state import apply_deck_status
-from vcpi.deck_bank import encode_deck_message
+from vcpi.deck_bank import encode_deck_message, receive_deck_status
 from vcpi.models import InstrumentTrack, NUM_TRACKS
 from vcpi.native_output import output_destination
 from vcpi.state_transport import encode_native_message, receive_frame, send_frame
@@ -216,7 +215,7 @@ class TrackWorker:
         latest = None
         try:
             while True:
-                latest = pickle.loads(self._status.get_nowait())
+                latest = receive_deck_status(self._status.get_nowait(), CONTROL_LIMIT)
         except queue.Empty:
             pass
         if (latest is not None

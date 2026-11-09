@@ -5,7 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from vcpi.deck_bank import CATALOG_LIMIT, audio_entry, encode_deck_message, load_bank, make_catalog
+from vcpi.deck_bank import (
+    CATALOG_LIMIT, audio_entry, deck_status_frames, encode_deck_message,
+    encode_deck_update, load_bank, make_catalog, receive_deck_status,
+)
 from vcpi.state_transport import receive_frame, send_frame
 
 
@@ -151,3 +154,50 @@ class DeckBankTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exceeds"):
             encode_deck_message({"operation": "update_deck_catalog", "arguments": {
                 "catalog": "x" * (CATALOG_LIMIT + 1)}}, 65536)
+
+    def test_song_state_precedence_and_legacy_transport_defaults(self):
+        self.bank()
+        legacy = json.loads(load_bank(self.path, cue=0.25))
+        self.assertEqual(legacy["position"], 0.25)
+        self.assertFalse(legacy["play"])
+        state = {"position": 1.25, "cue": 0.5, "pitch": -2, "sync": False,
+                 "phase_offset": -0.25, "play": True}
+        catalog = json.loads(load_bank(self.path, cue=0.75, position=0.8,
+                                      song_states={"first": state}))
+        self.assertEqual(catalog["song_states"], {"first": state})
+        self.assertEqual({key: catalog[key] for key in state}, state)
+        explicit = json.loads(load_bank(self.path, cue=0.25, position=1, play=True))
+        self.assertEqual(explicit["position"], 1)
+        self.assertTrue(explicit["play"])
+
+    def test_invalid_song_states_and_transport_values(self):
+        self.bank()
+        state = {"position": 1, "cue": 0.5, "pitch": -2, "sync": False,
+                 "phase_offset": -0.25, "play": True}
+        for fields in ({"position": -1}, {"position": float("nan")},
+                       {"position": float("inf")}, {"play": 1}, {"play": "true"},
+                       {"song_states": []}, {"song_states": {"removed": state}},
+                       {"song_states": {"first": {}}}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                load_bank(self.path, **fields)
+        for field, value in (("position", -1), ("cue", -1), ("pitch", 17),
+                             ("phase_offset", 0.51), ("sync", 1), ("play", "false")):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                load_bank(self.path, song_states={"first": {**state, field: value}})
+
+    def test_full_status_map_uses_bounded_multipart_without_enlarging_metadata(self):
+        state = {"position": 1.25, "cue": 0.5, "pitch": -2.0, "sync": False,
+                 "phase_offset": -0.25, "play": True}
+        status = {"track_id": "0", "song_states": {
+            str(index): dict(state) for index in range(2000)}}
+        frames = deck_status_frames(status, 65536, 16 * 1024 * 1024)
+        self.assertGreater(len(frames), 1)
+        self.assertTrue(all(len(frame) <= 65536 for frame in frames))
+        self.assertEqual(receive_deck_status(frames, 65536), status)
+        message = ("updates", 1, 2, [("deck", 0, 1, status)])
+        self.assertGreater(len(encode_deck_update(message, 65536, 16 * 1024 * 1024)), 65536)
+        with self.assertRaisesRegex(BufferError, "metadata"):
+            deck_status_frames({**status, "title": "x" * 65536}, 65536, 16 * 1024 * 1024)
+        with self.assertRaisesRegex(BufferError, "ordinary"):
+            encode_deck_update(("updates", 1, 2, [("other", "x" * 65536)]),
+                               65536, 16 * 1024 * 1024)

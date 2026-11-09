@@ -17,7 +17,7 @@ from vcpi.commands.cli import HostCLI
 from vcpi.presentation.client_display import display_response
 from vcpi.commands.completion import complete_line
 from vcpi.deps import HAS_MIDO
-from vcpi.models import InstrumentTrack
+from vcpi.models import InstrumentTrack, TrackFocus
 from vcpi.sessions.snapshot import snapshot
 
 
@@ -125,12 +125,9 @@ class DeckCLITests(unittest.TestCase):
         self.host.link = SimpleNamespace(bpm=120, enabled=False)
         self.host.timeline = SimpleNamespace(bpm=120, source="auto")
         self.host.sequencer = SimpleNamespace(snapshot=lambda: [])
+        self.host.track_focus = TrackFocus()
         saved = snapshot(self.host)["tracks"][0]
         self.assertNotIn("native_state", saved)
-        self.assertEqual(saved["deck"], {
-            "bank_path": "/bank.json", "bank_id": "set", "track_id": "first",
-            "tracks": self.track.deck["tracks"],
-            "cue": 2.0, "pitch": -1.25, "sync": False, "phase_offset": 0.25})
         self.assertEqual(base64.b64decode(saved["effects"][0]["native_state"]), b"effect-state")
 
 

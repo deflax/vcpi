@@ -254,7 +254,7 @@ class RemoteAudioEngine:
     def _read_updates(self):
         try:
             while True:
-                message = pickle.loads(self._updates.recv_bytes(UPDATE_LIMIT))
+                message = receive_frame(self._updates, UPDATE_LIMIT, native_state=True)
                 if message[0] == "failure":
                     self._fail(f"audio owner failed: {message[1]}", terminate=True)
                     return

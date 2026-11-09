@@ -235,7 +235,7 @@ class VcpiCore:
 
     def load_deck(self, track_index: int, audio_path: str,
                   name: Optional[str] = None) -> InstrumentTrack:
-        """Create a paused playlist or append without replacing its audio owner."""
+        """Replace the playlist and its song memory, retaining mixer and inserts."""
         from uuid import uuid4
         from vcpi.deck_bank import AUDIO_SUFFIXES, audio_entry, make_catalog
 
@@ -252,25 +252,19 @@ class VcpiCore:
                 raise ValueError(f"no supported deck audio files in directory: {path}")
         else:
             paths = [path]
-        track = self.engine.tracks[track_index]
-        existing = track.deck["tracks"] if track is not None and track.source_type == "deck" else []
-        seen = {entry["path"] for entry in existing}
-        entries = []
+        entries, seen = [], set()
         for candidate in paths:
             resolved = str(candidate.resolve())
             if resolved not in seen:
                 entries.append(audio_entry(candidate))
                 seen.add(resolved)
-        if existing:
-            if not entries and name is None:
-                return self._loaded_track(track_index)
-            catalog = make_catalog(track.deck["bank_id"], [*existing, *entries],
-                                   bank_path=track.deck["bank_path"])
+        catalog = make_catalog(uuid4().hex, entries)
+        track = self.engine.tracks[track_index]
+        self._clear_deck_holds(track_index=track_index)
+        if track is not None and track.source_type == "deck":
             self.engine.request("update_deck_catalog", track_index=track_index,
                                 catalog=catalog, name=name)
         else:
-            catalog = make_catalog(uuid4().hex, entries)
-            self._clear_deck_holds(track_index=track_index)
             self.engine.request("load_deck", track_index=track_index, catalog=catalog,
                                 name=name if name is not None else entries[0]["title"])
         return self._loaded_track(track_index)
@@ -304,7 +298,9 @@ class VcpiCore:
                 raise ValueError(f"deck {key} is required")
         settings = dict(track_id=deck["track_id"], cue=deck["cue"],
                         pitch=deck["pitch"], sync=deck.get("sync", True),
-                        phase_offset=deck.get("phase_offset", 0))
+                        phase_offset=deck.get("phase_offset", 0),
+                        position=deck.get("position", deck["cue"]),
+                        play=deck.get("play", False), song_states=deck.get("song_states"))
         if "tracks" in deck:
             catalog = make_catalog(deck["bank_id"], deck["tracks"],
                                    bank_path=deck.get("bank_path"), **settings)

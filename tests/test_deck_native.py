@@ -116,6 +116,72 @@ class NativeDeckTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "explicit session"):
             plugin.load_state(b"not-a-plugin-state")
 
+    def test_song_switch_restores_independent_state_and_resumes_playback(self):
+        paths = [self.tone("first", seconds=8), self.tone("second", seconds=8)]
+        plugin, runner, _ = self.deck(paths, cue=0.25, pitch=4, sync=False, phase_offset=0.2)
+        plugin.set_parameter("seek", 0.75)
+        self.await_state(plugin, runner, lambda s: not s["loading"])
+        plugin.set_parameter("play", True)
+        self.render(runner, 3)
+        plugin.set_parameter("nudge", 1)
+        plugin.set_parameter("track_select", 2)
+        pending = plugin.deck_status()
+        self.assertEqual(pending["track_id"], "track-1")
+        self.assertEqual(pending["song_states"]["track-1"]["position"], pending["position"])
+        self.assertTrue(pending["song_states"]["track-1"]["play"])
+        second = self.await_state(plugin, runner, lambda s: not s["loading"])
+        defaults = dict(position=0, cue=0, pitch=0, sync=True, phase_offset=0, play=False)
+        self.assertEqual(second["song_states"]["track-2"], defaults)
+        first_memory = second["song_states"]["track-1"]
+        self.assertGreater(first_memory["position"], 0.75)
+        self.assertEqual(first_memory["cue"], 0.25)
+        plugin.set_parameter("seek", 1.25)
+        self.await_state(plugin, runner, lambda s: not s["loading"])
+        plugin.deck_command("cue_set")
+        plugin.set_parameter("pitch", -7)
+        plugin.set_parameter("phase_offset", -0.3)
+        second_memory = plugin.deck_status()["song_states"]["track-2"]
+        plugin.set_parameter("track_select", 1)
+        first = self.await_state(plugin, runner, lambda s: not s["loading"])
+        for key in ("cue", "pitch", "sync", "phase_offset", "play"):
+            self.assertEqual(first[key], first_memory[key], key)
+        self.assertGreater(first["position"], first_memory["position"])
+        self.assertLess(first["position"] - first_memory["position"], 0.02)
+        self.assertEqual(first["nudge"], 0)
+        self.assertEqual(first["song_states"]["track-2"], second_memory)
+        self.assertGreater(np.max(np.abs(runner.render_once())), 0.1)
+        plugin.set_parameter("track_select", 2)
+        second = self.await_state(plugin, runner, lambda s: not s["loading"])
+        self.assertEqual(second["song_states"]["track-2"], second_memory)
+        self.assertFalse(second["play"])
+        np.testing.assert_array_equal(runner.render_once(), 0)
+
+    def test_catalog_song_states_override_legacy_fields_and_round_trip(self):
+        paths = [self.tone("first", seconds=8), self.tone("second", seconds=8)]
+        songs = {
+            "track-1": dict(position=1.5, cue=0.25, pitch=-4, sync=False, phase_offset=0.3, play=True),
+            "track-2": dict(position=2.5, cue=0.5, pitch=7, sync=True, phase_offset=-0.2, play=False),
+        }
+        plugin, runner, _ = self.deck(paths, song_states=songs, position=0.1, cue=0.1,
+                                      pitch=12, sync=True, phase_offset=0, play=False)
+        self.assertEqual(plugin.deck_status()["song_states"], songs)
+        self.assertEqual(plugin.deck_status()["position"], 1.5)
+        self.assertTrue(plugin.deck_status()["play"])
+        plugin.set_parameter("track_select", 2)
+        saved = self.await_state(plugin, runner, lambda s: not s["loading"])
+        self.assertEqual(saved["song_states"]["track-2"], songs["track-2"])
+        restored, restored_runner, _ = self.deck(paths, initial_track=2, song_states=saved["song_states"])
+        self.assertEqual(restored.deck_status()["song_states"], saved["song_states"])
+        restored.set_parameter("track_select", 1)
+        status = self.await_state(restored, restored_runner, lambda s: not s["loading"])
+        self.assertTrue(status["play"])
+        self.assertGreater(status["position"], saved["song_states"]["track-1"]["position"])
+        self.assertEqual((status["cue"], status["pitch"], status["sync"], status["phase_offset"]),
+                         (0.25, -4, False, 0.3))
+        legacy, _, _ = self.deck(paths, position=0.75, cue=0.25, play=True)
+        self.assertEqual((legacy.deck_status()["position"], legacy.deck_status()["cue"],
+                          legacy.deck_status()["play"]), (0.75, 0.25, True))
+
     def test_seek_parameter_order_normalization_and_live_duration(self):
         paths = [self.tone("short", seconds=2), self.tone("long", seconds=5)]
         plugin, runner, _ = self.deck(paths, cue=0.5)
@@ -196,7 +262,7 @@ class NativeDeckTests(unittest.TestCase):
         self.assertEqual((status["position"], status["cue"], status["play"], status["nudge"]),
                          (0, 0, False, 0))
         self.assertEqual(status["phase_offset"], 0)
-        self.assertEqual((status["pitch"], status["sync"], status["duration"]), (3, False, 6))
+        self.assertEqual((status["pitch"], status["sync"], status["duration"]), (0, True, 6))
         self.assertFalse(status["loading"])
         np.testing.assert_array_equal(runner.render_once(), 0)
         plugin.set_parameter("play", True)
@@ -208,6 +274,57 @@ class NativeDeckTests(unittest.TestCase):
                          ("track-1", 1, 0, False))
         self.assertEqual(status["phase_offset"], 0)
         self.assertEqual(plugin.parameter("seek")["range"], (0, 2))
+
+    def test_removal_restores_remembered_successor_and_new_bank_resets_memory(self):
+        paths = [self.tone("first"), self.tone("middle"), self.tone("last")]
+        songs = {
+            "track-1": dict(position=0.8, cue=0.2, pitch=2, sync=False, phase_offset=0.1, play=False),
+            "track-3": dict(position=1.2, cue=0.4, pitch=-3, sync=False, phase_offset=-0.2, play=True),
+        }
+        plugin, runner, _ = self.deck(paths, initial_track=2, song_states=songs)
+        # Removing ordinal two keeps ordinal one and restores old ordinal three,
+        # rather than looking up the outgoing index in the shortened catalog.
+        plugin.update_deck_catalog(self.catalog([paths[0], paths[2]], ids=[1, 3]))
+        status = plugin.deck_status()
+        self.assertEqual(status["track_id"], "track-3")
+        self.assertEqual(status["song_states"], songs)
+        self.assertTrue(status["play"])
+        self.assertGreater(np.max(np.abs(runner.render_once())), 0.1)
+        plugin.update_deck_catalog(self.catalog(paths[:1]))
+        self.assertEqual(plugin.deck_status()["song_states"], {"track-1": songs["track-1"]})
+        replacement = json.loads(self.catalog(paths[:1]))
+        replacement["id"] = "replacement-bank"
+        plugin.update_deck_catalog(json.dumps(replacement))
+        self.assertEqual(plugin.deck_status()["song_states"], {
+            "track-1": dict(position=0, cue=0, pitch=0, sync=True, phase_offset=0, play=False)})
+
+    def test_new_bank_selects_initial_track_and_failed_replacement_keeps_old_memory(self):
+        paths = [self.tone("bank-first"), self.tone("bank-second")]
+        plugin, _, _ = self.deck(paths, initial_track=2, position=0.8, cue=0.3,
+                                  pitch=-4, sync=False, phase_offset=0.2, play=True)
+        before = plugin.deck_status()
+        replacement = json.loads(self.catalog([self.root / "missing.wav"]))
+        replacement["id"] = "new-bank"
+        with self.assertRaises((ValueError, RuntimeError)):
+            plugin.update_deck_catalog(json.dumps(replacement))
+        after = plugin.deck_status()
+        self.assertEqual(after["bank_id"], before["bank_id"])
+        self.assertEqual(after["track_id"], before["track_id"])
+        self.assertEqual(after["song_states"], before["song_states"])
+        replacement = json.loads(self.catalog(paths))
+        replacement["id"] = "new-bank"
+        plugin.update_deck_catalog(json.dumps(replacement))
+        fresh = plugin.deck_status()
+        self.assertEqual((fresh["track_select"], fresh["position"], fresh["play"]), (1, 0, False))
+        default = dict(position=0, cue=0, pitch=0, sync=True, phase_offset=0, play=False)
+        self.assertEqual(fresh["song_states"], {"track-1": default, "track-2": default})
+        replacement.update(id="restored-bank", initial_track=2, position=1.1, cue=0.4,
+                           pitch=6, sync=False, phase_offset=-0.1, play=True)
+        plugin.update_deck_catalog(json.dumps(replacement))
+        restored = plugin.deck_status()
+        self.assertEqual(restored["track_select"], 2)
+        self.assertEqual(restored["song_states"]["track-2"],
+                         dict(position=1.1, cue=0.4, pitch=6, sync=False, phase_offset=-0.1, play=True))
 
     def test_playlist_edit_cancels_pending_selection_and_seek(self):
         paths = [self.tone("active"), self.tone("pending", rate=96000)]
@@ -245,6 +362,7 @@ class NativeDeckTests(unittest.TestCase):
             status = plugin.deck_status()
             self.assertEqual((status["track_id"], status["position"], status["play"]),
                              (before["track_id"], before["position"], True))
+            self.assertEqual(status["song_states"], before["song_states"])
             self.assertEqual(plugin.parameter("track_select")["range"], (1, 2))
         self.assertGreater(np.max(np.abs(runner.render_once())), 0.1)
         plugin.update_deck_catalog(self.catalog(paths[:1]))
@@ -429,12 +547,15 @@ class NativeDeckTests(unittest.TestCase):
         status = self.await_state(plugin, runner, lambda s: not s["loading"])
         self.assertEqual((status["track_id"], status["requested_track_id"]), ("track-3", "track-3"))
         self.assertEqual((status["play"], status["position"], status["cue"], status["pitch"], status["nudge"]),
-                         (False, 0, 0, -2, 0))
+                         (False, 0, 0, 0, 0))
         self.assertEqual(status["phase_offset"], 0)
+        self.assertEqual(status["song_states"]["track-2"],
+                         dict(position=0, cue=0, pitch=0, sync=True, phase_offset=0, play=False))
         plugin.set_parameter("phase_offset", 0.3)
         plugin.set_parameter("play", True)
         self.render(runner, 2)
         before = plugin.deck_status()["position"]
+        remembered = plugin.deck_status()["song_states"]
         plugin.set_parameter("track_select", 4)
         status = self.await_state(plugin, runner, lambda s: bool(s["error"]))
         self.assertEqual(status["track_id"], "track-3")
@@ -442,6 +563,8 @@ class NativeDeckTests(unittest.TestCase):
         self.assertTrue(status["play"])
         self.assertEqual(status["phase_offset"], 0.3)
         self.assertGreaterEqual(status["position"], before)
+        for track in ("track-1", "track-2", "track-4"):
+            self.assertEqual(status["song_states"][track], remembered[track])
         plugin.set_parameter("track_select", 2)
         plugin.set_parameter("track_select", 3)
         status = self.await_state(plugin, runner, lambda s: not s["loading"])
@@ -450,6 +573,7 @@ class NativeDeckTests(unittest.TestCase):
         self.assertTrue(plugin.deck_status()["play"])
         self.assertEqual(status["error"], "")
         self.assertEqual(plugin.deck_status()["phase_offset"], 0.3)
+        self.assertEqual(plugin.deck_status()["song_states"]["track-2"], remembered["track-2"])
 
     def test_cd_audio_preserves_treble_at_unity_speed(self):
         for output_rate in (44100, 48000):

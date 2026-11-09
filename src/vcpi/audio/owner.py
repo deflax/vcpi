@@ -10,7 +10,7 @@ import time
 from collections import deque
 
 from vcpi.audio_state import apply_deck_status, capture_state
-from vcpi.deck_bank import encode_deck_message
+from vcpi.deck_bank import encode_deck_message, encode_deck_update
 from vcpi.logging_setup import configure_logging, set_log_level
 from vcpi.models import NUM_TRACKS
 from vcpi.native_output import native_output
@@ -158,12 +158,14 @@ class _OwnerRuntime:
                     data = _encode(("updates", self.epoch, serial, current), UPDATE_LIMIT)
                 except BufferError:
                     if len(current) == 1:
-                        raise
-                    middle = len(current) // 2
-                    batches.appendleft(current[middle:])
-                    batches.appendleft(current[:middle])
-                    continue
-                self.updates.send_bytes(data)
+                        data = encode_deck_update(
+                            ("updates", self.epoch, serial, current), UPDATE_LIMIT, STATE_LIMIT)
+                    else:
+                        middle = len(current) // 2
+                        batches.appendleft(current[middle:])
+                        batches.appendleft(current[:middle])
+                        continue
+                send_frame(self.updates, data, UPDATE_LIMIT)
                 self._cache_master_updates(current)
                 self.update_serial = serial
 
