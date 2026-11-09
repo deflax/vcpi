@@ -367,9 +367,6 @@ class DeckSessionTests(unittest.TestCase):
             self.assertEqual(len(track.deck["tracks"]), 1)
             self.assertEqual(track.plugin.parameters["track_select"].range, (1, 1))
             self.assertEqual(list(track.plugin.parameters)[:3], ["track_select", "seek", "nudge"])
-            self.assertIn("Error:", command("track 1 deck remove 2"))
-            self.assertFalse(host.engine.tracks[0].deck["play"])
-            self.assertIn("track 1 clear", command("track 1 deck remove 1"))
             self.assertNotIn("Error:", command(f'track 1 deck "{self.root}" --name Renamed'))
             first_id = host.engine.tracks[0].deck["track_id"]
             self.assertEqual(host.engine.tracks[0].name, "Renamed")
@@ -388,11 +385,8 @@ class DeckSessionTests(unittest.TestCase):
             selected = host.engine.tracks[0].deck["tracks"][1]["id"]
             status = self.await_status(host, 0, lambda state: state.get("requested_track_id") == selected)
             self.assertEqual(status["track_id"], first_id)
-            self.assertNotIn("Error:", command("track 1 deck remove 1"))
-            status = self.await_status(host, 0, lambda state: state.get("track_id") == selected)
-            self.assertFalse(status["play"])
-            self.assertEqual(status["position"], 0)
-            self.assertEqual(host.engine.tracks[0].plugin.parameters["track_select"].range, (1, 1))
+            self.assertNotIn("Error:", command("track 1 clear"))
+            self.assertIsNone(host.engine.tracks[0])
         finally:
             sock.shutdown(socket.SHUT_RDWR)
             writer.close()

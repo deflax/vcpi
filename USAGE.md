@@ -541,15 +541,12 @@ correction. Momentary nudge is reset, not remembered. Looping is not implemented
 ```text
 show 1 --details
 set 1 track_select 2
-track 1 deck remove 1
 save live-set
 ```
 
-`show 1 --details` lists song titles, paths and 1-based selection indexes. Removing an
-unselected song preserves playback; indexes close up around the removed entry.
-Removing the selected song prepares the next song at that index (or the previous
-song when removing the last entry), using that song's remembered state. The final song cannot be
-removed individually: use `track 1 clear` to remove the deck.
+`show 1 --details` lists song titles, paths and 1-based selection indexes.
+To change the songs, replace the whole playlist with `track 1 deck <path>`.
+Use `track 1 clear` to remove the whole deck.
 
 Audio paths are expanded and saved as absolute paths. Stable song IDs preserve
 the selected identity independently of playlist indexes. Session files contain
@@ -572,14 +569,14 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 
 | Command | Behaviour |
 |---|---|
-| `get 1` | Deck parameters and their values, units and ranges, available for `set` |
+| `get 1` | Deck control values, units and ranges, including seek position |
 | `show 1` | Cached compact deck title, transport, detected BPM, requested/active sync and errors |
 | `show 1 --details` | Full cached deck diagnostics, requested versus applied selection, detected grid and indexed playlist paths |
 | `track 1 deck reanalyze` | Pause at the current position, discard this song's cached grid and run detection again |
 | `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
 | `track 1 deck <audio-file|directory> [--name <label>]` | Replace the playlist, resetting its song memory; retain mixer, routing and inserts |
-| `track 1 deck remove 2` | Remove playlist entry 2; final-entry removal requires `track 1 clear` |
-| `set 1 seek 90` | Seek in source seconds, retaining play state; range follows selected song duration |
+| `track 1 clear` | Remove the whole deck |
+| `set 1 seek 90` | Set position in source seconds, bounded to duration; retain play/pause state |
 | `set 1 play true` / `set 1 play false` | Resume / pause, preserving source position |
 | `set 1 sync true` / `set 1 sync false` | Follow global/Link tempo and beat phase / use manual pitch and nudge |
 | `set 1 pitch -1.25` | Vinyl-style speed and pitch, -16 to +16 percent |
@@ -598,9 +595,12 @@ ranges. Return nudge to zero after nudging. Remaining controls are `play`, `pitc
 `sync` and `phase_offset`. With active sync, nudge moves the phase target only
 while audio is actually advancing; while unsynced it retains temporary ±2% speed.
 
-`get <track>` lists only the deck's get/set parameters, just like other sources;
-`get <track> <parameter>` reads one settable parameter. Use `show <track>` for
-compact operational info: title, transport, detected BPM, requested versus active
+`get <track>` lists the deck's exposed controls, just like other sources;
+`get <track> <parameter>` reads one value. `get 1 seek` reads position and
+`set 1 seek <seconds>` moves it while preserving play/pause.
+`track 1 deck seek <seconds>` is equivalent. MIDI seek mappings are unchanged.
+Use `show <track>` for compact operational
+info: title, transport, detected BPM, requested versus active
 sync and any load, analysis or sync errors. Detected BPM is the song's analyzed
 tempo, distinct from the shared/global tempo; pending or missing analysis displays
 analyzing/unavailable rather than 0. Add `--details` for full transport and grid

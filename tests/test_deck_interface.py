@@ -85,7 +85,6 @@ class DeckCLITests(unittest.TestCase):
         self.assertIn("sync", complete_line(self.cli, "set 1 ")["matches"])
         self.assertEqual(complete_line(self.cli, "set 1 sync ")["matches"], ["false", "true"])
         self.assertIn("257", complete_line(self.cli, "set 1 track_select ")["matches"])
-        self.assertIn("257", complete_line(self.cli, "track 1 deck remove ")["matches"])
         self.engine.request.assert_not_called()
         self.engine.deck_command.assert_not_called()
         self.host.load_deck.assert_not_called()

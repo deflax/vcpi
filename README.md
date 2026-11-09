@@ -132,7 +132,7 @@ playlists. Load an audio file with `track 1 deck song.wav`, or a directory with
 `track 1 deck "/music/Live Set"` to load its supported audio files in filename
 order without scanning subdirectories. Repeat either command to replace the
 whole playlist and reset song memory; mixer, routing and inserts are retained.
-Use `track 1 deck remove <index>` to remove a song. Queen Mary DSP analyzes the whole selected file for tempo and a stable beat grid; decks
+Use `track 1 clear` to remove the whole deck. Queen Mary DSP analyzes the whole selected file for tempo and a stable beat grid; decks
 follow the shared musical timeline's tempo and beat phase by default.
 Same-tempo regions that switch to offbeat accents can support analysis through
 an explicit half-beat alternative without doubling BPM. The output retains one
@@ -560,7 +560,8 @@ including errors. Detected BPM is the song's analyzed tempo, distinct from the
 shared/global tempo; pending or missing analysis reads analyzing/unavailable,
 not 0. Use `show 1 --details` for requested versus applied selection, confidence,
 grid offsets, full diagnostics and indexed playlist paths. `get 1` remains the
-list of settable deck controls.
+list of deck controls; `get 1 seek` reads position and `set 1 seek <seconds>`
+moves it. `track 1 deck seek <seconds>` is an equivalent convenience command.
 Automatic Queen Mary analysis fits stable 60–200 BPM regions across the whole
 track and persists results; uncertain grids remain manual rather than guessing.
 Hardware-free Linux rendering and daemon command

@@ -122,9 +122,9 @@ def deck(ctx, track_num, parts, text):
     try:
         tokens = parts[2:]
         if not tokens:
-            raise ValueError("expected audio path, remove <index>, reanalyze, seek <seconds>, cue [set], or phase reset")
+            raise ValueError("expected audio path, reanalyze, seek <seconds>, cue [set], or phase reset")
         action = tokens[0]
-        if action in ("reanalyze", "seek", "cue", "phase", "remove"):
+        if action in ("reanalyze", "seek", "cue", "phase"):
             track = ctx.host.engine.tracks[idx]
             if track is None or track.source_type != "deck":
                 raise ValueError(f"Track {track_num} is not a deck")
@@ -142,12 +142,8 @@ def deck(ctx, track_num, parts, text):
                 command = "cue_set" if len(tokens) == 2 else "cue"
                 ctx.host.engine.deck_command(idx, command)
                 ctx.emit(f"  {command} accepted")
-            elif action == "remove" and len(tokens) == 2:
-                ctx.host.remove_deck_entry(idx, int(tokens[1]))
-                ctx.emit(f"  Removed playlist entry {tokens[1]} from track {track_num}; "
-                         f"use show {track_num} --details for the playlist.")
             else:
-                raise ValueError("expected reanalyze, remove <index>, seek <seconds>, cue [set], or phase reset")
+                raise ValueError("expected reanalyze, seek <seconds>, cue [set], or phase reset")
         else:
             sources, name = source_args(tokens, 1)
             track = ctx.host.load_deck(
