@@ -98,7 +98,7 @@ def _effect_binding(track, ordinal):
 
 
 class BeatStepProController:
-    def __init__(self, engine, timeline, *, profile: BeatStepProProfile = DEFAULT_PROFILE):
+    def __init__(self, engine, timeline, track_focus, *, profile: BeatStepProProfile = DEFAULT_PROFILE):
         self._engine = engine
         self._timeline = timeline
         self.profile = profile
@@ -108,7 +108,8 @@ class BeatStepProController:
         self._buttons = {number: index for index, number in enumerate(profile.button_numbers)}
         self._rotaries = {number: index for index, number in enumerate(profile.rotary_ccs)}
         self._pads = {number: index for index, number in enumerate(profile.pad_numbers)}
-        self.focused_track = 0
+        self._track_focus = track_focus
+        self._focus_revision = -1
         self._banks = {}  # track index -> (generation, bank)
         self._pad_targets = {}  # pad ordinal -> original (track, generation)
         self._holds = {}  # (channel, index, generation) -> pressed pad ordinals
@@ -147,6 +148,13 @@ class BeatStepProController:
             return None, track.plugin, name, parameter
         return None
 
+    def _focused_index(self):
+        index, revision = self._track_focus.snapshot()
+        if revision != self._focus_revision:
+            self._last_rotary.clear()
+            self._focus_revision = revision
+        return index
+
     def control_bindings(self) -> list[ControlBinding]:
         """Describe focused controls using cached snapshots, never live DSP."""
         with self._lock:
@@ -156,7 +164,7 @@ class BeatStepProController:
         bindings = []
         channel = self.profile.control_channel + 1
         connected = input_availability(self.input_port_name)
-        index = self.focused_track
+        index = self._focused_index()
         track = self._engine.tracks[index]
         base = connected if track is not None else ("unavailable", "empty track")
         for button, number in enumerate(self.profile.button_numbers):
@@ -355,9 +363,9 @@ class BeatStepProController:
         number, pressed = self._gate(message, self.profile.button_type)
         button = self._buttons.get(number)
         if button is not None:
-            if pressed and button != self.focused_track:
-                self.focused_track = button
-                self._last_rotary.clear()
+            if pressed:
+                self._track_focus.select(button)
+                self._focused_index()
             return
         number, pressed = self._gate(message, self.profile.pad_type)
         pad = self._pads.get(number)
@@ -398,7 +406,7 @@ class BeatStepProController:
         if pressed:
             if original is not None:
                 return
-            index = self.focused_track
+            index = self._focused_index()
             track = self._track(index)
             if track is None or track.source_type != "deck":
                 return
@@ -446,7 +454,7 @@ class BeatStepProController:
         return None if previous is None else value - previous
 
     def _rotary(self, rotary, value):
-        index = self.focused_track
+        index = self._focused_index()
         track = self._track(index)
         if track is None:
             return

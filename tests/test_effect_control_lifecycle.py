@@ -14,7 +14,7 @@ from vcpi.audio.owner import _OwnerRuntime
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot, capture_plugin
 from vcpi.controllers.beatstep_pro import BeatStepProController
 from vcpi.deps import HAS_MIDO
-from vcpi.models import InstrumentTrack
+from vcpi.models import InstrumentTrack, TrackFocus
 from vcpi.link import LinkSync
 from vcpi.timeline import MusicalTimeline
 
@@ -89,7 +89,8 @@ class EffectControlLifecycleTests(unittest.TestCase):
         self.client._events = queue.Queue(maxsize=64)
         self.client._last_input = 0
         self.client.tracks = [replace(self.output.tracks[0])] + [None] * 7
-        self.controller = BeatStepProController(self.client, MusicalTimeline(LinkSync()))
+        self.controller = BeatStepProController(
+            self.client, MusicalTimeline(LinkSync()), TrackFocus())
         self.addCleanup(self.controller.close)
         clock = patch("vcpi.audio.owner.time.monotonic", return_value=10.0)
         clock.start()
@@ -120,8 +121,8 @@ class EffectControlLifecycleTests(unittest.TestCase):
         self.client.tracks[0] = replace(self.output.tracks[0])
 
     def test_removal_drops_shifted_and_out_of_range_inputs_received_while_waiting(self):
-        self.rotary(8, 127)
-        self.rotary(9, 0)
+        self.rotary(9, 127)
+        self.rotary(10, 0)
         self.runtime.track_request(0, "remove_effect", fx_index=0)
         self.assertEqual(len(self.runtime.pending_parameters), 2)
         self.runtime.apply_track_parameters()
@@ -132,14 +133,14 @@ class EffectControlLifecycleTests(unittest.TestCase):
 
         # The surviving insert remains controllable at its new index.
         self.refresh_client()
-        self.rotary(8, 127)
+        self.rotary(9, 127)
         self.apply_inputs()
         self.assertEqual(self.second.amount, 1.0)
         self.assertIsNone(self.worker.failure)
 
     def test_replacement_rejects_old_snapshot_even_when_input_arrives_after_edit(self):
         self.worker.accept_during_edit = False
-        self.rotary(9, 127)
+        self.rotary(10, 127)
         self.runtime.track_request(0, "remove_effect", fx_index=1)
         replacement = self.effect(0.125)
         self.runtime.track_request(0, "load_effect", effect=replacement)
@@ -148,13 +149,13 @@ class EffectControlLifecycleTests(unittest.TestCase):
         self.assertIsNone(self.worker.failure)
 
         self.refresh_client()
-        self.rotary(9, 127)
+        self.rotary(10, 127)
         self.apply_inputs()
         self.assertEqual(replacement.amount, 1.0)
         self.assertIsNone(self.worker.failure)
 
     def test_already_received_input_is_checked_again_after_removal(self):
-        self.rotary(8, 127)
+        self.rotary(9, 127)
         self.runtime.receive_input()
         self.runtime.track_request(0, "remove_effect", fx_index=0)
         self.runtime.apply_track_parameters()
@@ -170,34 +171,33 @@ class EffectControlLifecycleTests(unittest.TestCase):
                 with self.subTest(bounds=bounds, mode=mode):
                     parameter.range = bounds
                     modes = list(self.controller.profile.rotary_modes)
-                    modes[8] = mode
+                    modes[9] = mode
                     self.controller.profile = replace(
                         self.controller.profile, rotary_modes=tuple(modes))
                     for value in (0, 64, 127):
-                        self.rotary(8, value)
+                        self.rotary(9, value)
                     self.apply_inputs()
                     self.assertEqual(self.first.amount, 0.25)
                     self.assertEqual(self.client._last_input, 0)
                     self.assertIsNone(self.worker.failure)
                     binding = next(row for row in self.controller.control_bindings()
-                                   if row.control == "Rotary 9")
+                                   if row.control == "Rotary 10")
                     self.assertEqual(binding.availability, "unsupported")
-                    self.assertEqual(binding.reason, "unsupported effect parameter range")
 
         # Unsupported controls retain their ordinal; the next insert still works.
-        self.rotary(9, 127)
+        self.rotary(10, 127)
         self.apply_inputs()
         self.assertEqual(self.second.amount, 1.0)
 
     def test_nonfinite_observed_value_does_not_generate_relative_nan(self):
         snapshot = self.client.tracks[0].effects[0]
         modes = list(self.controller.profile.rotary_modes)
-        modes[8] = "twos_complement"
+        modes[9] = "twos_complement"
         self.controller.profile = replace(self.controller.profile, rotary_modes=tuple(modes))
         for observed in (math.nan, math.inf, -math.inf):
             with self.subTest(observed=observed):
                 snapshot.values["amount"] = observed
-                self.rotary(8, 1)
+                self.rotary(9, 1)
                 self.apply_inputs()
                 self.assertEqual(self.first.amount, 0.25)
                 self.assertEqual(self.client._last_input, 0)

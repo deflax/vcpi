@@ -311,7 +311,7 @@ audio devices & output; MIDI ports & routing; and sequencing, tempo & Link.
 The separator appears in both plain and interactive output.
 Commands follow an explicit order within each group: `save`, `load`; `status`,
 `ps`, `deps`, `debug`; `help`, `about`, `quit`, `shutdown`; `show`; `track`, `get`,
-`set`; `gain`, `solo`, `mute`; `audio`; `midi`, `midimix`, `beatstep`, `note`; and
+`set`; `gain`, `solo`, `mute`, `focus`; `audio`; `midi`, `midimix`, `beatstep`, `note`; and
 `tempo`, `clock`, `transport`, `ableton`, `seq`. The `exit` alias appears in the description of `quit`, not as a
 separate row; it remains available as a command and completion.
 Use `help <command>` for detailed syntax, defaults, and usage. Nested topics
@@ -342,6 +342,7 @@ parameters.
 | Context | Suggestions |
 |---|---|
 | Command name / `help` | Available commands and help topics |
+| `focus` | Track numbers 1–16 (not master) |
 | `audio` / `audio start` | Subcommands and cached output-device indexes |
 | `midi` / `midimix` / `beatstep` | Subcommands, port directions, current hardware indexes, and opened-input close indexes |
 | `midi link` / `midi cut` | MIDI channels and routing tracks |
@@ -489,6 +490,18 @@ The MIDI Mix profile skips plugdata's global `volume`: its fader controls vcpi's
 track gain. The separate plugdata volume remains accessible through `get`/`set`.
 The focused BeatStep Pro profile also skips plugdata's global `volume` when
 mapping source-plugin and insert-effect controls; rotary 1 controls track gain.
+
+### Track Focus
+
+| Command | Description |
+|---|---|
+| `focus` | Report the current selection as `Focused track: N` |
+| `focus <1-16>` | Select a track and report the resulting focus |
+
+Focus belongs to the application and is shared by the CLI and controllers.
+It starts at track 1, accepts empty tracks, and does not change MIDI routing,
+playback, song selection or transport. Invalid or excess arguments leave focus
+unchanged. Focus is runtime-only and is not saved or restored with sessions.
 
 ### Deck Commands
 
@@ -1159,10 +1172,12 @@ each support `"cc"` or `"note"`; the default `pad_type` is `"note"` and
 `pad_numbers` is `tuple(range(60, 67))`. Pads use the same CONTROL channel.
 Avoid overlapping channel/message assignments: software cannot distinguish them.
 
-All rotaries follow one focused track, initially track 1 (`focused_track == 0`
-in the zero-based Python API). Step buttons select focus only: they never change
-MIDI routing, playback, song selection or global transport. Empty tracks are
-selectable, but their rotaries and performance pads make no changes.
+All rotaries follow the application's shared focused track, initially track 1.
+The `focus [1-16]` command and CONTROL step buttons read or select the same
+application-owned state; focus is not a controller property and is not persisted
+in sessions. Step buttons select focus only: they never change MIDI routing,
+playback, song selection or global transport. Empty tracks are selectable,
+but their rotaries and performance pads make no changes.
 
 | Rotary | Focused deck | Focused non-deck source |
 |---|---|---|

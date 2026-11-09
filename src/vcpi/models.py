@@ -4,8 +4,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 
 NUM_TRACKS = 16
+
+
+class TrackFocus:
+    """Application-wide track selection, independent of routing and playback."""
+
+    def __init__(self):
+        self._lock = Lock()
+        self._state = (0, 0)
+
+    def snapshot(self) -> tuple[int, int]:
+        """Return zero-based track index and selection revision atomically."""
+        with self._lock:
+            return self._state
+
+    def select(self, index: int) -> None:
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < NUM_TRACKS:
+            raise ValueError(f"track must be between 1 and {NUM_TRACKS}")
+        with self._lock:
+            current, revision = self._state
+            if index != current:
+                self._state = (index, revision + 1)
 
 
 @dataclass

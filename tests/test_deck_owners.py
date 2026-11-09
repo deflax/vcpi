@@ -23,7 +23,7 @@ from vcpi.audio_state import PluginSnapshot
 from vcpi.deck_bank import load_bank, make_catalog
 from vcpi.audio.control import AudioEngine
 from vcpi.host import VcpiCore
-from vcpi.models import InstrumentTrack, NUM_TRACKS
+from vcpi.models import InstrumentTrack, NUM_TRACKS, TrackFocus
 from vcpi.audio.track_client import TrackWorker
 
 
@@ -156,7 +156,8 @@ class DeckOwnerTests(unittest.TestCase):
         host.midi_inputs = []
         host.midimix = MidiMixController(engine)
         host.timeline = MusicalTimeline(LinkSync())
-        host.beatstep = BeatStepProController(engine, host.timeline)
+        host.track_focus = TrackFocus()
+        host.beatstep = BeatStepProController(engine, host.timeline, host.track_focus)
         self.addCleanup(host.beatstep.close)
         self.addCleanup(host.midimix.close)
         folder = self.root / "playlist"

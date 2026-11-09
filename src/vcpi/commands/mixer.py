@@ -3,6 +3,23 @@
 from .context import track_index
 
 
+def focus(ctx, arg):
+    """Read or select the shared focused track."""
+    parts = ctx.tokens(arg, "focus [1-16]")
+    if parts is None:
+        return
+    if len(parts) > 1:
+        ctx.emit("Usage: focus [1-16]")
+        return
+    try:
+        if parts:
+            ctx.host.track_focus.select(track_index(int(parts[0])))
+        index, _ = ctx.host.track_focus.snapshot()
+        ctx.emit(f"Focused track: {index + 1}")
+    except Exception as error:
+        ctx.emit(f"Error: {error}")
+
+
 def gain(ctx, arg):
     """Read or set track/master gain."""
     parts = ctx.tokens(arg, "gain <track 1-16|master> [value]")

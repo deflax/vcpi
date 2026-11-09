@@ -19,7 +19,7 @@ from vcpi.audio.protocol import AudioProcessError
 from vcpi.link import LinkSync
 from vcpi.timeline import MusicalTimeline
 from vcpi.midi import list_midi_input_ports, list_midi_output_ports
-from vcpi.models import InstrumentTrack, NUM_TRACKS
+from vcpi.models import InstrumentTrack, NUM_TRACKS, TrackFocus
 from vcpi.resources import configured_patches_root
 
 
@@ -38,6 +38,7 @@ class VcpiCore:
         self.loaded_session_name: Optional[str] = None
         self.loaded_session_path: Optional[Path] = None
         self.patches_dir = configured_patches_root()
+        self.track_focus = TrackFocus()
         self.midi_inputs: list[MidiInputController] = []
         self.preferred_beatstep_input: str | None = None
         self._beatstep_discovery_at = 0.0
@@ -53,7 +54,7 @@ class VcpiCore:
         try:
             self.link = LinkSync()
             self.timeline = MusicalTimeline(self.link)
-            self.beatstep = BeatStepProController(self.engine, self.timeline)
+            self.beatstep = BeatStepProController(self.engine, self.timeline, self.track_focus)
             self.midimix = MidiMixController(self.engine)
             self.engine.add_state_listener(self.midimix.refresh_leds)
             sequencer_module = importlib.import_module("vcpi.sequencer")

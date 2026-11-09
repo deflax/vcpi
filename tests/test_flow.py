@@ -8,7 +8,7 @@ from unittest.mock import Mock, PropertyMock, patch
 
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
 from vcpi.commands.cli import HostCLI
-from vcpi.models import NUM_TRACKS, InstrumentTrack
+from vcpi.models import NUM_TRACKS, InstrumentTrack, TrackFocus
 from vcpi.sequencer import SequenceBank
 from vcpi.presentation.signal_flow import build_flow_snapshot, render_flow_snapshot
 from vcpi.presentation import flow_display
@@ -64,7 +64,9 @@ class FlowTests(unittest.TestCase):
             link=LinkSync(),
         )
         self.host.timeline = MusicalTimeline(self.host.link)
-        self.host.beatstep = BeatStepProController(self.engine, self.host.timeline)
+        self.host.track_focus = TrackFocus()
+        self.host.beatstep = BeatStepProController(
+            self.engine, self.host.timeline, self.host.track_focus)
 
     def section(self, section_id, *, details=False):
         return next(section for section in build_flow_snapshot(self.host, details=details)["sections"]

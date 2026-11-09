@@ -118,6 +118,10 @@ class HostCLI(cmd.Cmd):
         """Set a plugin parameter and show its actual applied value."""
         return parameters.set(CommandContext(self.host, self._print), arg)
 
+    def do_focus(self, arg):
+        """Read or select the shared focused track."""
+        return mixer.focus(CommandContext(self.host, self._print), arg)
+
     def do_gain(self, arg):
         """Read or set track/master gain."""
         return mixer.gain(CommandContext(self.host, self._print), arg)

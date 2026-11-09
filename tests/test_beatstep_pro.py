@@ -1,12 +1,15 @@
 """Hardware-free BeatStep bytes through focused routing and typed control APIs."""
 
 from dataclasses import replace
+import io
+from types import SimpleNamespace
 import unittest
 
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot
+from vcpi.commands.cli import HostCLI
 from vcpi.controllers.beatstep_pro import BeatStepProController, BeatStepProProfile
 from vcpi.deps import HAS_MIDO
-from vcpi.models import InstrumentTrack
+from vcpi.models import NUM_TRACKS, InstrumentTrack, TrackFocus
 from vcpi.link import LinkSync
 from vcpi.timeline import MusicalTimeline
 
@@ -43,14 +46,48 @@ class RecordingEngine:
         self.commands.append((index, "mixer", fields, None, generation))
 
 
+class TrackFocusTests(unittest.TestCase):
+    def test_selection_revisions_change_only_with_the_selected_track(self):
+        focus = TrackFocus()
+        self.assertEqual(focus.snapshot(), (0, 0))
+        for index in range(NUM_TRACKS):
+            focus.select(index)
+            self.assertEqual(focus.snapshot(), (index, index))
+            focus.select(index)
+            self.assertEqual(focus.snapshot(), (index, index))
+        focus.select(0)
+        self.assertEqual(focus.snapshot(), (0, NUM_TRACKS))
+
+    def test_invalid_selection_preserves_index_and_revision(self):
+        focus = TrackFocus()
+        focus.select(7)
+        before = focus.snapshot()
+        for index in (-1, NUM_TRACKS, True, False, 1.0, "1", None):
+            with self.subTest(index=index):
+                with self.assertRaises(ValueError):
+                    focus.select(index)
+                self.assertEqual(focus.snapshot(), before)
+
+
 @unittest.skipUnless(HAS_MIDO, "mido required for channel MIDI parsing")
 class BeatStepProTests(unittest.TestCase):
     def setUp(self):
         self.engine = RecordingEngine()
         self.now = 10.0
         self.timeline = MusicalTimeline(LinkSync(), clock=lambda: self.now)
-        self.controller = BeatStepProController(self.engine, self.timeline)
+        self.track_focus = TrackFocus()
+        self.controller = BeatStepProController(
+            self.engine, self.timeline, self.track_focus)
         self.addCleanup(self.controller.close)
+        self.output = io.StringIO()
+        self.cli = HostCLI(SimpleNamespace(track_focus=self.track_focus),
+                           stdout=self.output, owns_host=False)
+
+    def execute(self, command):
+        self.output.seek(0)
+        self.output.truncate()
+        self.cli.onecmd(command)
+        return self.output.getvalue()
 
     def send(self, *raw):
         self.controller.on_midi((list(raw), 0.012))
@@ -80,7 +117,8 @@ class BeatStepProTests(unittest.TestCase):
     def configure(self, **fields):
         self.controller.close()
         self.controller = BeatStepProController(
-            self.engine, self.timeline, profile=replace(BeatStepProProfile(), **fields))
+            self.engine, self.timeline, self.track_focus,
+            profile=replace(BeatStepProProfile(), **fields))
         self.addCleanup(self.controller.close)
 
     def synth(self, count, *, generation=30):
@@ -145,11 +183,11 @@ class BeatStepProTests(unittest.TestCase):
         self.assertEqual(self.engine.midi[-1][0], 3)
 
     def test_focus_starts_on_track_one_and_all_sixteen_steps_only_select(self):
-        self.assertEqual(self.controller.focused_track, 0)
+        self.assertEqual(self.track_focus.snapshot(), (0, 0))
         self.engine.tracks[15] = deck(80)
         for index in range(16):
             self.press(index)
-            self.assertEqual(self.controller.focused_track, index)
+            self.assertEqual(self.track_focus.snapshot()[0], index)
         self.assertEqual(self.engine.commands, [])
         self.rotary(0, 127)
         self.tap_pad(0)
@@ -163,9 +201,80 @@ class BeatStepProTests(unittest.TestCase):
             self.rotary(ordinal, 127)
         for ordinal in range(7):
             self.tap_pad(ordinal)
-        self.assertEqual(self.controller.focused_track, 14)
+        self.assertEqual(self.track_focus.snapshot()[0], 14)
         self.assertEqual(self.engine.commands, [])
         self.assertEqual(self.engine.midi, [])
+
+    def test_external_focus_routes_rotaries_and_pads_without_step_buttons(self):
+        self.track_focus.select(1)
+        self.rotary(0, 127)
+        self.tap_pad(0)
+        self.track_focus.select(0)
+        self.rotary(1, 0)
+        self.tap_pad(1)
+        self.assertEqual(self.engine.commands, [
+            (1, "mixer", {"gain": 1.0}, None, 8), (1, "play_toggle", 0, None, 8),
+            (0, "pitch", -16, None, 7), (0, "cue", 0, None, 7)])
+
+    def test_midi_focus_is_visible_to_cli_query_without_mutation(self):
+        for index in (0, 1, 15):
+            with self.subTest(index=index):
+                self.press(index)
+                before = self.track_focus.snapshot()
+                self.assertEqual(before[0], index)
+                self.assertRegex(self.execute("focus"), rf"\b{index + 1}\b")
+                self.assertEqual(self.track_focus.snapshot(), before)
+        self.assertEqual(self.engine.commands, [])
+        self.assertEqual(self.engine.midi, [])
+
+    def test_cli_focus_routes_midi_controls_to_both_track_boundaries(self):
+        self.engine.tracks[15] = deck(80)
+        self.execute("focus 16")
+        self.assertEqual(self.track_focus.snapshot()[0], 15)
+        self.rotary(0, 127)
+        self.tap_pad(0)
+        self.execute("focus 1")
+        self.assertEqual(self.track_focus.snapshot()[0], 0)
+        self.rotary(0, 0)
+        self.tap_pad(1)
+        self.assertEqual(self.engine.commands, [
+            (15, "mixer", {"gain": 1.0}, None, 80),
+            (15, "play_toggle", 0, None, 80),
+            (0, "mixer", {"gain": 0.0}, None, 7), (0, "cue", 0, None, 7)])
+
+    def test_cli_can_focus_empty_track_without_changing_transport_or_routing(self):
+        self.send(0xFA)
+        before = self.timeline.snapshot()
+        channel_map = dict(self.engine.channel_map)
+        self.execute("focus 16")
+        self.assertEqual(self.track_focus.snapshot(), (15, 1))
+        self.rotary(0, 127)
+        self.tap_pad(0)
+        self.assertEqual(self.engine.commands, [])
+        self.assertTrue(self.timeline.running)
+        self.assertEqual(self.timeline.snapshot().beat, before.beat)
+        self.assertEqual(self.engine.channel_map, channel_map)
+        for channel in (0, 1, 9):
+            self.send(0x90 | channel, 60, 100)
+            self.send(0x80 | channel, 60, 0)
+        self.assertEqual([index for index, _, _ in self.engine.midi],
+                         [2, 2, 3, 3, 4, 4])
+
+    def test_invalid_cli_focus_preserves_shared_state_and_control_destinations(self):
+        self.execute("focus 2")
+        before = self.track_focus.snapshot()
+        self.assertEqual(before, (1, 1))
+        for argument in ("0", "17", "-1", "1.5", "nan", "true", "track",
+                         "1 2", "1 extra", '"1'):
+            with self.subTest(argument=argument):
+                self.execute("focus " + argument)
+                self.assertEqual(self.track_focus.snapshot(), before)
+                self.assertEqual(self.engine.commands, [])
+                self.assertEqual(self.engine.midi, [])
+        self.rotary(0, 127)
+        self.tap_pad(0)
+        self.assertEqual(self.engine.commands, [
+            (1, "mixer", {"gain": 1.0}, None, 8), (1, "play_toggle", 0, None, 8)])
 
     def test_pad_edges_actions_and_rapid_sync_toggle(self):
         self.pad(0)
@@ -202,6 +311,17 @@ class BeatStepProTests(unittest.TestCase):
         self.assertEqual(self.engine.commands[-1], (0, "nudge", -1, None, 77))
         self.controller.close()
         self.assertEqual(self.engine.commands[-1], (0, "nudge", 0, None, 77))
+
+    def test_nudge_release_after_cli_focus_uses_original_track_and_generation(self):
+        self.pad(4)
+        self.execute("focus 2")
+        self.engine.tracks[0] = deck(77)
+        self.assertEqual(self.engine.commands, [(0, "nudge", -1, None, 7)])
+        self.pad(4, 0, note_off=True)
+        self.tap_pad(4)
+        self.assertEqual(self.engine.commands, [
+            (0, "nudge", -1, None, 7), (0, "nudge", 0, None, 7),
+            (1, "nudge", -1, None, 8), (1, "nudge", 0, None, 8)])
 
     def test_rotaries_cover_gain_pitch_coarse_fine_and_phase(self):
         self.press(1)
@@ -261,6 +381,34 @@ class BeatStepProTests(unittest.TestCase):
         self.rotary(8, 100)
         self.rotary(3, 100)
         self.assertEqual(len(self.engine.commands), 4)
+
+    def test_external_focus_away_and_back_reseeds_absolute_delta_controls(self):
+        self.configure(rotary_modes=("absolute",) * 16)
+        self.rotary(8, 64)
+        self.rotary(3, 64)
+        self.track_focus.select(1)
+        self.track_focus.select(0)
+        self.rotary(8, 10)
+        self.rotary(3, 10)
+        self.assertEqual(self.engine.commands, [])
+        self.rotary(8, 11)
+        self.rotary(3, 11)
+        self.assertEqual(self.engine.commands, [
+            (0, "track_select", 2, None, 7), (0, "seek", 12.1, None, 7)])
+
+    def test_reselecting_same_focus_preserves_absolute_delta_baselines(self):
+        self.configure(rotary_modes=("absolute",) * 16)
+        self.rotary(8, 64)
+        self.rotary(3, 64)
+        before = self.track_focus.snapshot()
+        self.track_focus.select(0)
+        self.execute("focus 1")
+        self.press(0)
+        self.assertEqual(self.track_focus.snapshot(), before)
+        self.rotary(8, 65)
+        self.rotary(3, 65)
+        self.assertEqual(self.engine.commands, [
+            (0, "track_select", 2, None, 7), (0, "seek", 12.1, None, 7)])
 
     def test_deck_inserts_flatten_seven_exposed_typed_parameters(self):
         self.engine.tracks[0].effects = [
@@ -325,7 +473,7 @@ class BeatStepProTests(unittest.TestCase):
         self.rotary(1, 127)
         self.assertEqual(self.engine.commands[-1], (2, "p0", 127, None, 99))
 
-    def test_absolute_bank_delta_tracks_each_step_and_reseeds_on_focus(self):
+    def test_absolute_bank_delta_tracks_each_step_and_reseeds_on_external_focus(self):
         self.configure(rotary_modes=("absolute",) * 16)
         self.engine.tracks[2] = self.synth(43)
         self.press(2)
@@ -339,8 +487,8 @@ class BeatStepProTests(unittest.TestCase):
         self.rotary(8, 67)
         self.rotary(1, 127)
         self.assertEqual(self.engine.commands[-1], (2, "p42", 127, None, 30))
-        self.press(0)
-        self.press(2)
+        self.track_focus.select(0)
+        self.track_focus.select(2)
         self.rotary(8, 10)
         self.rotary(1, 0)
         self.assertEqual(self.engine.commands[-1], (2, "p42", 0, None, 30))
@@ -387,7 +535,7 @@ class BeatStepProTests(unittest.TestCase):
                        pad_type="cc", pad_numbers=tuple(range(60, 67)))
         self.send(0x9F, 81, 127)
         self.send(0x9F, 81, 0)
-        self.assertEqual(self.controller.focused_track, 1)
+        self.assertEqual(self.track_focus.snapshot()[0], 1)
         self.pad(0)
         self.pad(0)
         self.pad(0, 0)

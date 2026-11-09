@@ -159,7 +159,7 @@ def _complete_mixer(ctx):
     command, args = ctx.command, ctx.args
     choices = ctx.choices
     empty = {"start_position": 0, "matches": []}
-    if command in ("mute", "solo", "note", "gain"):
+    if command in ("mute", "solo", "note", "gain", "focus"):
         if not args:
             return choices((*_TRACKS, "master") if command == "gain" else _TRACKS)
         if command in ("mute", "solo") and len(args) == 1 and args[0] in _TRACKS:
@@ -415,7 +415,7 @@ def _complete_parameters(ctx):
 
 _GROUP_HANDLERS = {
     **dict.fromkeys(("save", "load", "help", "debug", "ps"), _complete_general),
-    **dict.fromkeys(("mute", "solo", "note", "gain"), _complete_mixer),
+    **dict.fromkeys(("mute", "solo", "note", "gain", "focus"), _complete_mixer),
     **dict.fromkeys(("show", "audio"), _complete_inspection),
     **dict.fromkeys(("midi", "midimix", "beatstep"), _complete_midi),
     **dict.fromkeys(("seq", "ableton", "clock", "transport"), _complete_sequencing),
