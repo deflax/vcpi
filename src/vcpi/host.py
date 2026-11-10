@@ -264,22 +264,20 @@ class VcpiCore:
 
     def restore_deck(self, track_index: int, deck: dict,
                      name: Optional[str] = None) -> InstrumentTrack:
-        """Restore embedded assets, resolving a legacy manifest only when required."""
-        from vcpi.deck_bank import load_bank, make_catalog
+        """Restore a deck from its embedded playlist and durable song state."""
+        from vcpi.deck_bank import make_catalog
 
         for key in ("bank_id", "track_id"):
             if not isinstance(deck.get(key), str) or not deck[key].strip():
                 raise ValueError(f"deck {key} is required")
+        if "tracks" not in deck:
+            raise ValueError("deck tracks are required")
         settings = dict(track_id=deck["track_id"], cue=deck["cue"],
-                        pitch=deck["pitch"], sync=deck.get("sync", True),
-                        phase_offset=deck.get("phase_offset", 0),
-                        position=deck.get("position", deck["cue"]),
-                        play=deck.get("play", False), song_states=deck.get("song_states"))
-        if "tracks" in deck:
-            catalog = make_catalog(deck["bank_id"], deck["tracks"],
-                                   bank_path=deck.get("bank_path"), **settings)
-        else:
-            catalog = load_bank(deck["bank_path"], bank_id=deck["bank_id"], **settings)
+                        pitch=deck["pitch"], sync=deck["sync"],
+                        phase_offset=deck["phase_offset"], position=deck["position"],
+                        play=deck["play"], song_states=deck["song_states"])
+        catalog = make_catalog(deck["bank_id"], deck["tracks"],
+                               bank_path=deck.get("bank_path"), **settings)
         self._clear_deck_holds(track_index=track_index)
         self.engine.request("load_deck", track_index=track_index, catalog=catalog, name=name)
         return self._loaded_track(track_index)

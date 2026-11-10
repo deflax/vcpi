@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import wave
 
 from vcpi.controllers.midi_input import MidiInputController
@@ -29,10 +30,8 @@ class DeckSessionTests(unittest.TestCase):
                 audio.setsampwidth(2)
                 audio.setframerate(rate)
                 audio.writeframes(struct.pack("<h", 4096) * (rate * 2))
-        self.bank = self.root / "live set.json"
-        self.entries = [{"id": name, "path": f"{name}.wav", "title": name.title()}
-                        for name in ("first", "second")]
-        self.write_bank(self.entries)
+        self.entries = [{"id": name, "path": str(self.root / f"{name}.wav"),
+                         "title": name.title()} for name in ("first", "second")]
         self.session = self.root / "session.json"
         self.hosts = []
         self.addCleanup(self.close_hosts)
@@ -45,9 +44,6 @@ class DeckSessionTests(unittest.TestCase):
         host = VcpiCore(session_path=str(self.session))
         self.hosts.append(host)
         return host
-
-    def write_bank(self, entries):
-        self.bank.write_text(json.dumps({"version": 1, "id": "live-set", "tracks": entries}))
 
     def await_status(self, host, index, predicate):
         deadline = time.monotonic() + 5
@@ -90,7 +86,6 @@ class DeckSessionTests(unittest.TestCase):
         self.assertAlmostEqual(entry["deck"]["position"], 0.75)
         self.assertEqual(entry["deck"]["song_states"][selected]["position"], 0.75)
         self.assertNotIn("nudge", entry["deck"]["song_states"][selected])
-        self.bank.unlink()
         restored = self.host()
         restored.restore_session()
         track = restored.engine.tracks[0]
@@ -111,35 +106,6 @@ class DeckSessionTests(unittest.TestCase):
         self.assertAlmostEqual(status["position"], 0.75, places=3)
         self.assertEqual(track.plugin.values["track_select"], 2)
         self.assertEqual(status["tracks"], entries)
-
-    def test_old_session_defaults_to_sync_and_zero_phase_and_restores_paused(self):
-        self.session.write_text(json.dumps({
-            "version": 3, "tracks": [
-                {"kind": "deck", "name": "Old", "path": str(self.bank),
-                 "deck": {"bank_path": str(self.bank), "bank_id": "live-set",
-                          "track_id": "first", "cue": 0, "pitch": 0}},
-            ]}))
-        host = self.host()
-        host.restore_session(start_audio=False)
-        status = self.await_status(host, 0, lambda state: state.get("state") == "ready")
-        self.assertTrue(status["sync"])
-        self.assertFalse(status["play"])
-        self.assertEqual(status["phase_offset"], 0)
-        self.assertEqual(host.engine.tracks[0].plugin.values["phase_offset"], 0)
-        host.save_session()
-        saved = json.loads(self.session.read_text())
-        self.assertEqual(saved["tracks"][0]["deck"]["phase_offset"], 0)
-        self.assertEqual(saved["tracks"][0]["deck"]["tracks"],
-                         [{"id": entry["id"], "title": entry["title"],
-                           "path": str((self.root / entry["path"]).resolve())}
-                          for entry in self.entries])
-        del saved["tracks"][0]["deck"]["phase_offset"]
-        self.session.write_text(json.dumps(saved))
-        self.bank.unlink()
-        restored = self.host()
-        restored.restore_session(start_audio=False)
-        self.assertEqual(restored.engine.tracks[0].deck["track_id"], "first")
-        self.assertEqual(restored.engine.tracks[0].deck["phase_offset"], 0)
 
     def test_synced_session_restores_selected_song_phase_offset(self):
         host = self.host()
@@ -204,7 +170,8 @@ class DeckSessionTests(unittest.TestCase):
             "bank_id": "large-set", "bank_path": "session:large-set", "track_id": "0",
             "tracks": [{"id": str(index), "path": str(self.root / "first.wav"),
                         "title": str(index)} for index in range(count)],
-            "cue": 0, "pitch": 0,
+            "cue": 0, "pitch": 0, "position": 0, "play": False,
+            "sync": True, "phase_offset": 0, "song_states": {},
         })
         host.engine.set_parameter(0, "phase_offset", 0.25)
         status = self.await_status(
@@ -225,41 +192,68 @@ class DeckSessionTests(unittest.TestCase):
         previous = host.engine.tracks[0]
         fields = ("track_id", "cue", "pitch", "play", "sync", "nudge", "phase_offset")
         before = {key: previous.deck[key] for key in fields}
-        inline = dict(snapshot(host)["tracks"][0]["deck"])
-        legacy = {"bank_path": str(self.bank), "bank_id": "live-set",
-                  "track_id": "second", "cue": 0.5, "pitch": -1}
-        for deck in (inline, legacy):
-            for phase_offset in (-0.500001, 0.500001, float("-inf"), float("inf"), float("nan")):
-                with self.subTest(inline="tracks" in deck, phase_offset=phase_offset):
-                    with self.assertRaisesRegex(ValueError, "phase offset"):
-                        host.restore_deck(0, {**deck, "phase_offset": phase_offset}, "Replacement")
-                    current = host.engine.tracks[0]
-                    self.assertEqual(current.worker_pid, previous.worker_pid)
-                    self.assertEqual(current.generation, previous.generation)
-                    self.assertEqual(current.name, previous.name)
-                    self.assertEqual({key: current.deck[key] for key in fields}, before)
+        deck = dict(snapshot(host)["tracks"][0]["deck"])
+        for phase_offset in (-0.500001, 0.500001, float("-inf"), float("inf"), float("nan")):
+            with self.subTest(phase_offset=phase_offset):
+                with self.assertRaisesRegex(ValueError, "phase offset"):
+                    host.restore_deck(0, {**deck, "phase_offset": phase_offset}, "Replacement")
+                current = host.engine.tracks[0]
+                self.assertEqual(current.worker_pid, previous.worker_pid)
+                self.assertEqual(current.generation, previous.generation)
+                self.assertEqual(current.name, previous.name)
+                self.assertEqual({key: current.deck[key] for key in fields}, before)
 
-    def test_missing_id_and_bank_identity_report_errors_but_restore_other_tracks(self):
-        for bank_id, track_id, bank_path in (
-                ("live-set", "removed", self.bank),
-                ("wrong-bank", "first", self.bank),
-                ("live-set", "first", self.root / "missing.json")):
-            with self.subTest(bank_id=bank_id, track_id=track_id, bank_path=bank_path):
+    def test_invalid_inline_decks_report_errors_but_restore_other_tracks(self):
+        deck = {"bank_path": "session:live-set", "bank_id": "live-set",
+                "tracks": self.entries, "track_id": "first", "cue": 0, "pitch": 0,
+                "position": 0, "play": False, "sync": True, "phase_offset": 0,
+                "song_states": {}}
+        for fields in (
+                {"track_id": "removed"},
+                {"bank_id": ""},
+                {"track_id": ""},
+                {"tracks": [{"id": "first", "path": str(self.root / "missing.wav")}]},
+                {"tracks": []}):
+            with self.subTest(fields=fields):
                 self.session.write_text(json.dumps({
                     "version": 3, "tracks": [
-                        {"kind": "deck", "name": "Missing", "path": str(self.bank),
-                         "deck": {"bank_path": str(bank_path), "bank_id": bank_id,
-                                  "track_id": track_id, "cue": 0, "pitch": 0}},
-                        {"kind": "deck", "name": "Unaffected",
-                         "deck": {"bank_path": str(self.bank), "bank_id": "live-set",
-                                  "track_id": "first", "cue": 0, "pitch": 0}},
+                        {"kind": "deck", "name": "Invalid", "deck": {**deck, **fields}},
+                        {"kind": "deck", "name": "Unaffected", "deck": deck},
                     ]}))
                 restored = self.host()
                 with self.assertLogs("vcpi.sessions", level="WARNING") as messages:
-                    restored.restore_session()
+                    restored.restore_session(start_audio=False)
                 self.assertIsNone(restored.engine.tracks[0])
                 self.assertEqual(restored.engine.tracks[1].name, "Unaffected")
+                self.assertEqual(restored.engine.tracks[1].deck["track_id"], "first")
                 self.assertTrue(any("track 1 (deck)" in line for line in messages.output))
+
+    def test_manifest_only_deck_is_rejected_without_reading_bank(self):
+        bank = self.root / "live set.json"
+        bank.write_text(json.dumps({"version": 1, "id": "live-set", "tracks": self.entries}))
+        deck = {"bank_path": str(bank), "bank_id": "live-set", "track_id": "first",
+                "cue": 0, "pitch": 0, "position": 0, "play": False,
+                "sync": True, "phase_offset": 0, "song_states": {}}
+        self.session.write_text(json.dumps({
+            "version": 3, "tracks": [
+                {"kind": "deck", "name": "Manifest", "path": str(bank), "deck": deck},
+                {"kind": "deck", "name": "Unaffected",
+                 "deck": {**deck, "tracks": self.entries}},
+            ]}))
+        restored = self.host()
+        open_path = Path.open
+
+        def open_without_bank(path, *args, **kwargs):
+            self.assertNotEqual(path, bank, "session restore must not read bank manifests")
+            return open_path(path, *args, **kwargs)
+
+        with patch.object(Path, "open", open_without_bank):
+            with self.assertLogs("vcpi.sessions", level="WARNING") as messages:
+                restored.restore_session(start_audio=False)
+        self.assertIsNone(restored.engine.tracks[0])
+        self.assertEqual(restored.engine.tracks[1].name, "Unaffected")
+        self.assertEqual(restored.engine.tracks[1].deck["track_id"], "first")
+        self.assertTrue(any("deck tracks are required" in line for line in messages.output))
 
     def test_snapshot_persists_committed_selection_not_requested(self):
         host = self.host()

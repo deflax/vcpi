@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _restore_tracks(host: VcpiCore, data: dict, version: int, errors: list[str]):
-    for idx, track_data in enumerate(data.get("tracks" if version == 3 else "slots", [])):
+def _restore_tracks(host: VcpiCore, data: dict, errors: list[str]):
+    for idx, track_data in enumerate(data.get("tracks", [])):
         if idx >= NUM_TRACKS:
             break
         if track_data is None:
@@ -33,17 +33,7 @@ def _restore_tracks(host: VcpiCore, data: dict, version: int, errors: list[str])
                     if not isinstance(deck, dict):
                         raise ValueError("deck payload is required")
                     track = host.restore_deck(idx, deck, track_data.get("name"))
-                case "vcv":
-                    vcv_patch = track_data.get("vcv_patch_path", "")
-                    if version == 1 and vcv_patch:
-                        track, _, _ = host.load_vcv(
-                            idx, vcv_patch,
-                            cardinal_path=plugin_path,
-                            name=track_data.get("name"),
-                        )
-                    else:
-                        track = host.load_instrument(idx, plugin_path, track_data.get("name"))
-                case "plugin" | "pd":
+                case "plugin" | "vcv" | "pd":
                     track = host.load_instrument(idx, plugin_path, track_data.get("name"))
                 case _:
                     raise ValueError(f"unsupported track source kind: {track_kind!r}")
@@ -58,7 +48,7 @@ def _restore_tracks(host: VcpiCore, data: dict, version: int, errors: list[str])
                 pd_patch_path=track_data.get("pd_patch_path", ""),
             )
             if track_kind != "deck":
-                _restore_plugin_state(host, idx, track_data, version)
+                _restore_plugin_state(host, idx, track_data)
             logger.info("[session] track %d: %s", idx + 1, track.name)
 
             for fx_data in track_data.get("effects", []):
@@ -66,7 +56,7 @@ def _restore_tracks(host: VcpiCore, data: dict, version: int, errors: list[str])
                     host.load_effect(fx_data["path"], idx, fx_data.get("name"))
                     track = host.engine.tracks[idx]
                     _restore_plugin_state(
-                        host, idx, fx_data, version, len(track.effects) - 1)
+                        host, idx, fx_data, len(track.effects) - 1)
                 except Exception as e:
                     errors.append(f"track {idx + 1} fx '{fx_data.get('path')}': {e}")
 
@@ -74,7 +64,7 @@ def _restore_tracks(host: VcpiCore, data: dict, version: int, errors: list[str])
             errors.append(f"track {idx + 1} ({track_kind}) '{plugin_path}': {e}")
 
 
-def _restore_master_effects(host: VcpiCore, data: dict, version: int, errors: list[str]):
+def _restore_master_effects(host: VcpiCore, data: dict, errors: list[str]):
     # A loaded session replaces the bus; retaining it doubles effects on reload.
     for effect_index in reversed(range(len(host.engine.master_effects))):
         host.remove_effect(None, effect_index)
@@ -82,7 +72,7 @@ def _restore_master_effects(host: VcpiCore, data: dict, version: int, errors: li
         try:
             host.load_effect(fx_data["path"], None, fx_data.get("name"))
             _restore_plugin_state(
-                host, None, fx_data, version, len(host.engine.master_effects) - 1)
+                host, None, fx_data, len(host.engine.master_effects) - 1)
         except Exception as e:
             errors.append(f"master fx '{fx_data.get('path')}': {e}")
 
@@ -98,15 +88,9 @@ def _restore_routing(host: VcpiCore, data: dict, errors: list[str]):
             errors.append(f"route ch {ch_str} -> track {track_num}: {e}")
 
 
-def _restore_sequences(host: VcpiCore, data: dict, version: int):
+def _restore_sequences(host: VcpiCore, data: dict):
     seq_data = data.get("sequences")
     if isinstance(seq_data, list):
-        if version < 3:
-            seq_data = [
-                {**entry, "linked_track": entry.get("linked_slot")}
-                if isinstance(entry, dict) else entry
-                for entry in seq_data
-            ]
         host.sequencer.restore(seq_data)
 
 

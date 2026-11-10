@@ -6,7 +6,7 @@ Saved state includes:
   - Master effects: paths, names, and opaque native VST3 state
   - Decks: inline playlist, stable active ID, position/play and durable per-song
     cue, pitch, sync and phase correction; no transient nudge or VST chunk
-  - Shared track focus (one-based, defaults to track 1 in older sessions)
+  - Shared track focus (one-based)
   - Master gain
   - MIDI channel -> track routing
   - Shared timeline BPM and source selection, Link enabled state
@@ -62,10 +62,9 @@ def restore(host: VcpiCore, path: Optional[Path] = None, *,
         return
 
     data = json.loads(path.read_text())
-    version = data.get("version", 0)
-    if version not in (1, 2, 3):
-        logger.warning("[Session] Unknown session version %s, skipping", version)
-        return
+    version = data.get("version")
+    if type(version) is not int or version != 3:
+        raise ValueError(f"Unsupported session version {version!r}; only format 3 is supported")
 
     # Validate before changing live state, including pausing a running output.
     focus = data.get("focus", 1)
@@ -106,10 +105,10 @@ def restore(host: VcpiCore, path: Optional[Path] = None, *,
     if mg is not None:
         host.engine.set_master_gain(mg)
 
-    _restore_phases._restore_tracks(host, data, version, errors)
-    _restore_phases._restore_master_effects(host, data, version, errors)
+    _restore_phases._restore_tracks(host, data, errors)
+    _restore_phases._restore_master_effects(host, data, errors)
     _restore_phases._restore_routing(host, data, errors)
-    _restore_phases._restore_sequences(host, data, version)
+    _restore_phases._restore_sequences(host, data)
     host.track_focus.select(focus - 1)
     _restore_phases._restore_connections(
         host, data, errors,

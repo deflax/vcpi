@@ -1355,7 +1355,7 @@ Saved/restored session state includes:
 - Sequencer banks and links
 - Audio output and MIDI connections, including BeatStep Pro target or explicit disabled state
 
-New saves use session format **3**: each VST3 instrument, track insert, and master
+Sessions use only format **3**: each VST3 instrument, track insert, and master
 effect stores a base64-encoded native state chunk. This preserves plugin-owned
 settings, including settings not exposed as parameters, without replaying MIDI
 helpers or action controls.
@@ -1374,19 +1374,16 @@ They do not store a VST3 chunk for the source; insert chunks are preserved norma
 Restore prepares the selected song at its saved position and restores its play
 flag: saved playing decks become audible when audio output starts. Nudge resets
 to zero; derived BPM/grid data uses the source-validated analysis cache.
-Legacy bank-based deck sessions are still readable; their manifests are resolved
-on restore and subsequent saves embed the playlist. Older payloads without
-position/play restore paused at cue, missing `sync` means true, and missing
-`phase_offset` means zero.
-Missing audio, IDs or legacy banks are reported per track; unaffected tracks
+Deck sessions require an embedded playlist; external bank manifests are not
+restored. Missing audio or song IDs are reported per track; unaffected tracks
 continue restoring. A pending selection is never persisted in place of the committed track.
 
 
 Format 3 stores mixer instruments under `tracks` and sequencer destinations
-under `sequences[].linked_track`. New saves write only these names. Formats 1
-and 2 remain readable: their legacy `slots` and `linked_slot` keys are migrated
-when loading, and the next save writes format 3. These file-format migrations
-do not provide legacy CLI command aliases.
+under `sequences[].linked_track`. Older, unknown, missing, or non-integer session
+versions are rejected before changing live state. Session formats have no
+backward-compatibility guarantee: future format changes may require recreating
+sessions rather than migrating them.
 
 Saving waits for prior controls/MIDI and captures each track between render jobs.
 Pending VST3 parameter edits require one MIDI-free processing block before
@@ -1398,20 +1395,11 @@ Read-only diagnostics never capture chunks; ordinary updates do not carry them.
 
 Restoration stays paused until plugin/control changes are complete. Native state
 is validated before loading; deferred plugin loads are prerolled without MIDI
-before metadata refresh and subsequent notes. A state chunk takes precedence
-over any parameter dictionary. Invalid/missing format-2/3 chunks are reported,
-not silently replaced by parameter replay. State transfers retain the ordinary
+before metadata refresh and subsequent notes. Plugin entries require native
+state chunks; parameter dictionaries are not restored. Invalid or missing
+chunks are reported, not silently replaced by parameter replay. State transfers retain the ordinary
 metadata limits and allow at most 128 MiB per chunk and 512 MiB per transfer,
 with finite control-operation deadlines.
-
-For format-1 sessions, only parameters present in the newly loaded plugin and
-marked automatable are restored, in batches of at most
-64; skipped unknown/nonautomatable controls produce warnings. This conservative
-migration may lose nonautomatable settings, and automation flags cannot identify
-every vendor-specific action. Back up old sessions before migration; reselect a
-preset if its original non-parameter state was never saved. Reloaded tracks
-replace already-corrupted live instances; saving a silent instance alone does
-not repair its state.
 
 JSON is written in the control process. A failed native owner or state capture
 makes saving fail rather than overwrite the last good session.

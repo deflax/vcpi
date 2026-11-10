@@ -1,4 +1,4 @@
-"""Track session migration preserves instruments, routing and sequence links."""
+"""Current-format session state and rejection boundaries."""
 
 import json
 import struct
@@ -16,7 +16,7 @@ from vcpi.sessions.restore import _restore_tracks
 
 
 class TrackSessionTests(unittest.TestCase):
-    def test_legacy_sessions_restore_and_resave_with_track_keys(self):
+    def test_current_session_roundtrip_preserves_tracks_routing_and_sequences(self):
         with tempfile.TemporaryDirectory(prefix="vcpi-track-session-") as directory:
             root = Path(directory)
             sample = root / "sample.wav"
@@ -25,75 +25,63 @@ class TrackSessionTests(unittest.TestCase):
                 audio.setsampwidth(2)
                 audio.setframerate(44100)
                 audio.writeframes(struct.pack("<h", 4096) * 64)
-            for version in (1, 2):
+            path = root / "session.json"
+            host = VcpiCore(session_path=str(path))
+            try:
+                host.load_deck(1, str(sample), "Bass")
+                host.engine.set_track_state(1, gain=0.35, muted=True, solo=True)
+                host.route(3, 1)
+                host.sequencer.set_bank(0, ["C4", "E4"], velocity=73)
+                host.sequencer.link(0, 1)
+                host.track_focus.select(8)
+                host.save_session()
+            finally:
+                host.shutdown(save=False)
+            restored = VcpiCore(session_path=str(path))
+            try:
+                restored.restore_session(start_audio=False)
+                restored.sequencer.stop()
+                track = restored.engine.tracks[1]
+                self.assertEqual(track.name, "Bass")
+                self.assertEqual(track.source_type, "deck")
+                self.assertAlmostEqual(track.gain, 0.35)
+                self.assertTrue(track.muted)
+                self.assertTrue(track.solo)
+                self.assertEqual(restored.channel_map, {3: 1})
+                self.assertEqual(restored.sequencer.banks[0].linked_track, 1)
+                self.assertEqual(restored.sequencer.banks[0].velocity, 73)
+                self.assertEqual(restored.track_focus.snapshot()[0], 8)
+            finally:
+                restored.shutdown(save=False)
+
+    def test_unsupported_versions_reject_before_touching_host_or_file(self):
+        with tempfile.TemporaryDirectory(prefix="vcpi-session-version-") as directory:
+            path = Path(directory) / "session.json"
+            for version in (None, 0, 1, 2, 4, True, 3.0, "3"):
                 with self.subTest(version=version):
-                    path = root / f"legacy-{version}.json"
-                    path.write_text(json.dumps({
-                        "version": version,
-                        "slots": [None, {
-                            "kind": "deck", "name": "Legacy bass",
-                            "gain": 0.35, "muted": True, "solo": True,
-                            "deck": {
-                                "bank_id": "legacy", "track_id": "bass",
-                                "tracks": [{"id": "bass", "path": str(sample), "title": "Bass"}],
-                                "cue": 0, "pitch": 0,
-                            },
-                        }],
-                        "routing": {"4": 2},
-                        "sequences": [{"notes": ["C4", "E4"], "velocity": 73,
-                                       "linked_slot": 2}],
-                    }))
-                    host = VcpiCore(session_path=str(path))
-                    try:
-                        host.track_focus.select(8)
-                        host.restore_session()
-                        self.assertEqual(host.track_focus.snapshot()[0], 0)
-                        host.sequencer.stop()
-                        track = host.engine.tracks[1]
-                        self.assertEqual(track.name, "Legacy bass")
-                        self.assertEqual(track.source_type, "deck")
-                        self.assertAlmostEqual(track.gain, 0.35)
-                        self.assertTrue(track.muted)
-                        self.assertTrue(track.solo)
-                        self.assertEqual(host.channel_map, {3: 1})
-                        self.assertEqual(host.sequencer.banks[0].linked_track, 1)
-                        self.assertEqual(host.sequencer.banks[0].velocity, 73)
-                        host.save_session()
-                        saved = json.loads(path.read_text())
-                        self.assertEqual(saved["version"], 3)
-                        self.assertEqual(saved["focus"], 1)
-                        self.assertNotIn("slots", saved)
-                        self.assertEqual(saved["tracks"][1]["name"], "Legacy bass")
-                        self.assertEqual(saved["tracks"][1]["kind"], "deck")
-                        self.assertEqual(saved["sequences"][0]["linked_track"], 2)
-                        self.assertNotIn("linked_slot", saved["sequences"][0])
-                    finally:
-                        host.shutdown(save=False)
-                    restored = VcpiCore(session_path=str(path))
-                    try:
-                        restored.restore_session()
-                        restored.sequencer.stop()
-                        self.assertEqual(restored.engine.tracks[1].name, "Legacy bass")
-                        self.assertEqual(restored.channel_map, {3: 1})
-                        self.assertEqual(restored.sequencer.banks[0].linked_track, 1)
-                    finally:
-                        restored.shutdown(save=False)
+                    data = {"master_gain": 0.1, "bpm": 99, "tracks": []}
+                    if version is not None:
+                        data["version"] = version
+                    original = json.dumps(data)
+                    path.write_text(original)
+                    host = Mock()
+                    with self.assertRaises(ValueError):
+                        restore(host, path)
+                    self.assertEqual(host.mock_calls, [])
+                    self.assertEqual(path.read_text(), original)
 
     def test_unsupported_sources_never_load_as_plugins(self):
-        for version in (1, 2, 3):
-            for kind in ("wav", "unknown-source"):
-                with self.subTest(version=version, kind=kind):
-                    host = Mock()
-                    errors = []
-                    key = "tracks" if version == 3 else "slots"
-                    _restore_tracks(host, {
-                        key: [{"kind": kind, "path": "/unsupported/source", "name": "Old source"}],
-                    }, version, errors)
-                    self.assertEqual(len(errors), 1)
-                    self.assertIn("unsupported track source kind", errors[0])
-                    host.load_instrument.assert_not_called()
-                    host.restore_deck.assert_not_called()
-                    host.engine.set_track_state.assert_not_called()
+        for kind in ("wav", "unknown-source"):
+            with self.subTest(kind=kind):
+                host = Mock()
+                errors = []
+                _restore_tracks(host, {
+                    "tracks": [{"kind": kind, "path": "/unsupported/source", "name": "Old source"}],
+                }, errors)
+                self.assertEqual(len(errors), 1)
+                host.load_instrument.assert_not_called()
+                host.restore_deck.assert_not_called()
+                host.engine.set_track_state.assert_not_called()
 
     def test_shared_focus_roundtrip_precedes_device_connections(self):
         with tempfile.TemporaryDirectory(prefix="vcpi-focus-session-") as directory:

@@ -1,4 +1,4 @@
-"""Session playlists, legacy bank migration and bounded catalog transfers."""
+"""Session playlists and bounded catalog transfers."""
 
 from __future__ import annotations
 
@@ -23,41 +23,6 @@ def _text(value, label):
     if len(value.encode("utf-8")) > TEXT_LIMIT or "\x00" in value:
         raise ValueError(f"{label} is too long or contains NUL")
     return value
-
-
-def load_bank(bank_path, *, track_id=None, bank_id=None, cue=0, pitch=0, sync=True,
-              phase_offset=0, position=None, play=False, song_states=None):
-    """Resolve ordered assets without opening them; select saved identity exactly."""
-    path = Path(bank_path).expanduser().resolve()
-    with path.open("rb") as source:
-        raw = source.read(CATALOG_LIMIT + 1)
-    if len(raw) > CATALOG_LIMIT:
-        raise ValueError(f"deck manifest exceeds {CATALOG_LIMIT} bytes")
-    manifest = json.loads(raw)
-    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] != 1:
-        raise ValueError("deck manifest version must be 1")
-    identity = _text(manifest.get("id"), "bank ID")
-    if bank_id is not None and identity != bank_id:
-        raise ValueError(f"deck bank ID mismatch: expected {bank_id!r}, got {identity!r}")
-    entries = manifest.get("tracks")
-    if not isinstance(entries, list) or not entries:
-        raise ValueError("deck bank must contain at least one track")
-    tracks, seen = [], set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise ValueError("deck track must be an object")
-        identity_track = _text(entry.get("id"), "track ID")
-        if identity_track in seen:
-            raise ValueError(f"duplicate deck track ID: {identity_track}")
-        seen.add(identity_track)
-        asset = Path(_text(entry.get("path"), "track path")).expanduser()
-        if not asset.is_absolute():
-            asset = path.parent / asset
-        title = _text(entry.get("title", identity_track), "track title")
-        tracks.append({"id": identity_track, "path": str(asset.resolve()), "title": title})
-    return make_catalog(identity, tracks, bank_path=str(path), track_id=track_id,
-                        cue=cue, pitch=pitch, sync=sync, phase_offset=phase_offset,
-                        position=position, play=play, song_states=song_states)
 
 
 def audio_entry(audio_path):
@@ -91,7 +56,7 @@ def _song_state(*, cue, pitch, sync, phase_offset, position=None, play=False):
 def make_catalog(identity, tracks, *, bank_path=None, track_id=None,
                  cue=0, pitch=0, sync=True, phase_offset=0,
                  position=None, play=False, song_states=None):
-    """Encode bounded playlist and durable song state, accepting legacy defaults."""
+    """Encode a bounded playlist and durable song state."""
     identity = _text(identity, "playlist ID")
     if not isinstance(tracks, list) or not tracks:
         raise ValueError("deck playlist must contain at least one track")

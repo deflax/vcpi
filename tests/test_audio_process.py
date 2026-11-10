@@ -128,7 +128,7 @@ class AudioProcessTests(unittest.TestCase):
         entries = (saved["tracks"][0], saved["tracks"][0]["effects"][0],
                    saved["master_effects"][0])
         for entry, target in zip(entries, targets):
-            # A conflicting, valid legacy value must never override the chunk.
+            # A stray parameter dictionary must never override the native chunk.
             name, actual = expected[target]
             parameter = host.engine._plugin(*target).parameters[name]
             entry["params"] = {name: parameter.range[1]}

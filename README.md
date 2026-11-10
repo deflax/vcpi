@@ -63,9 +63,9 @@ audio start
 note 1 60 --velocity 100 --duration-ms 500
 ```
 
-Mixer channels are called **tracks** (1–16). Use `track` in place of the former
-`slot` command; no command alias is retained. Existing version 1 and 2 sessions
-still load, and subsequent saves use version 3 with track-based keys.
+Mixer channels are called **tracks** (1–16). Sessions read and write only the
+current format, **3**, with track-based keys. Older or unknown formats are
+rejected; no backward-compatibility migration is provided.
 
 Use `audio start <device>` to select an output from `audio devices`.
 Use `quit` to disconnect the client; `shutdown` stops the daemon.
@@ -125,7 +125,7 @@ Sessions save native VST3 state chunks for instruments, track inserts, and maste
 effects. Sessions save track focus, while decks embed
 their playlists and each song's position, play/pause, cue, pitch, sync and phase
 correction. Playing decks resume when audio starts. See [session commands](USAGE.md#session-commands)
-for save/restore behavior and legacy session compatibility.
+for save/restore behavior.
 
 Native decks stream mono/stereo AIFF, WAV, MP3 and FLAC tracks from session-owned
 playlists. Load an audio file with `track 1 deck song.wav`, or a directory with

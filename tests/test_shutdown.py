@@ -138,7 +138,7 @@ class HostShutdownTests(unittest.TestCase):
     def test_shutdown_without_save_preserves_file_and_closes_resources(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "session.json"
-            original = b'{"version": 1, "master_gain": 0.75}\n'
+            original = b'{"version": 3, "master_gain": 0.75}\n'
             path.write_bytes(original)
             host = self._host(path)
             host.engine.snapshot_error = RuntimeError("native owner unavailable")
@@ -166,7 +166,7 @@ class HostShutdownTests(unittest.TestCase):
     def test_save_failure_still_closes_resources_and_preserves_error(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "session.json"
-            original = b'{"version": 1}\n'
+            original = b'{"version": 3}\n'
             path.write_bytes(original)
             host = self._host(path)
             failure = RuntimeError("native snapshot failed")
@@ -180,7 +180,7 @@ class HostShutdownTests(unittest.TestCase):
     def test_audio_save_error_is_not_ignored_without_terminal_owner_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "session.json"
-            original = b'{"version": 1}\n'
+            original = b'{"version": 3}\n'
             path.write_bytes(original)
             host = self._host(path)
             failure = AudioProcessError("audio control channel is busy")
@@ -202,8 +202,8 @@ class HostShutdownTests(unittest.TestCase):
                 ), tempfile.TemporaryDirectory() as directory:
                     path = Path(directory) / "session.json"
                     original = (
-                        b'{\n  "version": 1, "bpm": 91.0, "master_gain": 0.75,\n'
-                        b'  "slots": [null], "routing": {"1": 1}\n}\n'
+                        b'{\n  "version": 3, "bpm": 91.0, "master_gain": 0.75,\n'
+                        b'  "tracks": [null], "routing": {"1": 1}\n}\n'
                     )
                     path.write_bytes(original)
                     hosts = []

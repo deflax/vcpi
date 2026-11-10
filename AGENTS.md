@@ -75,6 +75,7 @@ Hidden directories present in the workspace:
 - `midi link <ch> <track>` only changes internal routing; it does **not** open hardware ports.
 - Use `midi ports input` / `midi ports output` to discover current indexes before opening devices.
 - Port indexes can change after reboot or replug.
+- Sessions support only the current format (currently `3`). Reject other versions; do not add backward-compatibility readers or migrations when changing the format.
 
 ## Plugin and asset behavior
 

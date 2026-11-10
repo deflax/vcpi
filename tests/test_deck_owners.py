@@ -1,6 +1,5 @@
 """Real spawned deck ownership and cache updates without audio devices."""
 
-import json
 import os
 import struct
 import tempfile
@@ -20,7 +19,7 @@ from vcpi.timeline import MusicalTimeline
 
 from vcpi.audio.client import RemoteAudioEngine
 from vcpi.audio_state import PluginSnapshot
-from vcpi.deck_bank import load_bank, make_catalog
+from vcpi.deck_bank import make_catalog
 from vcpi.audio.control import AudioEngine
 from vcpi.host import VcpiCore
 from vcpi.models import InstrumentTrack, NUM_TRACKS, TrackFocus
@@ -38,14 +37,13 @@ class DeckOwnerTests(unittest.TestCase):
             stream.setsampwidth(2)
             stream.setframerate(48000)
             stream.writeframes(struct.pack("<h", 4096) * 48000)
-        self.bank = self.root / "bank.json"
-        self.write_bank()
+        self.entries = self.playlist_entries()
 
-    def write_bank(self, count=3):
-        self.bank.write_text(json.dumps({"version": 1, "id": "set", "tracks": [
-            {"id": str(i), "path": str(self.wav), "title": "Track " + str(i)}
-            for i in range(1, count + 1)] + [
-            {"id": "missing", "path": "absent.wav", "title": "Missing"}]}))
+    def playlist_entries(self, count=3):
+        return [{"id": str(i), "path": str(self.wav), "title": "Track " + str(i)}
+                for i in range(1, count + 1)] + [
+                    {"id": "missing", "path": str(self.root / "absent.wav"),
+                     "title": "Missing"}]
 
     def remote(self):
         engine = RemoteAudioEngine(buffer_size=64)
@@ -54,7 +52,7 @@ class DeckOwnerTests(unittest.TestCase):
 
     def worker(self, **restore):
         worker = TrackWorker(44100, 64, 0, "load_deck", {
-            "catalog": load_bank(self.bank, **restore)})
+            "catalog": make_catalog("set", self.entries, **restore)})
         engine = AudioEngine(buffer_size=64)
         engine.publish_track(0, worker.track)
 
@@ -97,7 +95,7 @@ class DeckOwnerTests(unittest.TestCase):
             stream.setframerate(rate)
             stream.writeframes((audio * 32767).astype("<i2").tobytes())
         catalog = make_catalog("clock", [{"id": "pulse", "path": str(percussion),
-                                          "title": "Pulse"}], bank_path=str(self.bank))
+                                          "title": "Pulse"}])
         engine = AudioEngine(sample_rate=rate, buffer_size=frames)
         self.addCleanup(engine.shutdown)
         workers = []
@@ -252,9 +250,8 @@ class DeckOwnerTests(unittest.TestCase):
         self.assertAlmostEqual(after, before)
 
     def test_large_catalog_stages_across_both_framed_hops(self):
-        self.write_bank(1800)
         engine = self.remote()
-        catalog = load_bank(self.bank, track_id="1800")
+        catalog = make_catalog("set", self.playlist_entries(1800), track_id="1800")
         self.assertGreater(len(catalog.encode()), 65536)
         engine.request("load_deck", track_index=0, catalog=catalog)
         track = engine.tracks[0]
@@ -262,8 +259,8 @@ class DeckOwnerTests(unittest.TestCase):
         self.assertEqual(len(track.deck["tracks"]), 1801)
         self.assertFalse(track.deck["play"])
         engine.set_parameter(0, "play", True)
-        self.write_bank(1900)
-        engine.request("update_deck_catalog", track_index=0, catalog=load_bank(self.bank))
+        engine.request("update_deck_catalog", track_index=0,
+                       catalog=make_catalog("set", self.playlist_entries(1900)))
         updated = engine.tracks[0]
         self.assertEqual((updated.worker_pid, updated.generation), (track.worker_pid, track.generation))
         self.assertEqual(updated.plugin.token, track.plugin.token)
@@ -280,16 +277,14 @@ class DeckOwnerTests(unittest.TestCase):
         worker.request("set_parameter", name="nudge", value=1)
         before = worker.request("sync_state")["state"]
         entries = before["deck"]["tracks"]
-        worker.request("update_deck_catalog",
-                       catalog=make_catalog("set", entries[1:], bank_path=str(self.bank)))
+        worker.request("update_deck_catalog", catalog=make_catalog("set", entries[1:]))
         track = worker.track
         for key in ("track_id", "cue", "position", "play", "pitch", "nudge"):
             self.assertEqual(track.deck[key], before["deck"][key])
         self.assertEqual(track.plugin.token, before["plugin"].token)
         self.assertEqual((track.gain, track.muted, track.solo), (0.375, True, True))
         self.assertEqual(track.plugin.values["track_select"], 1)
-        worker.request("update_deck_catalog",
-                       catalog=make_catalog("set", entries[2:], bank_path=str(self.bank)))
+        worker.request("update_deck_catalog", catalog=make_catalog("set", entries[2:]))
         self.assertEqual(track.deck["track_id"], "3")
         self.assertFalse(track.deck["play"])
         self.assertEqual(track.deck["position"], 0)
@@ -302,9 +297,9 @@ class DeckOwnerTests(unittest.TestCase):
             stream.setsampwidth(2)
             stream.setframerate(48000)
             stream.writeframes(struct.pack("<h", 4096) * 120000)
-        self.bank.write_text(json.dumps({"version": 1, "id": "durations", "tracks": [
+        self.entries = [
             {"id": "short", "path": str(self.wav), "title": "Short"},
-            {"id": "long", "path": str(longer), "title": "Long"}]}))
+            {"id": "long", "path": str(longer), "title": "Long"}]
         worker, engine = self.worker()
         self.assertEqual(worker.track.plugin.parameters["seek"].range, (0, 1))
         worker.request("set_parameter", name="track_select", value=2)
@@ -327,11 +322,11 @@ class DeckOwnerTests(unittest.TestCase):
 
     def test_failed_initial_load_retains_previous_source_and_generation(self):
         engine = self.remote()
-        engine.request("load_deck", track_index=0, catalog=load_bank(self.bank))
+        engine.request("load_deck", track_index=0, catalog=make_catalog("set", self.entries))
         previous = engine.tracks[0]
         with self.assertRaises((RuntimeError, ValueError, FileNotFoundError)):
             engine.request("load_deck", track_index=0,
-                           catalog=load_bank(self.bank, track_id="missing"))
+                           catalog=make_catalog("set", self.entries, track_id="missing"))
         self.assertEqual(engine.tracks[0].worker_pid, previous.worker_pid)
         self.assertEqual(engine.tracks[0].generation, previous.generation)
         engine.set_track_state(0, gain=0.5)
@@ -339,7 +334,7 @@ class DeckOwnerTests(unittest.TestCase):
 
     def test_cached_status_updates_while_stopped_and_route_removal_clears_nudge(self):
         engine = self.remote()
-        engine.request("load_deck", track_index=0, catalog=load_bank(self.bank))
+        engine.request("load_deck", track_index=0, catalog=make_catalog("set", self.entries))
         original = engine.tracks[0]
         engine.route(2, 0)
         engine.set_parameter(0, "play", True)
@@ -369,8 +364,7 @@ class DeckOwnerTests(unittest.TestCase):
         worker.request("set_parameter", name="track_select", value=2)
         self.await_status(worker, lambda s: s["track_id"] == "2", engine)
         entries = worker.track.deck["tracks"]
-        worker.request("update_deck_catalog",
-                       catalog=make_catalog("set", entries[1:], bank_path=str(self.bank)))
+        worker.request("update_deck_catalog", catalog=make_catalog("set", entries[1:]))
         after = worker.request("sync_state")["state"]["effects"][0]
         self.assertEqual(after.token, before.token)
         self.assertEqual(after.native_state, before.native_state)

@@ -15,7 +15,7 @@ from vcpi.audio.owner import _OwnerRuntime
 from vcpi.audio.control import AudioEngine
 from vcpi.models import InstrumentTrack
 from vcpi.commands.cli import HostCLI
-from vcpi.sessions.plugin_state import _apply_plugin_params, _restore_plugin_state, _saved_plugin_state
+from vcpi.sessions.plugin_state import _restore_plugin_state, _saved_plugin_state
 from vcpi.audio.track_client import TrackWorker
 from vcpi.audio.track_protocol import PARAMETER_BATCH_LIMIT, TrackProcessError
 from vcpi.audio.track_owner import _execute, _track_state
@@ -250,44 +250,6 @@ class ParameterRestoreTests(unittest.TestCase):
                 self.assertIs(self.instrument.bypass, False)
                 self.engine._applied_updates.clear()
 
-    def test_session_batch_applies_compatible_values_and_logs_skipped_unknown(self):
-        host = SimpleNamespace(engine=self.remote)
-        with self.assertLogs("vcpi.sessions", level="WARNING") as messages:
-            _apply_plugin_params(host, 2, {
-                "bypass": False, "removed_parameter": True,
-                "mode": "Quiet Mode", "amplitude": 0.6,
-            })
-        self.assertEqual(len(messages.output), 1)
-        self.assertIn("removed_parameter", messages.output[0])
-        self.assertIs(self.worker.track.plugin.values["bypass"], False)
-        self.assertEqual(self.worker.track.plugin.values["mode"], "Quiet Mode")
-        self.assertEqual(self.worker.track.plugin.values["amplitude"], 0.6)
-
-    def test_session_filters_unknown_controls_before_ordered_legacy_batch(self):
-        params = {f"removed_{index}": index for index in range(PARAMETER_BATCH_LIMIT - 1)}
-        params.update({"bypass": False, "mode": "Quiet Mode", "amplitude": 0.6})
-        with self.assertLogs("vcpi.sessions", level="WARNING") as messages:
-            _apply_plugin_params(SimpleNamespace(engine=self.remote), 2, params)
-        for index, message in enumerate(messages.output):
-            self.assertIn(f"'removed_{index}'", message)
-        self.assertEqual(len(messages.output), PARAMETER_BATCH_LIMIT - 1)
-        self.assertIs(self.worker.track.plugin.values["bypass"], False)
-        self.assertEqual(self.worker.track.plugin.values["mode"], "Quiet Mode")
-        self.assertEqual(self.worker.track.plugin.values["amplitude"], 0.6)
-
-    def test_legacy_nonautomatable_control_cannot_trigger_sound_side_effect(self):
-        self.instrument.bypass = False
-        self.worker._accept({"ok": True, "state": _track_state(self.owner, 2)})
-        self.worker.track.plugin.parameters["bypass"].is_automatable = False
-        with self.assertLogs("vcpi.sessions", level="WARNING") as messages:
-            _apply_plugin_params(SimpleNamespace(engine=self.remote), 2, {
-                "bypass": True, "mode": "Quiet Mode", "amplitude": 0.6,
-            })
-        self.assertFalse(self.instrument.bypass)
-        self.assertEqual(self.instrument.mode, "Quiet Mode")
-        self.assertEqual(self.instrument.amplitude, 0.6)
-        self.assertIn("not automatable", messages.output[0])
-
     def test_native_chunk_precedence_refreshes_instrument_and_insert_without_replay(self):
         self.native_track.effects = [ControlledInstrument()]
         saved = json.dumps([0.6, False, "Quiet Mode"]).encode()
@@ -296,7 +258,7 @@ class ParameterRestoreTests(unittest.TestCase):
                 entry = {"native_state": base64.b64encode(saved).decode(),
                          "params": {"mode": "timeout", "amplitude": 0.0}}
                 _restore_plugin_state(
-                    SimpleNamespace(engine=self.remote), 2, entry, 2, fx_index)
+                    SimpleNamespace(engine=self.remote), 2, entry, fx_index)
                 cached = (self.worker.track.plugin if fx_index is None
                           else self.worker.track.effects[fx_index])
                 self.assertIsInstance(cached, PluginSnapshot)
@@ -349,7 +311,7 @@ class ParameterRestoreTests(unittest.TestCase):
             {"params": {"amplitude": 0.0}},
         ):
             with self.subTest(entry=entry), self.assertRaises(ValueError):
-                _restore_plugin_state(SimpleNamespace(engine=self.remote), 2, entry, 2)
+                _restore_plugin_state(SimpleNamespace(engine=self.remote), 2, entry)
         self.assertEqual(self.instrument.amplitude, 0.25)
 
 
