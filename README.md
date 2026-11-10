@@ -54,10 +54,10 @@ the environment points to another checkout. `./vcpid` also builds the native
 extension incrementally before starting the daemon.
 
 On a fresh session, start audio manually. Later server launches automatically
-reopen the saved audio output. In the client, try a bundled sample:
+reopen the saved audio output. With plugdata installed, try a bundled patch:
 
 ```text
-track 1 wav piano c4-soft
+track 1 pd sine
 audio devices
 audio start
 note 1 60 --velocity 100 --duration-ms 500
@@ -101,7 +101,7 @@ through a local Unix socket. To use it from another machine, SSH into the host
 and run `./vcpi` there.
 
 Command parsing, session files, MIDI ports, sequencing, and Ableton Link stay in
-the control process. Each track owns its VST3/Cardinal/plugdata, WAV sampler or deck source and insert
+the control process. Each track owns its VST3/Cardinal/plugdata or deck source and insert
 effects on a native render thread. The native PortAudio callback mixes track
 audio and runs master effects. Neither the callback nor track DSP enters Python
 or acquires the GIL. Shared-memory track transport adds one block of buffering.
@@ -122,7 +122,7 @@ missing track blocks as well as output timing and underruns. See
 platform-specific states and Linux permissions.
 
 Sessions save native VST3 state chunks for instruments, track inserts, and master
-effects; WAV tracks remain path-based. Sessions save track focus, while decks embed
+effects. Sessions save track focus, while decks embed
 their playlists and each song's position, play/pause, cue, pitch, sync and phase
 correction. Playing decks resume when audio starts. See [session commands](USAGE.md#session-commands)
 for save/restore behavior and legacy session compatibility.
@@ -175,13 +175,12 @@ see [deck commands](USAGE.md#deck-commands).
       link.py           # Ableton Link wrapper
       timeline.py       # Shared clock authority, bar grid and transport
       sequencer.py      # Internal step sequencer
-    engine/             # C++ hosting, sampler, decks, transport and mixer
+    engine/             # C++ hosting, decks, transport and mixer
       CMakeLists.txt    # Native extension build
       pd_state.cpp      # Control-thread plugdata/Pd state conversion
       track_runner.cpp  # Per-track rendering and MIDI consumption
       runtime.cpp       # Output device, mixing and master-effects callback
   assets/
-    samples/            # Built-in WAV sample packs
     patches/            # Cardinal .vcv and plugdata .pd patches
   sessions/             # User-saved session files, not Python source
   tests/                # Automated Python regression tests
@@ -266,7 +265,7 @@ comes from the daemon: audio/MIDI subcommands, routing channels and tracks,
 sequencer banks, mixer targets, help topics, and debug modes are supported.
 `get` suggests cached controls and listing flags; `set` suggests controls, plugin
 settings, and boolean/enum choices. Effect indexes reflect loaded chains.
-Plugin, patch, sample, and session names are
+Plugin, patch, and session names are
 discovered on the daemon, including names containing spaces where the command
 supports them. Quote names containing spaces. Free-form numeric values are left for you to enter.
 
@@ -277,17 +276,17 @@ focused views cover routing, controllers, audio, tracks, master and effects.
 All views print at the prompt. `get` includes parameter values, units, ranges,
 and choices without slider bars.
 The `help` overview combines its categories and descriptions into one compact
-table; use `help <command>` or a focused topic such as `help track wav`,
+table; use `help <command>` or a focused topic such as `help track deck`,
 `help audio start`, or `help midi input close` for syntax, defaults, and examples.
 Piped input/output remains plain text. The launchers synchronize editable package
 installation using `.vcpi-requirements.txt` and `.vcpi-pyproject.toml` snapshots
 inside the virtual environment, plus a check that imports resolve to this checkout.
 For direct Python startup, install with `.venv/bin/python -m pip install -e .`.
 
-To route a hardware MIDI input to a bundled sample:
+To route a hardware MIDI input to a bundled patch (requires plugdata):
 
 ```text
-track 1 wav piano c4-soft
+track 1 pd sine
 midi ports input
 midi input <index>
 midi link <ch> 1
@@ -301,8 +300,8 @@ show
 Replace `<index>` with a port index and `<ch>` with the hardware's MIDI channel
 (1–16). `midi link` changes internal routing only; `midi input` opens the port.
 
-Optional labels consistently use `--name`, including WAV, Cardinal, and deck
-tracks. For example: `track 1 wav piano c4-soft --name "Soft Piano"`.
+Optional labels consistently use `--name`, including plugdata, Cardinal, and deck
+tracks. For example: `track 1 pd sine --name "Sine Lead"`.
 `gain 1` reads the track gain; `gain 1 0.7` sets it. Use `mute 1 on`,
 `mute 1 off`, or `mute 1 toggle` for explicit state control; `solo` works the
 same way. Bare `mute 1` and `solo 1` remain toggle shortcuts.
@@ -524,22 +523,7 @@ Full paths also work:
 vcpi> track 1 vst /path/to/Synth.vst3 --name Lead
 ```
 
-Load a WAV sample into a track and trigger it from MIDI routing:
-
-```text
-vcpi> track 2 wav 909 bassdrum
-vcpi> midi link 10 2
-vcpi> midi input 0
-```
-
-`track <n> wav` resolves to `assets/samples/<pack>/<sample>.wav` (for example,
-`assets/samples/909/bassdrum.wav`) and plays one-shot sample voices on note-on.
-You can include or omit the `.wav` extension in `<sample>`. Asset discovery checks
-the working directory's `assets/samples` first, then this checkout's bundled assets.
-Patches use the same working-directory/checkout rule for `assets/patches`, unless
-`VCPI_PATCHES_DIR` explicitly selects a directory.
-
-For continuous deck playback instead of MIDI-triggered sample voices:
+For continuous deck playback:
 
 ```text
 vcpi> track 1 deck "/music/Live Set" --name Deck-A
@@ -567,24 +551,6 @@ track and persists results; uncertain grids remain manual rather than guessing.
 Hardware-free Linux rendering and daemon command
 coverage do not replace audible Linux/macOS acceptance or intended-Pi
 read-ahead/deadline measurements before live use.
-
-Built-in packs include drums (`808`, `909`) plus melodic/synth packs:
-
-- `piano`
-- `organ`
-- `strings`
-- `synth-pads`
-- `synth-leads`
-
-Examples:
-
-```text
-vcpi> track 1 wav piano c4-soft
-vcpi> track 2 wav organ c4-drawbar
-vcpi> track 3 wav strings c4-ensemble
-vcpi> track 4 wav synth-pads c4-warm
-vcpi> track 5 wav synth-leads c4-mono-saw
-```
 
 Internal sequencer (bar-aligned with Ableton Link when enabled):
 

@@ -1,4 +1,4 @@
-"""Fixed handoff invariants and real spawned sampler ownership, without devices."""
+"""Fixed handoff invariants and real spawned deck ownership, without devices."""
 
 import multiprocessing as mp
 import os
@@ -23,10 +23,11 @@ from vcpi.audio.control import AudioEngine
 from vcpi.audio.track_client import TrackWorker
 from vcpi.audio.track_protocol import MIDI_CAPACITY, TrackProcessError
 from vcpi.audio.track_owner import _watch_parent
+from vcpi.deck_bank import make_catalog
 
 
-def _own_track_for_orphan_test(connection, sample):
-    worker = TrackWorker(44100, 64, 2, "load_wav", {"wav_path": sample})
+def _own_track_for_orphan_test(connection, catalog):
+    worker = TrackWorker(44100, 64, 2, "load_deck", {"catalog": catalog})
     try:
         connection.send((worker.pid, DupFd(worker._process.sentinel)))
         connection.recv()
@@ -105,10 +106,13 @@ class SpawnedTrackTests(unittest.TestCase):
             sample.setsampwidth(2)
             sample.setframerate(44100)
             sample.writeframes(struct.pack("<h", 4096) * 4096)
+        self.catalog = make_catalog("process-test", [
+            {"id": "audio", "path": str(self.sample), "title": "Audio"},
+        ], play=True, sync=False)
 
     def worker(self, **kwargs):
-        worker = TrackWorker(44100, 64, 2, "load_wav",
-                            {"wav_path": str(self.sample), "name": "remote"}, **kwargs)
+        worker = TrackWorker(44100, 64, 2, "load_deck",
+                             {"catalog": self.catalog, "name": "remote"}, **kwargs)
         engine = AudioEngine(buffer_size=64)
         engine.publish_track(2, worker.track)
         engine.set_track_state(2, gain=1.0)
@@ -137,7 +141,14 @@ class SpawnedTrackTests(unittest.TestCase):
             time.sleep(0.001)
         self.fail("spawned track did not finish the offered block")
 
-    def test_persistent_native_owner_and_one_block_sampler_audio(self):
+    def settled_audio(self, worker):
+        # Real decks fade in; don't mistake their startup envelope for mixer gain.
+        for _ in range(16):
+            self.await_render(worker, worker.transport.stats()["sequence"])
+            audio = self.render(worker)
+        return audio
+
+    def test_persistent_native_owner_and_one_block_deck_audio(self):
         worker = self.worker()
         self.assertNotEqual(worker.pid, os.getpid())
         self.assertFalse(worker._process.daemon)
@@ -149,9 +160,12 @@ class SpawnedTrackTests(unittest.TestCase):
         audio = self.render(worker)
         self.assertIsNotNone(audio)
         self.assertEqual(audio.shape, (64, 2))
-        np.testing.assert_array_equal(audio, np.full((64, 2), 0.125, dtype=np.float32))
+        self.assertTrue(np.isfinite(audio).all())
+        # Allow the decoder's resampling filter gain; this checks IPC audio,
+        # not the exact filter coefficients.
+        np.testing.assert_allclose(self.settled_audio(worker), 0.125, rtol=0.02)
         pid = worker.pid
-        self.await_render(worker, 2)
+        self.await_render(worker, worker.transport.stats()["sequence"])
         reply = worker.request("sync_state")
         self.assertEqual(worker.pid, pid)
         self.assertIsInstance(reply["state"]["plugin"], PluginSnapshot)
@@ -169,8 +183,7 @@ class SpawnedTrackTests(unittest.TestCase):
         self.assertEqual(reply["state"]["name"], "remote")
         self.render(worker, [mido.Message("note_on", note=60, velocity=127)])
         self.await_render(worker, 1)
-        np.testing.assert_array_equal(
-            self.render(worker), np.full((64, 2), 0.125, dtype=np.float32))
+        np.testing.assert_allclose(self.settled_audio(worker), 0.125, rtol=0.02)
         worker.test_engine.clear_track(2)
         worker.shutdown()
         self.assertEqual(worker._process.exitcode, 0)
@@ -220,15 +233,17 @@ class SpawnedTrackTests(unittest.TestCase):
         resume.start()
         self.addCleanup(resume.join)
         self.render(worker, [mido.Message("note_on", note=60, velocity=127)])
-        worker.request("sync_state")
+        first_state = worker.request("sync_state")["state"]["deck"]
+        self.assertAlmostEqual(first_state["position"], 64 / 44100)
         first = self.render(worker)
-        expected = ramp[:64].astype(np.float32) / 32768.0
-        np.testing.assert_array_equal(first[:, 0], expected)
+        self.assertEqual(first.shape, (64, 2))
+        self.assertTrue(np.isfinite(first).all())
         self.await_render(worker, 2)
-        worker.request("sync_state")
-        second = self.render(worker)
-        expected = ramp[64:128].astype(np.float32) / 32768.0
-        np.testing.assert_array_equal(second[:, 0], expected)
+        second_state = worker.request("sync_state")["state"]["deck"]
+        self.assertAlmostEqual(second_state["position"], 128 / 44100)
+        # Another snapshot without a render request must not advance the source.
+        repeated = worker.request("sync_state")["state"]["deck"]
+        self.assertEqual(repeated["position"], second_state["position"])
 
     def test_snapshot_refresh_preserves_parent_mixer_state(self):
         worker = self.worker()
@@ -245,9 +260,11 @@ class SpawnedTrackTests(unittest.TestCase):
         self.assertEqual(worker.track.midi_channels, {3})
 
     def test_invalid_load_preserves_native_validation_error(self):
-        with self.assertRaises(FileNotFoundError):
-            TrackWorker(44100, 64, 2, "load_wav",
-                       {"wav_path": str(self.root / "missing.wav")})
+        catalog = make_catalog("missing", [
+            {"id": "missing", "path": str(self.root / "missing.wav"), "title": "Missing"},
+        ])
+        with self.assertRaisesRegex(ValueError, "regular file"):
+            TrackWorker(44100, 64, 2, "load_deck", {"catalog": catalog})
 
     def test_dead_child_does_not_escape_into_audio_callback(self):
         worker = self.worker()
@@ -262,7 +279,7 @@ class SpawnedTrackTests(unittest.TestCase):
         context = mp.get_context("spawn")
         connection, child_connection = context.Pipe()
         owner = context.Process(target=_own_track_for_orphan_test,
-                                args=(child_connection, str(self.sample)),
+                                args=(child_connection, self.catalog),
                                 daemon=False)
         owner.start()
         child_connection.close()

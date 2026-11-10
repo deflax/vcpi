@@ -19,7 +19,7 @@ _REMOTE_ERRORS = {cls.__name__: cls for cls in (
     PermissionError, RuntimeError,
 )}
 _LOAD_OPERATIONS = frozenset((
-    "load_instrument", "load_wav", "load_vcv", "load_vcv_patch",
+    "load_instrument", "load_vcv", "load_vcv_patch",
     "load_pd", "load_pd_patch", "load_deck",
 ))
 

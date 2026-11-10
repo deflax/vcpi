@@ -52,14 +52,10 @@ class CompletionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
-        for name in ("vst", "samples", "patches", "sessions"):
+        for name in ("vst", "patches", "sessions"):
             (root / name).mkdir()
         for name in ("Surge XT", "Basic", "Player's Synth"):
             (root / "vst" / f"{name}.vst3").mkdir()
-        for pack in ("Drums", "Bad Pack"):
-            (root / "samples" / pack).mkdir()
-        for name in ("Kick", "Closed Hat"):
-            (root / "samples" / "Drums" / f"{name}.wav").touch()
         for name in ("Bass", "Bad Patch"):
             (root / "patches" / f"{name}.vcv").touch()
         for name in ("Warm Pad", "Player's Lead"):
@@ -71,7 +67,6 @@ class CompletionTests(unittest.TestCase):
         self.root = root
         for method, value in (
                 ("vst_search_dirs", [root / "vst"]),
-                ("samples_root", root / "samples"),
                 ("patches_root", root / "patches"),
                 ("sessions_root", root / "sessions")):
             patcher = patch.object(assets, method, return_value=value)
@@ -134,7 +129,7 @@ class CompletionTests(unittest.TestCase):
                 ("ableton ", {"link", "cut"}),
                 ("debug ", {"on", "off"}),
                 ("track master ", {"fx"}),
-                ("track 16 ", {"vst", "wav", "deck", "vcv", "pd", "fx", "clear"})):
+                ("track 16 ", {"vst", "deck", "vcv", "pd", "fx", "clear"})):
             self.assertEqual(set(self.matches(before)), expected)
         for before in ("midi link 17 ", "midi link 0 ", "seq link 0 ",
                        "seq link 17 ", "track 17 ", "track master clear ",
@@ -364,19 +359,17 @@ class CompletionTests(unittest.TestCase):
             self.assertEqual(shlex.split(inserted), [command, "Live Set"])
             self.assertEqual(assets.resolve_session_path(shlex.split(inserted)[1]),
                              self.root / "sessions" / "Live Set.json")
-        for before, name in (("track 1 wav Bad", "Bad Pack"),
-                             ('track 1 wav Drums "Closed', "Closed Hat"),
-                             ("track 1 vcv Bad", "Bad Patch")):
+        for before, name in (("track 1 vcv Bad", "Bad Patch"),):
             inserted = self.inserted(before, shlex.quote(name))
             self.assertEqual(shlex.split(inserted)[-1], name)
-        for before in ("track 1 wav Drums Kick ", "track 1 vcv Bass ",
+        for before in ("track 1 vcv Bass ",
                        'track 1 deck "/music/live set.json" '):
             self.assertEqual(self.matches(before), ["--name"])
 
     def test_nested_help_and_option_insertions_match_grammar(self):
         for before, match, expected in (
                 ("help audio st", "start", "help audio start"),
-                ("help track wa", "wav", "help track wav"),
+                ("help track de", "deck", "help track deck"),
                 ("help midi input cl", "close", "help midi input close"),
                 ("mute 1 o", "on", "mute 1 on"),
                 ("solo 2 t", "toggle", "solo 2 toggle"),
@@ -391,15 +384,13 @@ class CompletionTests(unittest.TestCase):
 
     def test_invalid_structural_prefixes_do_not_discover_assets(self):
         with patch.object(assets, "vst_names") as vst, \
-                patch.object(assets, "sample_pack_names") as packs, \
-                patch.object(assets, "sample_names") as samples, \
                 patch.object(assets, "vcv_patch_names") as patches, \
                 patch.object(assets, "session_names") as sessions:
             for before in ("unknown ", "track 99 vst ", "track master vst ",
                            "track 1 unknown ", "track 1 clear ", "track 1 fx clear ",
                            "track 1 wav Drums Kick Label ", "loadx "):
                 self.matches(before)
-            for discover in (vst, packs, samples, patches, sessions):
+            for discover in (vst, patches, sessions):
                 discover.assert_not_called()
 
     def test_control_characters_from_assets_and_metadata_are_never_inserted(self):

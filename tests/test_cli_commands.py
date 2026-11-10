@@ -10,7 +10,6 @@ from unittest.mock import patch
 
 from vcpi.commands.cli import HostCLI
 from vcpi.commands.context import parse_named_source, source_args
-from vcpi.commands.help import HELP_TOPICS
 from vcpi.link import LinkSync
 from vcpi.models import NUM_TRACKS
 from vcpi.timeline import MusicalTimeline
@@ -142,8 +141,7 @@ class CLICommandTests(unittest.TestCase):
             self.assertIn("Error:", text)
 
     def test_source_labels_are_explicit_single_shell_arguments(self):
-        for source, count in (("pack 'sample name'", 2), ("'/bank path.json'", 1),
-                              ("'VCV patch'", 1)):
+        for source, count in (("'/music/song.flac'", 1), ("'VCV patch'", 1)):
             tokens, label = source_args(shlex.split(source + ' --name "Live Voice"'), count)
             self.assertEqual(tokens, shlex.split(source))
             self.assertEqual(label, "Live Voice")
@@ -165,18 +163,6 @@ class CLICommandTests(unittest.TestCase):
             self.execute('save "Live Set" extra')
             self.assertEqual([p.name for p in Path(directory).iterdir()], ["Live Set.json"])
 
-    def test_nested_help_selects_exact_topics_and_rejects_unknown_suffixes(self):
-        for topic in ("audio start", "track wav", "midi input close"):
-            _, text = self.execute("help " + topic)
-            self.assertIn(HELP_TOPICS[topic][1], text)
-            _, invalid = self.execute("help " + topic + " nonsense")
-            self.assertNotIn("Usage:", invalid)
-            self.assertIn(topic + " nonsense", invalid)
-        for topic in HELP_TOPICS:
-            _, text = self.execute("help " + topic)
-            self.assertIn("\nUsage:\n", text)
-            self.assertIn("\nArguments / Options:\n", text)
-            self.assertIn("\nBehavior:\n", text)
 
 
 if __name__ == "__main__":

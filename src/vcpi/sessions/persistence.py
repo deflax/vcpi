@@ -1,7 +1,7 @@
 """Session persistence -- save and restore host state to a JSON file.
 
 Saved state includes:
-  - Per-track: source kind (plugin/wav/deck/vcv/pd), instrument path, name, gain,
+  - Per-track: source kind (plugin/deck/vcv/pd), instrument path, name, gain,
     enabled, muted, solo, insert effect paths/names, and opaque native VST3 state
   - Master effects: paths, names, and opaque native VST3 state
   - Decks: inline playlist, stable active ID, position/play and durable per-song

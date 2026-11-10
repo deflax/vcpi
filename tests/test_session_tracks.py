@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 from vcpi.host import VcpiCore
 from vcpi.models import NUM_TRACKS, TrackFocus
 from vcpi.sessions.persistence import restore
+from vcpi.sessions.restore import _restore_tracks
 
 
 class TrackSessionTests(unittest.TestCase):
@@ -30,8 +31,13 @@ class TrackSessionTests(unittest.TestCase):
                     path.write_text(json.dumps({
                         "version": version,
                         "slots": [None, {
-                            "kind": "wav", "path": str(sample), "name": "Legacy bass",
+                            "kind": "deck", "name": "Legacy bass",
                             "gain": 0.35, "muted": True, "solo": True,
+                            "deck": {
+                                "bank_id": "legacy", "track_id": "bass",
+                                "tracks": [{"id": "bass", "path": str(sample), "title": "Bass"}],
+                                "cue": 0, "pitch": 0,
+                            },
                         }],
                         "routing": {"4": 2},
                         "sequences": [{"notes": ["C4", "E4"], "velocity": 73,
@@ -45,6 +51,7 @@ class TrackSessionTests(unittest.TestCase):
                         host.sequencer.stop()
                         track = host.engine.tracks[1]
                         self.assertEqual(track.name, "Legacy bass")
+                        self.assertEqual(track.source_type, "deck")
                         self.assertAlmostEqual(track.gain, 0.35)
                         self.assertTrue(track.muted)
                         self.assertTrue(track.solo)
@@ -57,6 +64,7 @@ class TrackSessionTests(unittest.TestCase):
                         self.assertEqual(saved["focus"], 1)
                         self.assertNotIn("slots", saved)
                         self.assertEqual(saved["tracks"][1]["name"], "Legacy bass")
+                        self.assertEqual(saved["tracks"][1]["kind"], "deck")
                         self.assertEqual(saved["sequences"][0]["linked_track"], 2)
                         self.assertNotIn("linked_slot", saved["sequences"][0])
                     finally:
@@ -70,6 +78,22 @@ class TrackSessionTests(unittest.TestCase):
                         self.assertEqual(restored.sequencer.banks[0].linked_track, 1)
                     finally:
                         restored.shutdown(save=False)
+
+    def test_unsupported_sources_never_load_as_plugins(self):
+        for version in (1, 2, 3):
+            for kind in ("wav", "unknown-source"):
+                with self.subTest(version=version, kind=kind):
+                    host = Mock()
+                    errors = []
+                    key = "tracks" if version == 3 else "slots"
+                    _restore_tracks(host, {
+                        key: [{"kind": kind, "path": "/unsupported/source", "name": "Old source"}],
+                    }, version, errors)
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn("unsupported track source kind", errors[0])
+                    host.load_instrument.assert_not_called()
+                    host.restore_deck.assert_not_called()
+                    host.engine.set_track_state.assert_not_called()
 
     def test_shared_focus_roundtrip_precedes_device_connections(self):
         with tempfile.TemporaryDirectory(prefix="vcpi-focus-session-") as directory:

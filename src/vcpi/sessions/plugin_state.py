@@ -55,10 +55,8 @@ def _apply_plugin_params(
         )
 
 
-def _restore_plugin_state(host, track_index, entry, version, fx_index=None, *, wav=False):
+def _restore_plugin_state(host, track_index, entry, version, fx_index=None):
     """Native chunks take precedence; parameter replay is legacy-v1-only."""
-    if wav:
-        return
     if "native_state" in entry:
         encoded = entry["native_state"]
         if not isinstance(encoded, str):

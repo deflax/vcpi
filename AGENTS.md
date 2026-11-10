@@ -54,7 +54,6 @@ Hidden directories present in the workspace:
 | Session save/restore | `src/vcpi/sessions/` |
 | Generic MIDI input | `src/vcpi/controllers/midi_input.py` |
 | Akai MIDI Mix mapping | `src/vcpi/controllers/akai_midimix.py` |
-| WAV sampler | `src/engine/plugin.cpp`, `assets/samples/` |
 | Signal/status/terminal rendering | `src/vcpi/presentation/` |
 | Plugin installation and discovery | `USAGE.md`, `src/vcpi/commands/assets.py`, `src/vcpi/plugin_host.py` |
 | Raspberry Pi deployment | `rpi-build/README.md`, `rpi-build/services/` |
@@ -82,8 +81,6 @@ Hidden directories present in the workspace:
 - `track <n> vst` and `track <n> fx` accept either a plugin name or a full path.
 - VST3 name search checks `VST3_PATH` and `VST_PATH` directories, then the working directory, repository root, `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`, and documented macOS paths. The former `vst3/` subdirectory is not searched automatically.
 - `track <n> vcv` and `track <n> pd` load from `assets/patches/` by default; `VCPI_PATCHES_DIR` overrides that directory. Loading does not auto-route MIDI channels.
-- `track <n> wav <pack> <sample>` resolves to `assets/samples/<pack>/<sample>.wav`. Asset discovery checks working-directory assets first, then bundled checkout assets.
-- Built-in sample packs documented in `USAGE.md` are: `808`, `909`, `piano`, `organ`, `strings`, `synth-pads`, `synth-leads`.
 
 ## Dependency stack
 

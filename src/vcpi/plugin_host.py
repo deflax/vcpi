@@ -13,7 +13,7 @@ from typing import Optional
 from vcpi import audio_deps as deps
 from vcpi.audio.control import AudioEngine
 from vcpi.models import InstrumentTrack, NUM_TRACKS
-from vcpi.resources import configured_patches_root, repo_root
+from vcpi.resources import configured_patches_root
 
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class NativePlugin:
         else:
             path = Path(path).expanduser().resolve()
             if not path.exists():
-                raise FileNotFoundError(f"plugin or WAV not found: {path}")
+                raise FileNotFoundError(f"plugin not found: {path}")
             native_path = str(path)
         object.__setattr__(self, "native", deps.require_native().Plugin(
             native_path, sample_rate, frames, kind))
@@ -69,7 +69,7 @@ class NativePlugin:
 
     def get_state(self) -> bytes | None:
         """Capture VST3 chunks only; file-backed sources persist explicit fields."""
-        return None if self._kind in {"wav", "deck"} else self.native.get_state()
+        return None if self._kind == "deck" else self.native.get_state()
 
     def load_state(self, state):
         result = self.native.load_state(state)
@@ -314,37 +314,6 @@ class PluginHost:
 
         elapsed = time.monotonic() - t0
         logger.info("[INST] track %d ready (%.2fs)", track_index + 1, elapsed)
-        return track
-
-    def load_wav(self, track_index: int, wav_path: str,
-                 name: Optional[str] = None) -> InstrumentTrack:
-        """Load a WAV file as a one-shot sampler instrument into a track."""
-        if not 0 <= track_index < NUM_TRACKS:
-            raise ValueError(f"track must be 1-{NUM_TRACKS}")
-
-        path = Path(wav_path).expanduser()
-        if not path.is_absolute():
-            cwd_candidate = Path.cwd() / path
-            repo_candidate = repo_root() / path
-            if cwd_candidate.exists():
-                path = cwd_candidate
-            elif repo_candidate.exists():
-                path = repo_candidate
-            else:
-                path = cwd_candidate
-
-        resolved = str(path)
-        plugin = NativePlugin(resolved, self.sample_rate, self.buffer_size, "wav")
-        self._set_plugin_info_type(plugin, "Sample")
-
-        track = InstrumentTrack(
-            name=name or Path(resolved).stem,
-            path=resolved,
-            plugin=plugin,
-            source_type="wav",
-        )
-        self.engine.tracks[track_index] = track
-        logger.info("[WAV] track %d loaded from %s", track_index + 1, resolved)
         return track
 
     def load_deck(self, track_index: int, catalog: str,

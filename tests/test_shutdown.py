@@ -13,6 +13,7 @@ from unittest.mock import patch
 from vcpi import deps
 from vcpi.audio.protocol import AudioProcessError
 from vcpi.audio.control import AudioEngine
+from vcpi.audio_state import PluginSnapshot
 from vcpi.models import InstrumentTrack
 from vcpi.host import VcpiCore
 from vcpi.main import _boot_host
@@ -74,7 +75,7 @@ class HostShutdownTests(unittest.TestCase):
     def _activate_resources(self, host):
         self.addCleanup(host.shutdown, save=False)
         host.engine.tracks[0] = InstrumentTrack(
-            "incomplete", "/tmp/incomplete.wav", None, source_type="wav",
+            "incomplete", "/tmp/incomplete.vst3", PluginSnapshot(1, native_state=b"test state"),
         )
         host.send_note(0, 60, duration=60.0)
         host.sequencer.set_bank(0, ["E4"])

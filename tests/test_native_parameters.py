@@ -7,7 +7,6 @@ import platform
 import sys
 import tempfile
 import unittest
-import wave
 
 import numpy as np
 
@@ -167,18 +166,12 @@ class NativeParameterRestorationTests(unittest.TestCase):
         for name, expected in before.items():
             self.assertEqual(getattr(restored, name), expected)
 
-    def test_wav_has_no_native_state_chunk(self):
-        with tempfile.TemporaryDirectory(prefix="vcpi-wav-state-") as directory:
-            path = Path(directory) / "sample.wav"
-            with wave.open(str(path), "wb") as sample:
-                sample.setnchannels(1)
-                sample.setsampwidth(2)
-                sample.setframerate(44100)
-                sample.writeframes(bytes(2 * 512))
-            plugin = NativePlugin(str(path), 44100, 512, "wav")
-            self.assertIsNone(plugin.get_state())
-            with self.assertRaises(ValueError):
-                plugin.load_saved_state(b"not supported by a WAV instrument")
+    def test_native_plugin_rejects_unsupported_source_kinds(self):
+        backend = require_native()
+        for kind in ("wav", "sampler", "unknown"):
+            with self.subTest(kind=kind):
+                with self.assertRaises(ValueError):
+                    backend.Plugin("/not/a/plugin", 44100, 512, kind)
 
 
 if __name__ == "__main__":

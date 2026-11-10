@@ -68,7 +68,7 @@ def _snapshot_cached(host: VcpiCore) -> dict:
                 **active_state,
                 "song_states": song_states,
             }
-        elif track.source_type != "wav":
+        else:
             track_entry["native_state"] = _saved_plugin_state(track.plugin)
         if track.source_type == "vcv" and track.vcv_patch_path:
             track_entry["vcv_patch_path"] = track.vcv_patch_path

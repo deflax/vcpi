@@ -111,7 +111,7 @@ sudo PLUGDATA_URL=https://mirror.example/plugdata-Debian-aarch64.tar.xz \
   pinned to `776d1c0c38e0bcc7f03bb222e6afc466432e9847f30e7cce92610f64570b627a`.
   `PLUGDATA_URL` may select a mirror, not a different release: the native patch
   importer supports the 0.9.3 state layout reported by v0.9.3-2.
-- The native C++ extension is built, then WAV/MIDI/mixer and installed-plugdata
+- The native C++ extension is built, then deck/MIDI/mixer and installed-plugdata
   smoke checks run as `pi` without a display or audio device. The plugdata check
   imports `assets/patches/sine.pd`, verifies a MIDI-selected tone, and
   checks silence after note-off. Native build dependencies are retained in the
@@ -210,8 +210,8 @@ realtime promotion, wakeup changes, memory locking, affinity, governor changes,
 and kernel tuning are not part of this setup.
 
 Verification scope: the native extension and a daemon/CLI smoke run were
-exercised on Linux aarch64 with CPython 3.13, an ALSA null sink, and a spawned WAV
-track at 44100 Hz / 512 samples. With `RTPRIO=(0,0)`, output/track diagnostics
+exercised on Linux aarch64 with CPython 3.13, an ALSA null sink, and a spawned
+track using the former sampler at 44100 Hz / 512 samples. With `RTPRIO=(0,0)`, output/track diagnostics
 matched actual kernel `SCHED_OTHER`/priority 0 and reported permission denial
 without stopping the owner. Python/control threads remained `SCHED_OTHER`;
 output stop/restart reported inactive state and a new callback thread ID.

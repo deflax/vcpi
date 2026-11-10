@@ -7,7 +7,7 @@ from .context import track_index, source_args, parse_named_source
 from .help import HELP_TOPICS
 
 
-TRACK_TYPES = ("vst", "wav", "deck", "vcv", "pd", "fx", "clear")
+TRACK_TYPES = ("vst", "deck", "vcv", "pd", "fx", "clear")
 
 
 def track_usage():
@@ -53,7 +53,7 @@ def track(ctx, arg):
         ctx.emit("Error: master only supports 'fx' subcommand")
         ctx.emit(f"Usage: {track_usage()}")
         return
-    handlers = {"deck": deck, "vst": vst, "vcv": vcv, "pd": pd, "wav": wav}
+    handlers = {"deck": deck, "vst": vst, "vcv": vcv, "pd": pd}
     handler = handlers.get(mode)
     if handler is None:
         ctx.emit(f"Error: unknown subcommand '{mode}'")
@@ -212,47 +212,3 @@ def pd(ctx, track_num, parts, text):
     ctx.emit(f"  result   : {patch_result}")
     ctx.emit(f"  route with: midi link <channel 1-16> {track_num}")
     return
-
-
-def wav(ctx, track_num, parts, text):
-    idx = track_index(track_num)
-    try:
-        sources, display_name = source_args(parts[2:], 2)
-    except ValueError as error:
-        ctx.emit(f"Error: {error}")
-        ctx.emit("Usage: track <1-16> wav <pack> <sample> [--name <label>]")
-        return
-    pack_name = sources[0].strip().strip("/")
-    sample_name = sources[1].strip()
-
-    if not pack_name:
-        ctx.emit("Error: pack name is required")
-        return
-    if not sample_name:
-        ctx.emit("Error: sample name is required")
-        return
-
-    pack_path = Path(pack_name)
-    if pack_path.is_absolute() or ".." in pack_path.parts:
-        ctx.emit("Error: invalid pack name")
-        return
-
-    wav_file = sample_name if sample_name.lower().endswith(".wav") else f"{sample_name}.wav"
-    sample_path = Path(wav_file)
-    if sample_path.is_absolute() or ".." in sample_path.parts:
-        ctx.emit("Error: invalid sample name")
-        return
-
-    wav_path = assets.samples_root() / pack_path / sample_path
-
-    try:
-        track = ctx.host.load_wav(idx, str(wav_path), display_name)
-    except Exception as e:
-        ctx.emit(f"Error: {e}")
-        return
-
-    ctx.emit(f"  track {track_num} = {track.name}")
-    ctx.emit(f"  wav      : {track.path}")
-    ctx.emit(f"  route with: midi link <channel 1-16> {track_num}")
-    return
-

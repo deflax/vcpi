@@ -1,9 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <juce_audio_formats/juce_audio_formats.h>
 #include "deck.hpp"
 #include "ownership.hpp"
-#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -60,14 +58,11 @@ private:
         std::vector<float> enumRawValues;
         float falseRaw = 0.0f, trueRaw = 1.0f;
     };
-    struct Voice { double position = 0.0, rate = 1.0, gain = 1.0; };
     ParameterSnapshot snapshot(const ParameterInfo& info) const;
     Scalar parameterValue(const ParameterInfo& info) const;
     ParameterInfo& parameter(const std::string& key);
     void discoverParameters();
     void applyState(const std::string& data);
-    void loadWav(const juce::File& path);
-    void renderWav(float* left, float* right, const juce::MidiBuffer& midi) noexcept;
     ParameterSnapshot deckParameter(const std::string& key) const;
     // Declared first, destroyed last. JUCE's own scoped reference count keeps
     // the message manager alive until every plugin instance has been destroyed,
@@ -78,7 +73,7 @@ private:
     mutable std::mutex deckMutex;
     const double sampleRate;
     const int frames;
-    bool effect = false, wav = false;
+    bool effect = false;
     bool parametersPending = false;
     PluginMetadata description;
     std::unique_ptr<juce::AudioPluginInstance> instance;
@@ -86,9 +81,6 @@ private:
     juce::AudioBuffer<float> audio;
     std::vector<ParameterInfo> parameterInfos;
     std::map<std::string, std::size_t> parameterIndex;
-    std::vector<float> sampleLeft, sampleRight;
-    std::array<Voice, 32> voices{};
-    std::size_t voiceCount = 0;
 };
 void validateAudio(double sampleRate, int frames);
 void validateEffects(const std::vector<std::shared_ptr<Plugin>>& effects, double sampleRate, int frames, const Plugin* instrument = nullptr);

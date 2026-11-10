@@ -51,7 +51,7 @@ class DeckClockTests(unittest.TestCase):
         host._deck_clock_thread = None
         host.engine = SimpleNamespace(
             tracks=[SimpleNamespace(source_type="deck", generation=7), None,
-                    SimpleNamespace(source_type="wav", generation=8),
+                    SimpleNamespace(source_type="plugin", generation=8),
                     SimpleNamespace(source_type="deck", generation=9)],
             enqueue_deck_clock=Mock(return_value=True))
         return host

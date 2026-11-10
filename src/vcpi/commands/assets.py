@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from vcpi.resources import repo_root, samples_root
+from vcpi.resources import repo_root
 
 
 def patches_root(host) -> Path:
@@ -101,32 +101,6 @@ def resolve_vst_token(token: str) -> str:
         raise ValueError(f"ambiguous VST name '{token}' (matches: {preview})")
 
     return token
-
-
-def sample_pack_names() -> list[str]:
-    root = samples_root()
-    if not root.exists() or not root.is_dir():
-        return []
-    packs: list[str] = []
-    for entry in root.iterdir():
-        if entry.is_dir() and not entry.name.startswith("."):
-            packs.append(entry.name)
-    return sorted(packs)
-
-
-def sample_names(pack_name: str) -> list[str]:
-    pack = Path(pack_name.strip().strip("/"))
-    if pack.is_absolute() or ".." in pack.parts:
-        return []
-
-    pack_dir = samples_root() / pack
-    if not pack_dir.exists() or not pack_dir.is_dir():
-        return []
-
-    samples: list[str] = []
-    for wav in pack_dir.glob("*.wav"):
-        samples.append(wav.stem)
-    return sorted(samples)
 
 
 def vcv_patch_names(host) -> list[str]:

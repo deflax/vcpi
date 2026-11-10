@@ -20,6 +20,7 @@ import numpy as np
 
 from vcpi.audio_deps import require_native
 from vcpi.audio.protocol import AudioProcessError
+from vcpi.deck_bank import make_catalog
 from vcpi.host import VcpiCore
 from vcpi.plugin_host import NativePlugin
 
@@ -57,11 +58,19 @@ class AudioProcessTests(unittest.TestCase):
             sample.setframerate(44100)
             sample.writeframes(struct.pack("<h", 4096) * 64)
         self.host = VcpiCore(session_path=str(self.root / "session.json"))
-        self.addCleanup(self.host.engine.shutdown)
+        self.addCleanup(self.host.shutdown, save=False)
+
+    def load_track(self, index, name):
+        catalog = make_catalog("process-test", [
+            {"id": "audio", "path": str(self.sample), "title": "Audio"},
+        ], sync=False)
+        # Exercise replacement of the worker, not an in-place playlist edit.
+        self.host.engine.request("load_deck", track_index=index, catalog=catalog, name=name)
+        return self.host.engine.tracks[index]
 
     def test_applied_async_controls_and_routing_survive_session_round_trip(self):
         host = self.host
-        host.load_wav(15, str(self.sample), "original")
+        self.load_track(15, "original")
         host.route(15, 15)
         host.sequencer.set_bank(15, ["C4", "E4"])
         host.sequencer.link(15, 15)
@@ -81,7 +90,7 @@ class AudioProcessTests(unittest.TestCase):
         self.assertEqual(saved["sequences"][15]["linked_track"], 16)
         self.assertEqual(saved["master_gain"], 0.7)
         restored = VcpiCore(session_path=str(host.session_path))
-        self.addCleanup(restored.engine.shutdown)
+        self.addCleanup(restored.shutdown, save=False)
         restored.restore_session()
         self.addCleanup(restored.sequencer.stop)
         self.assertEqual(restored.sequencer.banks[15].linked_track, 15)
@@ -124,9 +133,9 @@ class AudioProcessTests(unittest.TestCase):
             parameter = host.engine._plugin(*target).parameters[name]
             entry["params"] = {name: parameter.range[1]}
         host.session_path.write_text(json.dumps(saved))
-        host.load_wav(1, str(self.sample))
+        self.load_track(1, "additional")
         restored = VcpiCore(session_path=str(host.session_path))
-        self.addCleanup(restored.engine.shutdown)
+        self.addCleanup(restored.shutdown, save=False)
         restored.restore_session()
         for (track_index, fx_index), (name, actual) in expected.items():
             plugin = restored.engine._plugin(track_index, fx_index)
@@ -164,7 +173,7 @@ class AudioProcessTests(unittest.TestCase):
             "PLUGDATA_VST3_PATH": str(bundle),
         }):
             host = VcpiCore(session_path=str(self.root / "pd-session.json"))
-            self.addCleanup(host.engine.shutdown)
+            self.addCleanup(host.shutdown, save=False)
             track, _, used_plugin, used_patch = host.load_pd_patch(
                 0, "relative", name="relative voice")
             self.assertEqual(used_plugin, str(bundle))
@@ -190,7 +199,7 @@ class AudioProcessTests(unittest.TestCase):
             main.unlink()
             host.engine.shutdown()
             restored = VcpiCore(session_path=str(host.session_path))
-            self.addCleanup(restored.engine.shutdown)
+            self.addCleanup(restored.shutdown, save=False)
             restored.restore_session()
             track = restored.engine.tracks[0]
             self.assertIsNotNone(track)
@@ -231,8 +240,8 @@ class AudioProcessTests(unittest.TestCase):
 
     def test_retired_instance_inputs_cannot_change_replacement_state(self):
         host = self.host
-        retired = host.load_wav(0, str(self.sample), "retired")
-        host.load_wav(0, str(self.sample), "replacement")
+        retired = self.load_track(0, "retired")
+        self.load_track(0, "replacement")
         host.engine.set_track_state(0, gain=0.375)
         host.engine.enqueue_track_change(0, generation=retired.generation, gain=0.9, muted=True)
         host.save_session()
@@ -243,14 +252,17 @@ class AudioProcessTests(unittest.TestCase):
 
     def test_failed_load_keeps_previous_source_and_owner_usable(self):
         host = self.host
-        host.load_wav(0, str(self.sample), "retained")
-        with self.assertRaises(FileNotFoundError):
-            host.load_wav(0, str(self.root / "missing.wav"), "missing")
+        self.load_track(0, "retained")
+        missing = make_catalog("missing", [
+            {"id": "missing", "path": str(self.root / "missing.wav"), "title": "Missing"},
+        ])
+        with self.assertRaises((RuntimeError, ValueError)):
+            host.engine.request("load_deck", track_index=0, catalog=missing, name="missing")
         host.engine.set_track_state(0, gain=0.375)
         host.save_session()
         saved = json.loads(host.session_path.read_text())
         self.assertEqual(saved["tracks"][0]["name"], "retained")
-        self.assertEqual(saved["tracks"][0]["path"], str(self.sample))
+        self.assertEqual(saved["tracks"][0]["deck"]["tracks"][0]["path"], str(self.sample))
         self.assertEqual(saved["tracks"][0]["gain"], 0.375)
 
     def test_dead_owner_rejects_mutations_and_shutdown_preserves_last_good_file(self):
@@ -277,8 +289,8 @@ class AudioProcessTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(signal, "SIGKILL"), "requires POSIX process termination")
     def test_track_crash_is_local_and_can_be_replaced(self):
         host = self.host
-        first = host.load_wav(0, str(self.sample), "healthy")
-        second = host.load_wav(1, str(self.sample), "crashing")
+        first = self.load_track(0, "healthy")
+        second = self.load_track(1, "crashing")
         self.assertNotEqual(first.worker_pid, second.worker_pid)
         self.assertNotEqual(first.worker_pid, host.engine.owner_pid)
         os.kill(second.worker_pid, signal.SIGKILL)
@@ -292,7 +304,7 @@ class AudioProcessTests(unittest.TestCase):
         host.engine.set_track_state(0, gain=0.375)
         self.assertEqual(host.engine.tracks[0].worker_pid, first.worker_pid)
         self.assertEqual(host.engine.tracks[0].gain, 0.375)
-        replacement = host.load_wav(1, str(self.sample), "recovered")
+        replacement = self.load_track(1, "recovered")
         self.assertNotEqual(replacement.worker_pid, second.worker_pid)
         self.assertIsNone(replacement.worker_failure)
         host.save_session()
@@ -303,7 +315,7 @@ class AudioProcessTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "requires POSIX process suspension")
     def test_hung_track_snapshot_preserves_session_and_output_owner(self):
         host = self.host
-        track = host.load_wav(0, str(self.sample), "retained")
+        track = self.load_track(0, "retained")
         host.save_session()
         previous = host.session_path.read_bytes()
         os.kill(track.worker_pid, signal.SIGSTOP)
@@ -326,7 +338,7 @@ class AudioProcessTests(unittest.TestCase):
     )
     def test_interrupted_track_rpc_retires_owners_and_preserves_good_session(self):
         host = self.host
-        track = host.load_wav(0, str(self.sample), "retained")
+        track = self.load_track(0, "retained")
         host.save_session()
         previous = host.session_path.read_bytes()
         os.kill(track.worker_pid, signal.SIGSTOP)

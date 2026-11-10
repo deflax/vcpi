@@ -12,7 +12,7 @@ UPDATE_LIMIT = 64 * 1024
 CALLBACK_STALL_TIMEOUT = 2.0
 OWNER_SHUTDOWN_TIMEOUT = 10.0
 LIFECYCLE_OPERATIONS = frozenset({
-    "load_instrument", "load_wav", "remove_instrument", "load_effect",
+    "load_instrument", "remove_instrument", "load_effect",
     "remove_effect", "load_vcv", "load_vcv_patch", "load_pd", "load_pd_patch", "load_deck",
 })
 REMOTE_ERRORS = {

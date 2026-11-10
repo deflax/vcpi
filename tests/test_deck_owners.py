@@ -327,7 +327,7 @@ class DeckOwnerTests(unittest.TestCase):
 
     def test_failed_initial_load_retains_previous_source_and_generation(self):
         engine = self.remote()
-        engine.request("load_wav", track_index=0, wav_path=str(self.wav))
+        engine.request("load_deck", track_index=0, catalog=load_bank(self.bank))
         previous = engine.tracks[0]
         with self.assertRaises((RuntimeError, ValueError, FileNotFoundError)):
             engine.request("load_deck", track_index=0,

@@ -84,8 +84,8 @@ Plugin::Plugin(const std::string& path, double rate, int size, const std::string
     juce::Process::setDockIconVisible(false);
    #endif
     validateAudio(rate, size);
-    if (kind != "wav" && kind != "instrument" && kind != "effect" && kind != "deck")
-        throw std::invalid_argument("Plugin kind must be instrument, effect, wav or deck");
+    if (kind != "instrument" && kind != "effect" && kind != "deck")
+        throw std::invalid_argument("Plugin kind must be instrument, effect or deck");
     if (kind == "deck") {
         deck = std::make_unique<Deck>(path, rate);
         description.path = deck->bankPath();
@@ -102,18 +102,6 @@ Plugin::Plugin(const std::string& path, double rate, int size, const std::string
     if (!file.exists()) throw std::runtime_error("Plugin file not found: " + path);
     description.path = file.getFullPathName().toStdString();
     effect = kind == "effect";
-    wav = kind == "wav";
-    if (wav) {
-        loadWav(file);
-        description.name = file.getFileNameWithoutExtension().toStdString();
-        description.descriptiveName = description.name;
-        description.manufacturer = "vcpi";
-        description.category = "Sampler";
-        description.version = "1";
-        description.identifier = "wav:" + description.path;
-        description.infoType = "Sample";
-        return;
-    }
     juce::VST3PluginFormat format;
     juce::OwnedArray<juce::PluginDescription> types;
     format.findAllTypesForFile(types, file.getFullPathName());
@@ -164,32 +152,6 @@ Plugin::Plugin(const std::string& path, double rate, int size, const std::string
     discoverParameters();
 }
 Plugin::~Plugin() = default;
-void Plugin::loadWav(const juce::File& file) {
-    juce::WavAudioFormat format;
-    std::unique_ptr<juce::AudioFormatReader> reader(format.createReaderFor(file.createInputStream().release(), true));
-    if (!reader) throw std::runtime_error("Unable to decode WAV: " + file.getFullPathName().toStdString());
-    if (reader->sampleRate <= 0.0 || reader->lengthInSamples < 1 || reader->lengthInSamples > std::numeric_limits<int>::max())
-        throw std::invalid_argument("WAV sample length or rate is unsupported");
-    const auto sourceFrames = static_cast<int>(reader->lengthInSamples);
-    juce::AudioBuffer<float> source(2, sourceFrames);
-    source.clear();
-    if (!reader->read(&source, 0, sourceFrames, 0, true, true)) throw std::runtime_error("WAV decoding failed");
-    if (reader->numChannels == 1) source.copyFrom(1, 0, source, 0, 0, sourceFrames);
-    const double resampled = static_cast<double>(sourceFrames) * sampleRate / reader->sampleRate;
-    if (resampled > std::numeric_limits<int>::max()) throw std::invalid_argument("Resampled WAV is too large");
-    const auto count = sourceFrames == 1 ? 1 : std::max(1, static_cast<int>(std::nearbyint(resampled)));
-    sampleLeft.resize(static_cast<std::size_t>(count));
-    sampleRight.resize(static_cast<std::size_t>(count));
-    for (int i = 0; i < count; ++i) {
-        // Match sampler.wav.resample_linear's endpoint-aligned linspace, not
-        // the subtly different i * source_rate / destination_rate grid.
-        const auto position = count > 1 ? static_cast<double>(i) * (sourceFrames - 1) / (count - 1) : 0.0;
-        const auto first = static_cast<int>(position), next = std::min(first + 1, sourceFrames - 1);
-        const auto fraction = static_cast<float>(position - first);
-        sampleLeft[static_cast<std::size_t>(i)] = source.getSample(0, first) * (1.0f - fraction) + source.getSample(0, next) * fraction;
-        sampleRight[static_cast<std::size_t>(i)] = source.getSample(1, first) * (1.0f - fraction) + source.getSample(1, next) * fraction;
-    }
-}
 void Plugin::discoverParameters() {
     parameterInfos.clear();
     parameterIndex.clear();
@@ -405,7 +367,6 @@ Scalar Plugin::setParameter(const std::string& key, const Scalar& value) {
 void Plugin::loadPreset(const std::string& path) {
     if (deck) throw std::invalid_argument("Deck sources do not support plugin presets");
     ControlOwnership lock(ownership);
-    if (!instance) throw std::invalid_argument("WAV instruments do not support presets");
     const juce::File file{juce::String(path)};
     if (file.hasFileExtension("pd") && file.getSize() > static_cast<juce::int64>(pd_state::maxPdPatchBytes))
         throw std::invalid_argument("Pure Data patch exceeds the 16 MiB import limit");
@@ -495,10 +456,9 @@ void Plugin::loadPreset(const std::string& path) {
 juce::MemoryBlock Plugin::getState() {
     if (deck) throw std::invalid_argument("Deck sources use explicit session fields, not plugin state chunks");
     ControlOwnership lock(ownership);
-    if (!instance) throw std::invalid_argument("WAV instruments do not support state chunks");
     // Commit acknowledged edits before serialization. Some VST3s ignore
     // parameter flushes with zero samples, so pending edits need one block.
-    // Ordinary captures don't advance DSP; WAV captures never render.
+    // Ordinary captures don't advance DSP.
     if (parametersPending) {
         audio.clear();
         juce::MidiBuffer midi;
@@ -515,14 +475,12 @@ juce::MemoryBlock Plugin::getState() {
 void Plugin::loadState(const std::string& data) {
     if (deck) throw std::invalid_argument("Deck sources use explicit session fields, not plugin state chunks");
     ControlOwnership lock(ownership);
-    if (!instance) throw std::invalid_argument("WAV instruments do not support state chunks");
     if (data.empty() || data.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) throw std::invalid_argument("Invalid state chunk size");
     applyState(data);
 }
 void Plugin::loadSavedState(const std::string& data) {
     if (deck) throw std::invalid_argument("Deck sources use explicit session fields, not plugin state chunks");
     ControlOwnership lock(ownership);
-    if (!instance) throw std::invalid_argument("WAV instruments do not support state chunks");
     validateSavedState(data.data(), data.size());
     applyState(data);
 }
@@ -618,38 +576,8 @@ void Plugin::updateDeckCatalog(const std::string& catalog) {
     description.descriptiveName = description.name;
     description.identifier = "deck:" + deck->bankId();
 }
-void Plugin::renderWav(float* left, float* right, const juce::MidiBuffer& midi) noexcept {
-    std::fill_n(left, frames, 0.0f);
-    std::fill_n(right, frames, 0.0f);
-    // Queue order and voice stealing match WavSamplerPlugin: note-off is ignored.
-    for (const auto event : midi) {
-        if (event.numBytes >= 3 && (event.data[0] & 0xf0) == 0x90 && event.data[2] > 0) {
-            if (voiceCount == voices.size()) {
-                std::move(voices.begin() + 1, voices.end(), voices.begin());
-                --voiceCount;
-            }
-            voices[voiceCount++] = {0.0, std::pow(2.0, (static_cast<int>(event.data[1]) - 60) / 12.0), event.data[2] / 127.0};
-        }
-    }
-    std::size_t alive = 0;
-    for (std::size_t voiceIndex = 0; voiceIndex < voiceCount; ++voiceIndex) {
-        auto voice = voices[voiceIndex];
-        for (int i = 0; i < frames; ++i) {
-            const auto position = voice.position + i * voice.rate;
-            if (position >= sampleLeft.size()) break;
-            const auto first = static_cast<std::size_t>(position), next = std::min(first + 1, sampleLeft.size() - 1);
-            const auto fraction = position - static_cast<double>(first);
-            left[i] += static_cast<float>((sampleLeft[first] * (1.0 - fraction) + sampleLeft[next] * fraction) * voice.gain);
-            right[i] += static_cast<float>((sampleRight[first] * (1.0 - fraction) + sampleRight[next] * fraction) * voice.gain);
-        }
-        voice.position += frames * voice.rate;
-        if (voice.position < sampleLeft.size()) voices[alive++] = voice;
-    }
-    voiceCount = alive;
-}
 void Plugin::process(float* left, float* right, juce::MidiBuffer& midi) {
     if (deck) { deck->render(left, right, frames); return; }
-    if (wav) { renderWav(left, right, midi); return; }
     audio.clear();
     if (effect) {
         if (instance->getTotalNumInputChannels() == 1) {

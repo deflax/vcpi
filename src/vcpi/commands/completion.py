@@ -335,13 +335,6 @@ def _complete_track(ctx):
                 return choices(assets.vcv_patch_names(ctx.host))
             if len(args) == 3:
                 return choices(("--name",))
-        if mode == "wav":
-            if len(args) == 2:
-                return choices(assets.sample_pack_names())
-            if len(args) == 3:
-                return choices(assets.sample_names(args[2]))
-            if len(args) == 4:
-                return choices(("--name",))
         return empty
     return empty
 

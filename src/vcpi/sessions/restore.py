@@ -33,8 +33,6 @@ def _restore_tracks(host: VcpiCore, data: dict, version: int, errors: list[str])
                     if not isinstance(deck, dict):
                         raise ValueError("deck payload is required")
                     track = host.restore_deck(idx, deck, track_data.get("name"))
-                case "wav":
-                    track = host.load_wav(idx, plugin_path, track_data.get("name"))
                 case "vcv":
                     vcv_patch = track_data.get("vcv_patch_path", "")
                     if version == 1 and vcv_patch:
@@ -45,8 +43,10 @@ def _restore_tracks(host: VcpiCore, data: dict, version: int, errors: list[str])
                         )
                     else:
                         track = host.load_instrument(idx, plugin_path, track_data.get("name"))
-                case _:
+                case "plugin" | "pd":
                     track = host.load_instrument(idx, plugin_path, track_data.get("name"))
+                case _:
+                    raise ValueError(f"unsupported track source kind: {track_kind!r}")
             track = host.engine.set_track_state(
                 idx,
                 gain=track_data.get("gain", 0.8),
@@ -58,8 +58,7 @@ def _restore_tracks(host: VcpiCore, data: dict, version: int, errors: list[str])
                 pd_patch_path=track_data.get("pd_patch_path", ""),
             )
             if track_kind != "deck":
-                _restore_plugin_state(
-                    host, idx, track_data, version, wav=track_kind == "wav")
+                _restore_plugin_state(host, idx, track_data, version)
             logger.info("[session] track %d: %s", idx + 1, track.name)
 
             for fx_data in track_data.get("effects", []):

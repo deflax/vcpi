@@ -172,6 +172,7 @@ chown -R pi:pi "$PROJECT_DIR"
 # Exercise the installed native extension, MIDI, mmap handoff and engine mixer.
 runuser -u pi -- env -u DISPLAY -u WAYLAND_DISPLAY "$PYTHON" - <<'PY'
 from pathlib import Path
+import json
 import struct
 import tempfile
 import wave
@@ -196,11 +197,19 @@ with tempfile.TemporaryDirectory(prefix="vcpi-image-smoke-") as directory:
         sample.writeframes(struct.pack("<h", 4096) * 4096)
 
     transport = native.Transport(str(root / "audio.mmap"), 64, True)
-    plugin = native.Plugin(str(sample_path), 44100, 64, "wav")
+    catalog = json.dumps({
+        "version": 1, "id": "image-smoke", "bank_path": "session:image-smoke",
+        "tracks": [{"id": "audio", "path": str(sample_path), "title": "Audio"}],
+        "play": True, "sync": False,
+    })
+    plugin = native.Plugin(catalog, 44100, 64, "deck")
     engine = native.Engine(44100, 64)
     runner = None
     try:
         runner = native.TrackRunner(transport, plugin, 44100, 64)
+        # Settle the deck's click-prevention ramp before checking mixer gain.
+        for _ in range(16):
+            runner.render_once()
         engine.attach(0, transport, 0.5, False, False)
         transport.send_midi(bytes(mido.Message("note_on", note=60, velocity=127).bytes()))
         # Fixed one-block pipeline: the first call requests, the next consumes.
@@ -210,7 +219,7 @@ with tempfile.TemporaryDirectory(prefix="vcpi-image-smoke-") as directory:
         np.testing.assert_array_equal(rendered, np.full((64, 2), 0.0625, dtype=np.float32))
         if engine.stats()["render_errors"] or transport.stats()["failure"]:
             raise RuntimeError("Native image smoke reported a render failure")
-        print("Target dependency imports and native offline WAV rendering passed")
+        print("Target dependency imports and native offline deck rendering passed")
     finally:
         engine.shutdown()
         if runner is not None:

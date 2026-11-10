@@ -226,13 +226,6 @@ class VcpiCore:
         self.engine.request("load_instrument", track_index=track_index, path=path, name=name)
         return self._loaded_track(track_index)
 
-    def load_wav(self, track_index: int, wav_path: str,
-                 name: Optional[str] = None) -> InstrumentTrack:
-        """Stage a sampler track process and return its published cached state."""
-        self._clear_deck_holds(track_index=track_index)
-        self.engine.request("load_wav", track_index=track_index, wav_path=wav_path, name=name)
-        return self._loaded_track(track_index)
-
     def load_deck(self, track_index: int, audio_path: str,
                   name: Optional[str] = None) -> InstrumentTrack:
         """Replace the playlist and its song memory, retaining mixer and inserts."""

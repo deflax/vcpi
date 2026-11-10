@@ -250,7 +250,9 @@ class DeckSessionTests(unittest.TestCase):
                         {"kind": "deck", "name": "Missing", "path": str(self.bank),
                          "deck": {"bank_path": str(bank_path), "bank_id": bank_id,
                                   "track_id": track_id, "cue": 0, "pitch": 0}},
-                        {"kind": "wav", "name": "Unaffected", "path": str(self.root / "first.wav")},
+                        {"kind": "deck", "name": "Unaffected",
+                         "deck": {"bank_path": str(self.bank), "bank_id": "live-set",
+                                  "track_id": "first", "cue": 0, "pitch": 0}},
                     ]}))
                 restored = self.host()
                 with self.assertLogs("vcpi.sessions", level="WARNING") as messages:

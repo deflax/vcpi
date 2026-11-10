@@ -43,7 +43,7 @@ class InstrumentTrack:
     muted: bool = False
     solo: bool = False
     enabled: bool = True
-    source_type: str = "plugin"  # plugin | wav | vcv | pd | deck
+    source_type: str = "plugin"  # plugin | vcv | pd | deck
     vcv_patch_path: str = ""     # .vcv patch file (when source_type == "vcv")
     pd_patch_path: str = ""      # .pd patch file (when source_type == "pd")
     deck: dict = field(default_factory=dict)  # control-side transport/catalog cache
@@ -60,22 +60,12 @@ class InstrumentTrack:
         """Qualified label shown in status/tracks output.
 
         Format:
-          sample::<pack>:<stem>   for WAV samples
           vst3::<name>            for VST3 plugins
           vcv::<patch stem>       for VCV/Cardinal patches
           pd::<patch stem>        for Pure Data/plugdata patches
         """
         if self.source_type == "deck":
             return f"deck::{self.deck.get('bank_id', '?')}:{self.deck.get('track_title', self.name)}"
-        if self.source_type == "wav":
-            parts = Path(self.path).parts
-            try:
-                samples_idx = list(parts).index("samples")
-                pack = parts[samples_idx + 1]
-            except (ValueError, IndexError):
-                pack = "?"
-            stem = Path(self.path).stem
-            return f"sample::{pack}:{stem}"
         if self.source_type == "vcv":
             patch_stem = Path(self.vcv_patch_path).stem if self.vcv_patch_path else self.name
             return f"vcv::{patch_stem}"

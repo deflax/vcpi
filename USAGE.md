@@ -315,7 +315,7 @@ Commands follow an explicit order within each group: `save`, `load`; `status`,
 `tempo`, `clock`, `transport`, `ableton`, `seq`. The `exit` alias appears in the description of `quit`, not as a
 separate row; it remains available as a command and completion.
 Use `help <command>` for detailed syntax, defaults, and usage. Nested topics
-such as `help track wav`, `help audio start`, and `help midi input close`
+such as `help track deck`, `help audio start`, and `help midi input close`
 focus on one operation; Tab completes valid topics. Unknown topics are errors.
 The interactive overview uses one compact table, with a different colour for each
 category's heading and command names; descriptions remain neutral. Descriptions
@@ -370,7 +370,6 @@ hardware or empty plugin/effect lists may also yield no choices.
 | Command | Description |
 |---|---|
 | `track <track> vst <path\|vst_name> [--name <label>]` | Load VST instrument into track |
-| `track <track> wav <pack> <sample> [--name <label>]` | Load `assets/samples/<pack>/<sample>.wav` as one-shot sampler into track |
 | `track <track> deck <audio-file\|directory> [--name <label>]` | Replace the session-owned playlist and reset its song memory, initially paused |
 | `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `assets/patches/<patch_name>.vcv` |
 | `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `assets/patches/` or an absolute path |
@@ -393,11 +392,11 @@ To override the display label, use `track 1 vst Acid V --name Bass`.
 The same syntax applies to `track <track|master> fx`; trailing words without
 `--name` are part of the plugin name, not a custom label.
 All source types use `--name <label>` for optional display labels. Quote VCV
-patch names, WAV pack/sample names, and deck paths containing spaces; positional
+patch names and deck paths containing spaces; positional
 labels are not accepted. For example:
 
 ```text
-track 1 wav piano c4-soft --name "Soft Piano"
+track 1 pd sine --name "Sine Lead"
 track 2 deck "/music/opening song.flac" --name "Deck B"
 track 3 vcv "Warm Pad" --name Atmosphere
 ```
@@ -505,8 +504,8 @@ unchanged. Focus is saved and restored with sessions; older sessions default to 
 
 ### Deck Commands
 
-Decks play continuous tracks, not MIDI-triggered `wav` sampler voices. They detect
-a beat grid automatically and follow the global tempo and beat phase by default,
+Decks play continuous tracks. They detect a beat grid automatically and follow
+the global tempo and beat phase by default,
 using the selected timing authority (internal, BeatStep Pro MIDI, or Ableton Link).
 Play/pause is still controlled per deck, independently of global transport
 start/stop. Create up to sixteen ordinary mixer tracks:
@@ -962,7 +961,7 @@ latency: **512 samples / 11.610 ms** at the defaults, in addition to backend and
 plugin latency. The three handoff cells do not add three blocks of latency.
 An unavailable/late block silences only that track for that block and increments
 its missing-block counter; old blocks are never replayed. Muted and solo-excluded
-tracks still render so MIDI note-offs and plugin tails advance. Gain/mix, sampler,
+tracks still render so MIDI note-offs and plugin tails advance. Gain/mix
 and event storage are preallocated. Processes increase memory/scheduling cost;
 native rendering removes interpreter contention but does not guarantee hard
 real-time behavior from the OS, device backend, or third-party plugins.
@@ -975,7 +974,7 @@ explicitly stops the output owner; track MIDI overflow or oversized messages
 explicitly fail only that track. Events for a retired generation cannot affect
 its replacement.
 
-Instrument/WAV/Cardinal/plugdata loads initialize and warm a new track process while
+Instrument/Cardinal/plugdata loads initialize and warm a new track process while
 existing tracks continue playing. A ready replacement switches at a callback
 boundary; only then is the old process retired. Failed loading leaves the old
 source playing. Removal stops only that track. Insert edits and parameter
@@ -1121,27 +1120,6 @@ per-device routing instead.
 
 Important: `midi link <ch> <track>` only maps MIDI channels internally. It does
 not open hardware ports; `midi input` and `midimix input` do.
-
-WAV sampler behavior:
-
-- `track <n> wav` plays the file when MIDI `note_on` events reach that track.
-- `track 2 wav 909 bassdrum` resolves to `assets/samples/909/bassdrum.wav`.
-  A working-directory `assets/samples` directory takes precedence over bundled
-  checkout samples, consistently for loading and completion.
-- Built-in packs: `808`, `909`, `piano`, `organ`, `strings`, `synth-pads`, `synth-leads`.
-- The `.wav` extension is optional in `<sample>`.
-- Notes are pitch-shifted around middle C (MIDI note 60).
-- It is one-shot playback (note-off does not cut the sample).
-
-Melodic examples:
-
-```text
-vcpi> track 1 wav piano c4-soft
-vcpi> track 2 wav organ c4-drawbar
-vcpi> track 3 wav strings c4-ensemble
-vcpi> track 4 wav synth-pads c4-warm
-vcpi> track 5 wav synth-leads c4-mono-saw
-```
 
 ### BeatStep Pro Controller
 
@@ -1380,7 +1358,10 @@ Saved/restored session state includes:
 New saves use session format **3**: each VST3 instrument, track insert, and master
 effect stores a base64-encoded native state chunk. This preserves plugin-owned
 settings, including settings not exposed as parameters, without replaying MIDI
-helpers or action controls. WAV tracks remain path-based.
+helpers or action controls.
+The former WAV sampler track type and bundled sample packs are no longer
+supported. Saved sampler tracks report restore errors; other tracks continue
+restoring. WAV audio files remain supported by decks.
 Pure Data/plugdata tracks also use native chunks, embedding the main patch while
 retaining its original location for resolving external files. Abstractions and
 sample files must remain installed separately.
@@ -1409,8 +1390,8 @@ do not provide legacy CLI command aliases.
 
 Saving waits for prior controls/MIDI and captures each track between render jobs.
 Pending VST3 parameter edits require one MIDI-free processing block before
-serialization; ordinary captures without pending edits do not advance DSP, and
-WAV capture never renders an extra block. Capture can delay the inspected track.
+serialization; ordinary captures without pending edits do not advance DSP.
+Capture can delay the inspected track.
 Without master effects, saving leaves the output stream running. With master
 effects, it also pauses the output stream for native master-state capture.
 Read-only diagnostics never capture chunks; ordinary updates do not carry them.
