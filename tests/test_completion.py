@@ -31,7 +31,7 @@ class CompletionTests(unittest.TestCase):
         }, values={"cutoff": 1000.0, "bypass": False, "mode": "Quiet Mode"})
         self.effect = PluginSnapshot(2, parameters={"mix": ParameterSnapshot()})
         self.master = PluginSnapshot(3, parameters={"enabled": ParameterSnapshot(kind="bool")})
-        self.track = SimpleNamespace(plugin=self.instrument, effects=[self.effect], source_type="plugin")
+        self.track = SimpleNamespace(plugin=self.instrument, effects=[self.effect], source_type="pd")
         self.forbidden = Mock(side_effect=AssertionError("completion requested live state or mutation"))
         self.engine = SimpleNamespace(
             tracks=[self.track] + [None] * (NUM_TRACKS - 1),
@@ -45,7 +45,7 @@ class CompletionTests(unittest.TestCase):
         self.host = SimpleNamespace(
             engine=self.engine, midi_inputs=[object(), object()],
             start_audio=self.forbidden, stop_audio=self.forbidden,
-            load_instrument=self.forbidden, load_effect=self.forbidden,
+            load_vcv_patch=self.forbidden, load_pd_patch=self.forbidden, load_effect=self.forbidden,
             open_midi_input=self.forbidden, close_midi_input=self.forbidden,
         )
         self.cli = HostCLI(self.host, stdout=io.StringIO(), owns_host=False)
@@ -129,7 +129,7 @@ class CompletionTests(unittest.TestCase):
                 ("ableton ", {"link", "cut"}),
                 ("debug ", {"on", "off"}),
                 ("track master ", {"fx"}),
-                ("track 16 ", {"vst", "deck", "vcv", "pd", "fx", "clear"})):
+                ("track 16 ", {"deck", "vcv", "pd", "fx", "clear"})):
             self.assertEqual(set(self.matches(before)), expected)
         for before in ("midi link 17 ", "midi link 0 ", "seq link 0 ",
                        "seq link 17 ", "track 17 ", "track master clear ",
@@ -317,17 +317,18 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.matches('set 1 "unterminated name'), [])
 
     def test_multiword_plugin_replaces_whole_fragment_and_supports_name_option(self):
-        for before in ("track 1 vst Surge X", 'track 1 vst "Surge X',
-                       "track master fx Surge X", "track 1 fx Surge X"):
+        for before in ("track 1 fx Surge X", 'track 1 fx "Surge X',
+                       "track master fx Surge X", 'track master fx "Surge X'):
             inserted = self.inserted(before, "'Surge XT'")
             plugin_arg = inserted.split(maxsplit=3)[3]
             self.assertEqual(parse_named_source(plugin_arg), ("Surge XT", None))
-        self.assertEqual(self.matches("track 1 vst Basic "), ["--name"])
-        self.assertEqual(self.matches("track 1 vst Basic --n"), ["--name"])
-        self.assertEqual(self.matches("track 1 vst Basic --name "), [])
+        for target in ("1", "master"):
+            self.assertEqual(self.matches(f"track {target} fx Basic "), ["--name"])
+            self.assertEqual(self.matches(f"track {target} fx Basic --n"), ["--name"])
+            self.assertEqual(self.matches(f"track {target} fx Basic --name "), [])
         self.assertEqual(self.matches("track 1 fx clear "), ["1"])
         (self.root / "vst" / "Fresh.vst3").mkdir()
-        self.assertEqual(self.matches("track 1 vst Fre"), ["Fresh"])
+        self.assertEqual(self.matches("track 1 fx Fre"), ["Fresh"])
 
     def test_pd_patch_completion_preserves_multiword_and_nested_paths(self):
         for before, name in (
@@ -346,11 +347,11 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.matches("track master pd "), [])
 
     def test_readline_bridge_replaces_multiword_plugin_fragment(self):
-        before = "track 1 vst Surge X"
+        before = "track 1 fx Surge X"
         with patch("readline.get_line_buffer", return_value=before), \
                 patch("readline.get_endidx", return_value=len(before)), \
                 patch("readline.get_begidx", return_value=0):
-            self.assertEqual(self.cli.complete(before, 0), "track 1 vst 'Surge XT' ")
+            self.assertEqual(self.cli.complete(before, 0), "track 1 fx 'Surge XT' ")
             self.assertIsNone(self.cli.complete(before, 1))
 
     def test_quoted_sessions_and_assets_insert_as_single_arguments(self):
@@ -377,6 +378,9 @@ class CompletionTests(unittest.TestCase):
                 ("ps --a", "--all", "ps --all")):
             self.assertEqual(self.inserted(before, match), expected)
         self.assertEqual(self.matches("help audio start nonsense "), [])
+        self.assertEqual(set(self.matches("help track ")), {"deck", "vcv", "pd", "fx", "clear"})
+        self.assertEqual(self.matches("help track vs"), [])
+        self.assertEqual(self.matches("help track vst "), [])
         self.assertEqual(self.matches("note 1 60 --velocity "), [])
         self.assertEqual(self.matches("note 1 60 --velocity 80 "), ["--duration-ms"])
         self.assertNotIn("--mem", self.matches("ps --cpu "))
@@ -385,19 +389,22 @@ class CompletionTests(unittest.TestCase):
     def test_invalid_structural_prefixes_do_not_discover_assets(self):
         with patch.object(assets, "vst_names") as vst, \
                 patch.object(assets, "vcv_patch_names") as patches, \
+                patch.object(assets, "pd_patch_names") as pd_patches, \
                 patch.object(assets, "session_names") as sessions:
             for before in ("unknown ", "track 99 vst ", "track master vst ",
-                           "track 1 unknown ", "track 1 clear ", "track 1 fx clear ",
+                           "track 1 vst ", "track 1 vst Surge ", "track 1 vst Basic --",
+                           "track 1 unknown ", "track 1 clear ",
                            "track 1 wav Drums Kick Label ", "loadx "):
-                self.matches(before)
-            for discover in (vst, patches, sessions):
+                self.assertEqual(self.matches(before), [], before)
+            self.assertEqual(self.matches("track 1 fx clear "), ["1"])
+            for discover in (vst, patches, pd_patches, sessions):
                 discover.assert_not_called()
 
     def test_control_characters_from_assets_and_metadata_are_never_inserted(self):
         unsafe = ["bad\nstatus", "bad\rstatus", "bad\x00value", "bad\x01value", "bad\x1b[31m", "bad\x7f"]
         with patch.object(assets, "vst_names", return_value=["Good", *unsafe]), \
                 patch.object(assets, "session_names", return_value=["Good Set", *unsafe]):
-            self.assertEqual(self.matches("track 1 vst "), ["Good"])
+            self.assertEqual(self.matches("track 1 fx "), ["Good", "clear"])
             self.assertEqual(self.matches("load "), ["'Good Set'"])
         self.instrument.parameters["mode"].valid_values = ("Good Choice", *unsafe)
         self.assertEqual(self.matches("set 1 mode "), ["'Good Choice'"])
@@ -412,7 +419,7 @@ class CompletionTests(unittest.TestCase):
         with patch("vcpi.midi.list_midi_input_ports", return_value=[]), \
                 patch("vcpi.midi.list_midi_output_ports", return_value=[]):
             for before in ("", "audio start ", "audio diagnose ", "midi input ",
-                           "midi input close ", "midimix output ", "track 1 vst ",
+                           "midi input close ", "midimix output ", "track 1 fx ",
                            "track 1 fx clear ", "get 1 ", "set 1 mode ",
                            "set master 1 enabled ", "seq link ", "debug ",
                            "show ", "show 1 ", "show 1 fx ", "show master fx ",

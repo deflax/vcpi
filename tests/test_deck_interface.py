@@ -192,7 +192,7 @@ class DeckMidiTests(unittest.TestCase):
         self.assertEqual(self.engine.commands, [
             (0, "pitch", -16, 7), (0, "pitch", 16, 7),
             (0, "track_select", 1, 7), (0, "track_select", 257, 7)])
-        self.engine.tracks[1] = replace(self.engine.tracks[1], source_type="plugin")
+        self.engine.tracks[1] = replace(self.engine.tracks[1], source_type="vcv")
         self.send(0x91, 64, 127)
         self.send(0x91, 64, 0)
         self.assertEqual([msg.type for _, msg in self.engine.midi], ["note_on", "note_off"])

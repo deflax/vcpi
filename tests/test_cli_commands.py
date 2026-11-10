@@ -6,7 +6,7 @@ import shlex
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from vcpi.commands.cli import HostCLI
 from vcpi.commands.context import parse_named_source, source_args
@@ -133,6 +133,38 @@ class CLICommandTests(unittest.TestCase):
                 self.assertIsNone(result)
                 self.assertIn("Usage:", text)
                 self.assertFalse(self.cli._shutdown_requested)
+
+    def test_vst_source_commands_are_rejected_without_host_calls(self):
+        host = Mock()
+        self.cli.host = host
+        for target in ("1", "16", "master"):
+            for source in ("vst", "vst Basic", 'vst "Surge XT" --name Bass',
+                           "VST /plugins/Instrument.vst3"):
+                with self.subTest(target=target, source=source):
+                    result, text = self.execute(f"track {target} {source}")
+                    self.assertIsNone(result)
+                    self.assertIn("Error:", text)
+                    self.assertEqual(host.mock_calls, [])
+
+    def test_removed_vst_help_topic_is_unavailable(self):
+        _, text = self.execute("help track vst")
+        self.assertIn("No help for", text)
+        self.assertNotIn("Usage:", text)
+
+    def test_track_and_master_effects_resolve_multiword_plugin_names(self):
+        self.host.load_effect = Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "Room Reverb.vst3"
+            bundle.mkdir()
+            with patch("vcpi.commands.assets.vst_search_dirs", return_value=[Path(directory)]):
+                for target, index in (("1", 0), ("16", 15), ("master", None)):
+                    for source in ("Room Reverb", '"Room Reverb"', shlex.quote(str(bundle))):
+                        for suffix, name in (("", None), (' --name "Live Room"', "Live Room")):
+                            with self.subTest(target=target, source=source, name=name):
+                                _, text = self.execute(f"track {target} fx {source}{suffix}")
+                                self.assertNotIn("Error:", text)
+                                self.host.load_effect.assert_called_once_with(str(bundle), index, name)
+                                self.host.load_effect.reset_mock()
 
     def test_malformed_quotes_are_errors_not_exceptions(self):
         for command in ("track", "gain", "mute", "solo", "audio", "midi", "midimix",

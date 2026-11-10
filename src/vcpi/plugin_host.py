@@ -8,7 +8,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from vcpi import audio_deps as deps
 from vcpi.audio.control import AudioEngine
@@ -179,8 +179,8 @@ class PluginHost:
         cardinal_vst_path = self._resolve_cardinal_path(cardinal_path)
         track_label = name or f"Cardinal:{patch_path.stem}"
 
-        track = self.load_instrument(track_index, str(cardinal_vst_path), track_label)
-        track.source_type = "vcv"
+        track = self._load_patch_plugin(
+            track_index, str(cardinal_vst_path), "vcv", track_label)
         track.vcv_patch_path = str(patch_path)
         patch_result = self._apply_vcv_patch(track.plugin, patch_path)
 
@@ -286,11 +286,25 @@ class PluginHost:
         )
         return track, patch_result, used_cardinal, patch_path
 
-    # -- instrument loading ---------------------------------------------------
+    # -- patch backend loading ------------------------------------------------
 
-    def load_instrument(self, track_index: int, path: str,
-                        name: Optional[str] = None) -> InstrumentTrack:
-        """Load and warm a native VST3 instrument on its control owner."""
+    def restore_patch(self, track_index: int, path: str, source_type: Literal["vcv", "pd"],
+                      name: Optional[str] = None) -> InstrumentTrack:
+        """Load the saved patch backend without requiring its original patch file."""
+        if source_type == "vcv":
+            plugin_path = self._resolve_cardinal_path(path)
+        elif source_type == "pd":
+            plugin_path = self._resolve_plugdata_path(path)
+        else:
+            raise ValueError(f"unsupported patch source kind: {source_type!r}")
+        return self._load_patch_plugin(track_index, str(plugin_path), source_type, name)
+
+    def _load_patch_plugin(self, track_index: int, path: str,
+                           source_type: Literal["vcv", "pd"],
+                           name: Optional[str] = None) -> InstrumentTrack:
+        """Load a native backend for a supported patch source."""
+        if source_type not in ("vcv", "pd"):
+            raise ValueError(f"unsupported patch source kind: {source_type!r}")
         if not 0 <= track_index < NUM_TRACKS:
             raise ValueError(f"track must be 1-{NUM_TRACKS}")
 
@@ -306,7 +320,7 @@ class PluginHost:
             name=track_name,
             path=path,
             plugin=plugin,
-            source_type="plugin",
+            source_type=source_type,
         )
 
         # The child lifecycle dispatcher has stopped audio before publication.

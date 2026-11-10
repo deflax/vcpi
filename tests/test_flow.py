@@ -48,7 +48,7 @@ class FlowTests(unittest.TestCase):
             path_to_plugin_file="/plugins/limiter.vst3", parameters={
                 "bypass": ParameterSnapshot(kind="bool", is_boolean=True, is_discrete=True),
             })
-        self.track = InstrumentTrack("Lead", "lead.vst3", instrument, effects=[effect])
+        self.track = InstrumentTrack("Lead", "lead.vst3", instrument, effects=[effect], source_type="vcv")
         self.engine = SimpleNamespace(
             tracks=[self.track] + [None] * (NUM_TRACKS - 1), master_effects=[master], master_gain=1.0,
             channel_map={0: 0, 15: 15}, _failure=None, _closed=False, _health=[1],
@@ -193,7 +193,7 @@ class FlowTests(unittest.TestCase):
             self.assertIn(reason, self.track_state())
             self.assertNotIn("eligible", self.track_state())
             setattr(self.track, field, original)
-        self.engine.tracks[1] = InstrumentTrack("Solo", "", PluginSnapshot(3), solo=True)
+        self.engine.tracks[1] = InstrumentTrack("Solo", "", PluginSnapshot(3), solo=True, source_type="vcv")
         self.assertIn("solo-excluded", self.track_state())
         self.track.solo = True
         self.assertEqual(self.track_state(), "eligible")

@@ -103,10 +103,19 @@ class AudioProcessTests(unittest.TestCase):
         self.assertIsNone(restored.audio_output_name)
 
     def test_native_session_chunks_round_trip_all_rpc_targets_without_parameter_replay(self):
-        instrument_path = self.native_bundle("Surge XT.vst3", "SURGE_VST3_PATH")
+        plugin_path = self.native_bundle("plugdata.vst3", "PLUGDATA_VST3_PATH")
         effect_path = self.native_bundle("DragonflyRoomReverb.vst3", "DRAGONFLY_VST3_PATH")
+        patch_path = self.root / "voice.pd"
+        patch_path.write_text(
+            "#N canvas 0 0 300 200 10;\n"
+            "#X obj 20 20 osc~ 440;\n"
+            "#X obj 20 60 dac~;\n"
+            "#X connect 0 0 1 0;\n"
+            "#X connect 0 0 1 1;\n",
+            encoding="utf-8",
+        )
         host = self.host
-        host.load_instrument(0, str(instrument_path))
+        host.load_pd(0, str(patch_path), plugdata_path=str(plugin_path))
         host.load_effect(str(effect_path), 0)
         host.load_effect(str(effect_path), None)
         targets = ((0, None), (0, 0), (None, 0))
@@ -133,6 +142,7 @@ class AudioProcessTests(unittest.TestCase):
             parameter = host.engine._plugin(*target).parameters[name]
             entry["params"] = {name: parameter.range[1]}
         host.session_path.write_text(json.dumps(saved))
+        patch_path.unlink()
         self.load_track(1, "additional")
         restored = VcpiCore(session_path=str(host.session_path))
         self.addCleanup(restored.shutdown, save=False)
@@ -249,6 +259,22 @@ class AudioProcessTests(unittest.TestCase):
         self.assertEqual(saved["tracks"][0]["name"], "replacement")
         self.assertEqual(saved["tracks"][0]["gain"], 0.375)
         self.assertFalse(saved["tracks"][0]["muted"])
+
+    def test_generic_instrument_operations_are_rejected_without_replacing_track(self):
+        host = self.host
+        retained = self.load_track(0, "retained")
+        with self.assertRaises(ValueError):
+            host.engine.request("load_instrument", track_index=0, path="/unused.vst3")
+        for source_type in ("plugin", "deck", "unknown", None):
+            with self.subTest(source_type=source_type):
+                with self.assertRaises(ValueError):
+                    host.restore_patch(0, "/unused.vst3", source_type)
+                with self.assertRaisesRegex(ValueError, "unsupported patch source kind"):
+                    host.engine.request("restore_patch", track_index=0,
+                                        path="/unused.vst3", source_type=source_type)
+        self.assertEqual(host.engine.tracks[0].generation, retained.generation)
+        host.engine.set_track_state(0, gain=0.375)
+        self.assertEqual(host.engine.tracks[0].gain, 0.375)
 
     def test_failed_load_keeps_previous_source_and_owner_usable(self):
         host = self.host

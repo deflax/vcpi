@@ -124,7 +124,7 @@ class ParameterRestoreTests(unittest.TestCase):
         self.engine = AudioEngine(buffer_size=8, track_mode=True)
         self.addCleanup(self.engine.shutdown)
         self.instrument = ControlledInstrument()
-        self.native_track = InstrumentTrack("controls", "controls", self.instrument)
+        self.native_track = InstrumentTrack("controls", "controls", self.instrument, source_type="vcv")
         self.engine.tracks[2] = self.native_track
         self.owner = SimpleNamespace(engine=self.engine)
         self.worker = TrackWorker.__new__(TrackWorker)

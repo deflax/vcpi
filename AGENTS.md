@@ -79,7 +79,7 @@ Hidden directories present in the workspace:
 
 ## Plugin and asset behavior
 
-- `track <n> vst` and `track <n> fx` accept either a plugin name or a full path.
+- Track sources are `vcv`, `pd`, and `deck`; direct VST instrument tracks are not supported. `track <n|master> fx` still accepts an effect plugin name or full path.
 - VST3 name search checks `VST3_PATH` and `VST_PATH` directories, then the working directory, repository root, `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`, and documented macOS paths. The former `vst3/` subdirectory is not searched automatically.
 - `track <n> vcv` and `track <n> pd` load from `assets/patches/` by default; `VCPI_PATCHES_DIR` overrides that directory. Loading does not auto-route MIDI channels.
 

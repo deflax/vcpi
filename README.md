@@ -1,8 +1,9 @@
 # vcpi
 
-vcpi is a VST3 host with a native C++ audio engine, Python control plane, and
-Ableton Link tempo sync, designed for hardware-centric live setups (for example
-Arturia BeatStep Pro + Akai MIDI Mix).
+vcpi hosts Cardinal/VCV and plugdata/Pure Data patches alongside audio decks,
+with VST3 effects, a native C++ audio engine, Python control plane, and Ableton
+Link tempo sync for hardware-centric live setups (for example Arturia BeatStep
+Pro + Akai MIDI Mix).
 
 ## Setup
 
@@ -101,7 +102,7 @@ through a local Unix socket. To use it from another machine, SSH into the host
 and run `./vcpi` there.
 
 Command parsing, session files, MIDI ports, sequencing, and Ableton Link stay in
-the control process. Each track owns its VST3/Cardinal/plugdata or deck source and insert
+the control process. Each track owns its Cardinal/plugdata or deck source and insert
 effects on a native render thread. The native PortAudio callback mixes track
 audio and runs master effects. Neither the callback nor track DSP enters Python
 or acquires the GIL. Shared-memory track transport adds one block of buffering.
@@ -306,8 +307,8 @@ tracks. For example: `track 1 pd sine --name "Sine Lead"`.
 `mute 1 off`, or `mute 1 toggle` for explicit state control; `solo` works the
 same way. Bare `mute 1` and `solo 1` remain toggle shortcuts.
 Commands reject unexpected arguments rather than silently ignoring them.
-For VST instruments, install a compatible plugin first, then use
-`track 1 vst <plugin-name>`. MIDI Mix control and LED ports are optional; see
+Direct VST instrument tracks are not supported; use `vcv`, `pd`, or `deck`.
+VST3 effects remain available through `track <n|master> fx`. MIDI Mix control and LED ports are optional; see
 [Controller Setup](#controller-setup).
 
 Read or change instrument, track-effect, and master-effect parameters:
@@ -502,25 +503,24 @@ relative abstractions, samples, and custom external dependencies must remain
 available. See [plugdata usage](USAGE.md#host-startup-flags) for installation,
 limits, and patch conventions.
 
-Install VST3 plugins for your OS and CPU architecture in a standard user/system
+Install VST3 effects for your OS and CPU architecture in a standard user/system
 directory: `~/.vst3`, `/usr/lib/vst3`, or `/usr/local/lib/vst3` on Linux;
 `~/Library/Audio/Plug-Ins/VST3` or `/Library/Audio/Plug-Ins/VST3` on macOS.
 For other locations, set `VST3_PATH` or `VST_PATH` to a colon-separated list of
 plugin directories before starting the daemon. The former repository `vst3/`
 subdirectory is no longer searched automatically.
 
-Load an installed plugin by name:
+Load an installed effect by name on a populated track or on the master bus:
 
 ```text
-vcpi> track 1 vst Dexed         # Tab completes installed VST names
-vcpi> audio start
-vcpi> note 1 60 --velocity 100 --duration-ms 500
+vcpi> track 1 fx DragonflyRoomReverb --name Reverb
+vcpi> track master fx DragonflyRoomReverb
 ```
 
 Full paths also work:
 
 ```text
-vcpi> track 1 vst /path/to/Synth.vst3 --name Lead
+vcpi> track 1 fx /path/to/Effect.vst3 --name Reverb
 ```
 
 For continuous deck playback:
@@ -566,13 +566,13 @@ vcpi> seq                    # show all banks
 Typical multi-instrument setup:
 
 ```text
-vcpi> track 1 vst Dexed --name Lead
-vcpi> track 2 vst OB-Xf --name Bass
-vcpi> track 3 vst Geonkick --name Drums
+vcpi> track 1 pd classic-subtractive-synth --name Lead
+vcpi> track 2 pd sine --name Bass
+vcpi> track 3 pd poly-pad --name Pad
 
 vcpi> midi link 1 1
 vcpi> midi link 2 2
-vcpi> midi link 10 3
+vcpi> midi link 3 3
 
 vcpi> midi input 0
 vcpi> midi input 1

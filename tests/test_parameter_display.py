@@ -38,7 +38,7 @@ class ParameterDisplayTests(unittest.TestCase):
         self.master = PluginSnapshot(3, parameters={"gain": ParameterSnapshot()},
                                      values={"gain": 0.75})
         track = SimpleNamespace(plugin=self.instrument, name="Synth", effects=[self.effect],
-                                source_type="plugin")
+                                source_type="vcv")
         host = SimpleNamespace(engine=SimpleNamespace(
             tracks=[track, None], master_effects=[self.master, self.effect]))
         self.output = io.StringIO()

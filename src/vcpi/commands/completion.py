@@ -295,7 +295,7 @@ def _complete_track(ctx):
             return choices(_indexes(_effects(ctx.host, target)))
         if mode == "fx" and len(args) > 2 and args[2].lower() == "clear":
             return empty
-        if mode in ("vst", "fx", "pd") and (target != "master" or mode == "fx"):
+        if mode in ("fx", "pd") and (target != "master" or mode == "fx"):
             # Plugin and PD patch parsers join shell tokens, so replace the
             # complete name fragment, including already typed words.
             plugin_start = words[2].start if len(words) > 2 else len(rest)

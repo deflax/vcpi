@@ -141,10 +141,10 @@ daemon starts. The launcher's native CMake configure and build output always
 streams with `[build]` prefixes, regardless of `LOG_LEVEL`, including on the
 first launch. Failed builds report the failing command and stop startup.
 
-VST3 plugin search and name resolution:
+VST3 effect search and name resolution:
 
-- `track <n> vst` and `track <n> fx` accept a plugin **name** (e.g. `Dexed`) or a
-  full path (e.g. `/usr/lib/vst3/Dexed.vst3`). Names are resolved by scanning
+- `track <n|master> fx` accepts a plugin **name** (e.g. `DragonflyRoomReverb`) or a
+  full path (e.g. `/usr/lib/vst3/DragonflyRoomReverb.vst3`). Names are resolved by scanning
   known search directories.
 - Search order: directories from `VST3_PATH`, then `VST_PATH`, followed by
   the working directory, the repository root, `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`,
@@ -152,7 +152,7 @@ VST3 plugin search and name resolution:
   The former repository/working-directory `vst3/` subdirectories are not searched automatically.
 - Name matching: exact stem match first, then case-insensitive, then unique
   prefix match. Ambiguous names produce an error listing the candidates.
-- Tab completion for `track <n> vst` and `track <n> fx` lists all detected plugin names.
+- Tab completion for `track <n|master> fx` lists detected plugin names.
 - Install plugins compatible with your OS and CPU architecture in a standard
   user/system directory above, or set `VST3_PATH` or `VST_PATH` to a
   colon-separated list of additional plugin directories before starting the daemon.
@@ -191,8 +191,8 @@ plugdata/Pure Data helpers:
   automatically.
 - `track <n> pd <patch_name[.pd]> [--name <label>]` loads from `assets/patches/`,
   sharing `VCPI_PATCHES_DIR` with Cardinal. Absolute paths and nested patch names
-  are accepted. Quote names containing spaces, or use the same multiword-name
-  syntax as `track <n> vst`; labels require `--name`.
+  are accepted. Quote names containing spaces, or use unquoted multiword patch
+  names; labels require `--name`.
 - Import runs headlessly in a staged track process. Failure leaves the previous
   track intact. MIDI routing remains explicit: `midi link <ch> <track>`.
 - Patches must be UTF-8 Pure Data files, at most 16 MiB. Use MIDI objects such as
@@ -369,7 +369,6 @@ hardware or empty plugin/effect lists may also yield no choices.
 
 | Command | Description |
 |---|---|
-| `track <track> vst <path\|vst_name> [--name <label>]` | Load VST instrument into track |
 | `track <track> deck <audio-file\|directory> [--name <label>]` | Replace the session-owned playlist and reset its song memory, initially paused |
 | `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `assets/patches/<patch_name>.vcv` |
 | `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `assets/patches/` or an absolute path |
@@ -386,11 +385,12 @@ hardware or empty plugin/effect lists may also yield no choices.
 | `show <track> fx <fx_index> [--details]` | Inspect a track effect; details adds full metadata; explicit 1-based index required |
 | `show master fx <fx_index> [--details]` | Inspect a master effect; details adds full metadata; explicit 1-based index required |
 
-VST names and paths may contain spaces: `track 1 vst Acid V` loads the plugin
-named `Acid V` and uses that name as the track label. Quotes are also supported.
-To override the display label, use `track 1 vst Acid V --name Bass`.
-The same syntax applies to `track <track|master> fx`; trailing words without
-`--name` are part of the plugin name, not a custom label.
+VST effect names and paths may contain spaces: `track 1 fx My Reverb` loads the
+effect named `My Reverb`. Quotes are also supported. Use
+`track 1 fx My Reverb --name Reverb` to override the display label; trailing words
+without `--name` are part of the plugin name, not a custom label.
+Direct `track <n> vst` instrument loading is not supported. Track sources are
+Cardinal/VCV (`vcv`), plugdata/Pure Data (`pd`), and audio decks (`deck`).
 All source types use `--name <label>` for optional display labels. Quote VCV
 patch names and deck paths containing spaces; positional
 labels are not accepted. For example:
@@ -1355,10 +1355,12 @@ Saved/restored session state includes:
 - Sequencer banks and links
 - Audio output and MIDI connections, including BeatStep Pro target or explicit disabled state
 
-Sessions use only format **3**: each VST3 instrument, track insert, and master
-effect stores a base64-encoded native state chunk. This preserves plugin-owned
+Sessions use only format **3**: each Cardinal/VCV or plugdata/Pd instrument, track
+insert, and master effect stores a base64-encoded native state chunk. This preserves plugin-owned
 settings, including settings not exposed as parameters, without replaying MIDI
 helpers or action controls.
+Only `vcv`, `pd`, and `deck` track sources can be restored. Saved generic VST
+instrument (`plugin`) entries report per-track restore errors; other tracks continue.
 The former WAV sampler track type and bundled sample packs are no longer
 supported. Saved sampler tracks report restore errors; other tracks continue
 restoring. WAV audio files remain supported by decks.

@@ -8,7 +8,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from vcpi import deps
 from vcpi.controllers.akai_midimix import MidiMixController
@@ -219,11 +219,14 @@ class VcpiCore:
         self.midimix._build_param_cache(track_index)
         return track
 
-    def load_instrument(self, track_index: int, path: str,
-                        name: Optional[str] = None) -> InstrumentTrack:
-        """Stage a native track process and return its published cached state."""
+    def restore_patch(self, track_index: int, path: str, source_type: Literal["vcv", "pd"],
+                      name: Optional[str] = None) -> InstrumentTrack:
+        """Stage a Cardinal/Pd backend for restoration from a saved native chunk."""
+        if source_type not in ("vcv", "pd"):
+            raise ValueError(f"unsupported patch source kind: {source_type!r}")
         self._clear_deck_holds(track_index=track_index)
-        self.engine.request("load_instrument", track_index=track_index, path=path, name=name)
+        self.engine.request("restore_patch", track_index=track_index, path=path,
+                            source_type=source_type, name=name)
         return self._loaded_track(track_index)
 
     def load_deck(self, track_index: int, audio_path: str,

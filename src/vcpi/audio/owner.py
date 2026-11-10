@@ -378,7 +378,7 @@ class _OwnerRuntime:
 
     def execute(self, operation, arguments):
         if operation in {
-            "load_instrument", "load_vcv", "load_vcv_patch",
+            "restore_patch", "load_vcv", "load_vcv_patch",
             "load_pd", "load_pd_patch", "load_deck",
         }:
             from .track_client import TrackWorker

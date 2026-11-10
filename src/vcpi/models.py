@@ -43,7 +43,7 @@ class InstrumentTrack:
     muted: bool = False
     solo: bool = False
     enabled: bool = True
-    source_type: str = "plugin"  # plugin | vcv | pd | deck
+    source_type: str = field(kw_only=True)  # vcv | pd | deck
     vcv_patch_path: str = ""     # .vcv patch file (when source_type == "vcv")
     pd_patch_path: str = ""      # .pd patch file (when source_type == "pd")
     deck: dict = field(default_factory=dict)  # control-side transport/catalog cache
@@ -60,7 +60,7 @@ class InstrumentTrack:
         """Qualified label shown in status/tracks output.
 
         Format:
-          vst3::<name>            for VST3 plugins
+          deck::<playlist>:<song> for deck sources
           vcv::<patch stem>       for VCV/Cardinal patches
           pd::<patch stem>        for Pure Data/plugdata patches
         """
@@ -72,5 +72,4 @@ class InstrumentTrack:
         if self.source_type == "pd":
             patch_stem = Path(self.pd_patch_path).stem if self.pd_patch_path else self.name
             return f"pd::{patch_stem}"
-        # VST3 / generic plugin
-        return f"vst3::{self.name}"
+        raise ValueError(f"unsupported track source kind: {self.source_type!r}")

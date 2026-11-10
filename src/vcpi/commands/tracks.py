@@ -7,7 +7,7 @@ from .context import track_index, source_args, parse_named_source
 from .help import HELP_TOPICS
 
 
-TRACK_TYPES = ("vst", "deck", "vcv", "pd", "fx", "clear")
+TRACK_TYPES = ("deck", "vcv", "pd", "fx", "clear")
 
 
 def track_usage():
@@ -53,7 +53,7 @@ def track(ctx, arg):
         ctx.emit("Error: master only supports 'fx' subcommand")
         ctx.emit(f"Usage: {track_usage()}")
         return
-    handlers = {"deck": deck, "vst": vst, "vcv": vcv, "pd": pd}
+    handlers = {"deck": deck, "vcv": vcv, "pd": pd}
     handler = handlers.get(mode)
     if handler is None:
         ctx.emit(f"Error: unknown subcommand '{mode}'")
@@ -153,23 +153,6 @@ def deck(ctx, track_num, parts, text):
                      f"show {track_num} --details for the playlist.")
     except Exception as error:
         ctx.emit(f"Error: {error}")
-    return
-
-
-def vst(ctx, track_num, parts, text):
-    idx = track_index(track_num)
-    rest = text.split(maxsplit=2)
-    if len(rest) < 3:
-        ctx.emit(f"Usage: track <1-16> vst <path|vst_name> [--name <label>]")
-        return
-    try:
-        path_token, name = parse_named_source(rest[2])
-        path = assets.resolve_vst_token(path_token)
-        track = ctx.host.load_instrument(idx, path, name)
-        ctx.emit(f"  track {track_num} = {track.name}")
-        ctx.emit(f"  vst      : {track.path}")
-    except Exception as e:
-        ctx.emit(f"Error: {e}")
     return
 
 

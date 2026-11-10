@@ -13,7 +13,7 @@ class RecordingEngine:
     """Record commands at the controller's asynchronous engine boundary."""
 
     def __init__(self, plugin):
-        self.tracks = [InstrumentTrack("Synth", "", plugin, generation=7)] + [None] * (NUM_TRACKS - 1)
+        self.tracks = [InstrumentTrack("Synth", "", plugin, source_type="vcv", generation=7)] + [None] * (NUM_TRACKS - 1)
         self.commands = []
 
     def enqueue_param_change(self, index, name, value, *, generation):

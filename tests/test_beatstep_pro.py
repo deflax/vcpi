@@ -25,7 +25,7 @@ def deck(generation=7):
 class RecordingEngine:
     def __init__(self):
         self.tracks = [deck(), deck(8)] + [
-            InstrumentTrack("Synth", "", PluginSnapshot(n), generation=n)
+            InstrumentTrack("Synth", "", PluginSnapshot(n), source_type="vcv", generation=n)
             for n in (9, 10, 11)] + [None] * 11
         # Deliberately misleading generic map: BeatStep must never consult it.
         self.channel_map = {0: 0, 1: 7, 9: 1, 15: 4}
@@ -125,7 +125,7 @@ class BeatStepProTests(unittest.TestCase):
         return InstrumentTrack("Synth", "", PluginSnapshot(
             generation, parameters={
                 f"p{n}": ParameterSnapshot(range=(0, 127)) for n in range(count)}),
-            generation=generation)
+            source_type="vcv", generation=generation)
 
     def test_mmc_stop_and_resume_preserve_unknown_external_position(self):
         for _ in range(110):

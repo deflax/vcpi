@@ -76,6 +76,7 @@ class HostShutdownTests(unittest.TestCase):
         self.addCleanup(host.shutdown, save=False)
         host.engine.tracks[0] = InstrumentTrack(
             "incomplete", "/tmp/incomplete.vst3", PluginSnapshot(1, native_state=b"test state"),
+            source_type="vcv",
         )
         host.send_note(0, 60, duration=60.0)
         host.sequencer.set_bank(0, ["E4"])
@@ -278,6 +279,7 @@ class ShutdownTests(unittest.TestCase):
         refs = [weakref.ref(plugin) for plugin in (instrument, effect, master)]
         engine.tracks[0] = InstrumentTrack(
             "probe", "/tmp/probe.vst3", instrument, effects=[effect],
+            source_type="vcv",
         )
         engine.master_effects.append(master)
         del instrument, effect, master

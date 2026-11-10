@@ -25,7 +25,7 @@ class _CachedEngine:
         plugin = PluginSnapshot(1, parameters={
             "mode": ParameterSnapshot(kind="enum", valid_values=("Quiet Mode", "Loud Mode")),
         }, values={"mode": "Quiet Mode"})
-        self.tracks = [SimpleNamespace(plugin=plugin, effects=[], source_type="plugin"), *[None] * 7]
+        self.tracks = [SimpleNamespace(plugin=plugin, effects=[], source_type="vcv"), *[None] * 7]
         self.master_effects = []
         self.devices = [{"index": 3, "name": "Output", "max_output_channels": 2}]
         self.device_read_threads = []

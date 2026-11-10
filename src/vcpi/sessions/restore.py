@@ -22,10 +22,8 @@ def _restore_tracks(host: VcpiCore, data: dict, errors: list[str]):
             break
         if track_data is None:
             continue
-        track_kind = track_data.get("kind", "plugin")
+        track_kind = track_data.get("kind")
         plugin_path = track_data.get("path")
-        if track_kind != "deck" and not plugin_path:
-            continue
         try:
             match track_kind:
                 case "deck":
@@ -33,8 +31,11 @@ def _restore_tracks(host: VcpiCore, data: dict, errors: list[str]):
                     if not isinstance(deck, dict):
                         raise ValueError("deck payload is required")
                     track = host.restore_deck(idx, deck, track_data.get("name"))
-                case "plugin" | "vcv" | "pd":
-                    track = host.load_instrument(idx, plugin_path, track_data.get("name"))
+                case "vcv" | "pd":
+                    if not plugin_path:
+                        raise ValueError("patch backend path is required")
+                    track = host.restore_patch(
+                        idx, plugin_path, track_kind, track_data.get("name"))
                 case _:
                     raise ValueError(f"unsupported track source kind: {track_kind!r}")
             track = host.engine.set_track_state(
@@ -43,7 +44,6 @@ def _restore_tracks(host: VcpiCore, data: dict, errors: list[str]):
                 enabled=track_data.get("enabled", True),
                 muted=track_data.get("muted", False),
                 solo=track_data.get("solo", False),
-                source_type=track_kind,
                 vcv_patch_path=track_data.get("vcv_patch_path", ""),
                 pd_patch_path=track_data.get("pd_patch_path", ""),
             )
