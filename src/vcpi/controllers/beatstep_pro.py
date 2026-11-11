@@ -193,8 +193,8 @@ class BeatStepProController:
                     target, value, bounds = "gain", cached_value(track.gain), "0 .. 1"
                 elif rotary == 8:
                     if deck:
-                        target = "track"
-                        value = cached_value(track.plugin.values.get("track", 1))
+                        target = "index"
+                        value = cached_value(track.plugin.values.get("index", 1))
                         bounds = f"1 .. {len(track.deck.get('tracks', ()))}"
                     else:
                         _, bank, last = self._source_bank(index, track)
@@ -468,11 +468,11 @@ class BeatStepProController:
             if track.source_type == "deck":
                 count = len(track.deck.get("tracks", ()))
                 if count:
-                    observed = int(track.plugin.values.get("track", 1))
-                    current = self._current(index, track, "track", observed)
+                    observed = int(track.plugin.values.get("index", 1))
+                    current = self._current(index, track, "index", observed)
                     selected = max(1, min(count, current + delta))
                     if selected != current:
-                        self._set(index, track, "track", selected, observed)
+                        self._set(index, track, "index", selected, observed)
             else:
                 _, bank, last = self._source_bank(index, track)
                 selected = max(0, min(last, bank + delta))

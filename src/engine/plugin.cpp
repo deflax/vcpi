@@ -253,7 +253,7 @@ PluginMetadata Plugin::metadata() {
 std::vector<ParameterSnapshot> Plugin::parameters() {
     if (deck) {
         std::lock_guard<std::mutex> lock(deckMutex);
-        return {deckParameter("track"), deckParameter("seek"), deckParameter("nudge"),
+        return {deckParameter("index"), deckParameter("seek"), deckParameter("nudge"),
                 deckParameter("play"), deckParameter("pitch"), deckParameter("sync"),
                 deckParameter("phase_offset")};
     }
@@ -522,7 +522,7 @@ ParameterSnapshot Plugin::deckParameter(const std::string& key) const {
     result.value = result.rawValue;
     result.stringValue = juce::String(result.rawValue).toStdString();
     result.kind = "float";
-    if (key == "track") {
+    if (key == "index") {
         result.kind = "int";
         result.low = 1;
         result.high = deck->trackCount();

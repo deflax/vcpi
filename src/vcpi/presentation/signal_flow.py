@@ -258,7 +258,7 @@ def _build_flow_snapshot(host, engine, details):
         for note, action in DECK_NOTE_BINDINGS.items():
             midi_row(f"Deck note {note}", action, "routed generic MIDI; note release ends nudge")
         midi_row(f"Deck CC {DECK_PITCH_CC}", "pitch -16 .. +16%", "linear 0-127")
-        midi_row(f"Deck CC {DECK_SELECT_CC}", "track 1 .. N", "scaled 0-127")
+        midi_row(f"Deck CC {DECK_SELECT_CC}", "index 1 .. N", "scaled 0-127")
         midi_row("Position", "confirmed" if sample.position_confirmed else "unconfirmed", "cached clock position")
     sections.append(_section("midi", "MIDI routing & sequencer", ["Source / route", "Destination", "State"],
                              midi_rows, states=midi_states))

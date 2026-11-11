@@ -104,7 +104,7 @@ class DeckSessionTests(unittest.TestCase):
         self.assertEqual(track.plugin.values["phase_offset"], -0.375)
         self.assertAlmostEqual(status["cue"], 0.25)
         self.assertAlmostEqual(status["position"], 0.75, places=3)
-        self.assertEqual(track.plugin.values["track"], 2)
+        self.assertEqual(track.plugin.values["index"], 2)
         self.assertEqual(status["tracks"], entries)
 
     def test_mixed_bpm_hints_roundtrip_in_format_three(self):
@@ -409,8 +409,8 @@ class DeckSessionTests(unittest.TestCase):
             self.assertFalse(track.deck["play"])
             self.assertNotEqual(track.deck["track_id"], first_id)
             self.assertEqual(len(track.deck["tracks"]), 1)
-            self.assertEqual(track.plugin.parameters["track"].range, (1, 1))
-            self.assertEqual(list(track.plugin.parameters)[:3], ["track", "seek", "nudge"])
+            self.assertEqual(track.plugin.parameters["index"].range, (1, 1))
+            self.assertEqual(list(track.plugin.parameters)[:3], ["index", "seek", "nudge"])
             self.assertNotIn("Error:", command(f'track 1 deck "{self.root}" --name Renamed'))
             first_id = host.engine.tracks[0].deck["track_id"]
             self.assertEqual(host.engine.tracks[0].name, "Renamed")
@@ -424,8 +424,8 @@ class DeckSessionTests(unittest.TestCase):
                             for line in status_text.splitlines() if "|" in line)
             self.assertIn(str(self.root / "first.wav"), paths)
             self.assertIn(str(self.root / "second.wav"), paths)
-            self.assertIn("track", command("get 1"))
-            self.assertIn("request accepted", command("set 1 track 2"))
+            self.assertIn("index", command("get 1"))
+            self.assertIn("request accepted", command("set 1 index 2"))
             selected = host.engine.tracks[0].deck["tracks"][1]["id"]
             status = self.await_status(host, 0, lambda state: state.get("requested_track_id") == selected)
             self.assertEqual(status["track_id"], first_id)

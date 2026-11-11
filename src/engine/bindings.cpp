@@ -56,9 +56,9 @@ py::dict deckDict(const DeckStatus& info) {
     result["bank_id"] = info.bankId;
     result["track_id"] = info.trackId;
     result["track_title"] = info.trackTitle;
-    result["track"] = info.trackSelect;
+    result["index"] = info.trackSelect;
     result["requested_track_id"] = info.requestedTrackId;
-    result["requested_track"] = info.requestedTrackSelect;
+    result["requested_index"] = info.requestedTrackSelect;
     result["request_id"] = info.requestId;
     result["state"] = info.state;
     result["loading"] = info.loading;

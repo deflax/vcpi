@@ -58,7 +58,7 @@ HELP_TOPICS = {
     "set": ("Set a plugin parameter",
             "set <1-16> <name> <value>\nset <1-16> fx <fx_index> <name> <value>\nset master <fx_index> <name> <value>",
             "fx_index: 1-based and required for master. name: exact parameter name.\nvalue: native parameter units; booleans true/false; quote enum values containing spaces.",
-            "Reports applied value. Unused slots cannot be set. Deck seek sets position in source seconds while preserving play/pause; track <track> deck seek <seconds> is equivalent. Deck track reports request acceptance, not completed loading. Example: set 1 track 2."),
+            "Reports applied value. Unused slots cannot be set. Deck seek sets position in source seconds while preserving play/pause; track <track> deck seek <seconds> is equivalent. Deck index reports request acceptance, not completed loading. Example: set 1 index 2."),
     "focus": ("Read or select the shared focused track", "focus [1-16]",
               "track: 1-based track number; omitted reports the current focus. Empty tracks are selectable.",
               "Application-owned focus starts at track 1 and is shared with controllers. Selection does not change routing, playback or transport. Saved and restored with sessions."),

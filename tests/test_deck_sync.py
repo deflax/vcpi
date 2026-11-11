@@ -212,9 +212,9 @@ class NativeDeckSyncTests(unittest.TestCase):
     def test_catalog_hint_change_refreshes_active_and_inactive_grids(self):
         path = self.groove(166, "two-step")
         plugin, runner = self.deck([path, path], bpm_hint=83)
-        plugin.set_parameter("track", 2)
+        plugin.set_parameter("index", 2)
         self.settle_request((plugin, runner))
-        plugin.set_parameter("track", 1)
+        plugin.set_parameter("index", 1)
         self.settle_request((plugin, runner))
         plugin.set_parameter("sync", False)
         plugin.set_parameter("pitch", 2.5)
@@ -237,10 +237,10 @@ class NativeDeckSyncTests(unittest.TestCase):
                 self.assertAlmostEqual(after["bpm"], expected, delta=0.2)
                 for key in ("position", "cue", "pitch", "phase_offset", "nudge", "sync", "play"):
                     self.assertEqual(after[key], before[key], key)
-                plugin.set_parameter("track", 2)
+                plugin.set_parameter("index", 2)
                 inactive = self.settle_request((plugin, runner))
                 self.assertAlmostEqual(inactive["bpm"], expected, delta=0.2)
-                plugin.set_parameter("track", 1)
+                plugin.set_parameter("index", 1)
                 before = self.settle_request((plugin, runner))
                 self.assertAlmostEqual(before["bpm"], expected, delta=0.2)
 
@@ -543,7 +543,7 @@ class NativeDeckSyncTests(unittest.TestCase):
         plugin.set_parameter("play", True)
         self.render([deck], 6)
         self.assertLess(abs(plugin.deck_status()["beat_phase_error"]), 0.015)
-        plugin.set_parameter("track", 2)
+        plugin.set_parameter("index", 2)
         status = self.settle_request(deck)
         self.assertEqual(status["track_id"], "1")
         self.assertFalse(status["play"])
@@ -564,7 +564,7 @@ class NativeDeckSyncTests(unittest.TestCase):
         self.render([deck], 0.4)
         plugin.set_parameter("nudge", 1)
         before = plugin.deck_status()
-        plugin.set_parameter("track", 2)
+        plugin.set_parameter("index", 2)
         deadline = time.monotonic() + 5
         manual = plugin.deck_status()
         while manual["loading"]:
@@ -587,7 +587,7 @@ class NativeDeckSyncTests(unittest.TestCase):
         runner.render_once()
         self.assertAlmostEqual(plugin.deck_status()["position"] - start,
                                self.frames / self.rate * 1.08, places=8)
-        plugin.set_parameter("track", 1)
+        plugin.set_parameter("index", 1)
         synced = self.settle_request(deck)
         self.assertTrue(synced["sync"])
         self.assertTrue(synced["sync_active"])

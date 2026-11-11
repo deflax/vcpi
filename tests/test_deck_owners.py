@@ -224,12 +224,12 @@ class DeckOwnerTests(unittest.TestCase):
         pid = worker.pid
         engine.set_track_state(0, gain=0.375, muted=True)
         worker.request("set_parameter", name="pitch", value=2)
-        worker.request("set_parameter", name="track", value=2)
-        worker.request("set_parameter", name="track", value=3)
+        worker.request("set_parameter", name="index", value=2)
+        worker.request("set_parameter", name="index", value=3)
         status = self.await_status(worker, lambda s: s["track_id"] == "3", engine)
         self.assertFalse(status["play"])
         self.assertEqual(status["pitch"], 0)
-        worker.request("set_parameter", name="track", value=4)
+        worker.request("set_parameter", name="index", value=4)
         status = self.await_status(worker, lambda s: bool(s["error"]), engine)
         self.assertEqual(status["track_id"], "3")
         self.assertEqual(status["requested_track_id"], "missing")
@@ -239,8 +239,8 @@ class DeckOwnerTests(unittest.TestCase):
 
     def test_active_selection_cancels_pending_and_pause_freezes_cursor(self):
         worker, engine = self.worker()
-        worker.request("set_parameter", name="track", value=2)
-        worker.request("set_parameter", name="track", value=1)
+        worker.request("set_parameter", name="index", value=2)
+        worker.request("set_parameter", name="index", value=1)
         status = self.await_status(worker, lambda s: not s["loading"], engine)
         self.assertEqual(status["track_id"], "1")
         worker.request("set_parameter", name="play", value=True)
@@ -272,7 +272,7 @@ class DeckOwnerTests(unittest.TestCase):
         self.assertTrue(updated.deck["play"])
         self.assertEqual(len(updated.deck["tracks"]), 1901)
         self.assertEqual(updated.deck["tracks"][0]["path"], str(self.wav))
-        self.assertEqual(updated.plugin.parameters["track"].range, (1, 1901))
+        self.assertEqual(updated.plugin.parameters["index"].range, (1, 1901))
 
     def test_playlist_edits_preserve_transport_and_mixer_then_remove_active(self):
         worker, engine = self.worker(track_id="2", cue=0.25, pitch=-1.25)
@@ -287,7 +287,7 @@ class DeckOwnerTests(unittest.TestCase):
             self.assertEqual(track.deck[key], before["deck"][key])
         self.assertEqual(track.plugin.token, before["plugin"].token)
         self.assertEqual((track.gain, track.muted, track.solo), (0.375, True, True))
-        self.assertEqual(track.plugin.values["track"], 1)
+        self.assertEqual(track.plugin.values["index"], 1)
         worker.request("update_deck_catalog", catalog=make_catalog("set", entries[2:]))
         self.assertEqual(track.deck["track_id"], "3")
         self.assertFalse(track.deck["play"])
@@ -306,16 +306,16 @@ class DeckOwnerTests(unittest.TestCase):
             {"id": "long", "path": str(longer), "title": "Long"}]
         worker, engine = self.worker()
         self.assertEqual(worker.track.plugin.parameters["seek"].range, (0, 1))
-        worker.request("set_parameter", name="track", value=2)
+        worker.request("set_parameter", name="index", value=2)
         self.await_status(
             worker, lambda state: state["track_id"] == "long"
             and worker.track.plugin.parameters["seek"].range == (0, 2.5), engine)
         self.assertEqual(worker.track.deck["track_id"], "long")
-        self.assertEqual(list(worker.track.plugin.parameters)[:3], ["track", "seek", "nudge"])
+        self.assertEqual(list(worker.track.plugin.parameters)[:3], ["index", "seek", "nudge"])
         controller = MidiMixController(engine)
         self.addCleanup(controller.close)
         self.assertEqual(controller._build_param_cache(0), [
-            ("track", (1, 2)), ("seek", (0, 2.5)), ("nudge", (-1, 1)),
+            ("index", (1, 2)), ("seek", (0, 2.5)), ("nudge", (-1, 1)),
         ])
         worker.request("set_parameter", name="seek", value=2.5)
         worker.request("set_parameter", name="nudge", value=1)
@@ -348,7 +348,7 @@ class DeckOwnerTests(unittest.TestCase):
             ready = engine._state_condition.wait_for(
                 lambda: engine.tracks[0].deck["nudge"] == 0, timeout=5)
         self.assertTrue(ready)
-        engine.set_parameter(0, "track", 4)
+        engine.set_parameter(0, "index", 4)
         with engine.state_lock:
             ready = engine._state_condition.wait_for(
                 lambda: bool(engine.tracks[0].deck["error"]), timeout=5)
@@ -365,7 +365,7 @@ class DeckOwnerTests(unittest.TestCase):
         worker, engine = self.worker()
         worker.request("load_effect", path=os.environ["DECK_TEST_EFFECT"])
         before = worker.request("sync_state")["state"]["effects"][0]
-        worker.request("set_parameter", name="track", value=2)
+        worker.request("set_parameter", name="index", value=2)
         self.await_status(worker, lambda s: s["track_id"] == "2", engine)
         entries = worker.track.deck["tracks"]
         worker.request("update_deck_catalog", catalog=make_catalog("set", entries[1:]))

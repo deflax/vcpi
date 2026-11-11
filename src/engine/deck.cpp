@@ -569,7 +569,7 @@ void Deck::render(float* left, float* right, int frames) noexcept {
     beatPhaseError.store(phaseError, std::memory_order_release);
 }
 double Deck::parameter(const std::string& key) const {
-    if (key == "track") return requestedTrack.load(std::memory_order_acquire);
+    if (key == "index") return requestedTrack.load(std::memory_order_acquire);
     if (key == "seek") return positionSeconds.load(std::memory_order_acquire);
     if (key == "play") return playing.load(std::memory_order_acquire) ? 1.0 : 0.0;
     if (key == "pitch") return pitchTarget.load(std::memory_order_acquire);
@@ -580,9 +580,9 @@ double Deck::parameter(const std::string& key) const {
 }
 double Deck::setParameter(const std::string& key, double value) {
     if (!std::isfinite(value)) throw std::invalid_argument("Deck parameters must be finite");
-    if (key == "track") {
+    if (key == "index") {
         if (value != std::floor(value) || value < 1 || value > trackCount())
-            throw std::invalid_argument("Deck track is a 1-based playlist index");
+            throw std::invalid_argument("Deck index is a 1-based playlist index");
         request(static_cast<int>(value), 0, selection);
     } else if (key == "seek") {
         value = std::clamp(value, 0.0, durationSeconds.load(std::memory_order_acquire));

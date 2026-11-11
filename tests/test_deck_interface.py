@@ -23,14 +23,14 @@ from vcpi.sessions.snapshot import snapshot
 
 def deck_track(generation=7):
     plugin = PluginSnapshot(1, name="Deck", parameters={
-        "track": ParameterSnapshot(kind="int", range=(1, 257)),
+        "index": ParameterSnapshot(kind="int", range=(1, 257)),
         "seek": ParameterSnapshot(range=(0, 100), units="s"),
         "nudge": ParameterSnapshot(range=(-1, 1)),
         "play": ParameterSnapshot(kind="bool", is_boolean=True),
         "pitch": ParameterSnapshot(range=(-16, 16), units="%"),
         "sync": ParameterSnapshot(kind="bool", is_boolean=True, range=(0, 1)),
         "phase_offset": ParameterSnapshot(range=(-0.5, 0.5), units="beats"),
-    }, values={"track": 1, "seek": 12.5, "play": False, "pitch": 0.0,
+    }, values={"index": 1, "seek": 12.5, "play": False, "pitch": 0.0,
                "nudge": 0.0, "sync": True, "phase_offset": 0.25})
     track = InstrumentTrack("Deck A", "/bank.json", plugin,
                             source_type="deck", generation=generation)
@@ -113,7 +113,7 @@ class DeckCLITests(unittest.TestCase):
         self.assertEqual(complete_line(self.cli, "set 1 play ")["matches"], ["false", "true"])
         self.assertIn("sync", complete_line(self.cli, "set 1 ")["matches"])
         self.assertEqual(complete_line(self.cli, "set 1 sync ")["matches"], ["false", "true"])
-        self.assertIn("257", complete_line(self.cli, "set 1 track ")["matches"])
+        self.assertIn("257", complete_line(self.cli, "set 1 index ")["matches"])
         self.engine.request.assert_not_called()
         self.engine.deck_command.assert_not_called()
         self.host.load_deck.assert_not_called()
@@ -126,7 +126,7 @@ class DeckCLITests(unittest.TestCase):
         rendered = io.StringIO()
         display_response(Console(file=rendered, width=140, color_system=None), "get 1", lines)
         text = rendered.getvalue()
-        self.assertIn("track", text)
+        self.assertIn("index", text)
         self.assertIn("seek", text)
         self.assertIn("12.5 s", text)
         self.assertNotIn("Opening title", text)
@@ -220,7 +220,7 @@ class DeckMidiTests(unittest.TestCase):
             self.send(0xB0, cc, 127)
         self.assertEqual(self.engine.commands, [
             (0, "pitch", -16, 7), (0, "pitch", 16, 7),
-            (0, "track", 1, 7), (0, "track", 257, 7)])
+            (0, "index", 1, 7), (0, "index", 257, 7)])
         self.engine.tracks[1] = replace(self.engine.tracks[1], source_type="vcv")
         self.send(0x91, 64, 127)
         self.send(0x91, 64, 0)
@@ -247,7 +247,7 @@ class DeckMidiTests(unittest.TestCase):
         self.addCleanup(controller.close)
         controller.on_midi(([0xB0, KNOB_CCS[0][0], 64], 0.0))
         self.assertIsInstance(self.engine.commands[-1][2], int)
-        self.assertEqual(self.engine.commands[-1][1], "track")
+        self.assertEqual(self.engine.commands[-1][1], "index")
         controller.on_midi(([0x90, MUTE_NOTES[0], 127], 0.0))
         self.assertEqual(self.engine.commands[-1][1], "track")
         count = len(self.engine.commands)

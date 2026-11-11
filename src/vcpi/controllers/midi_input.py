@@ -115,7 +115,7 @@ class MidiInputController:
                 if count:
                     selection = 1 + (msg.value * (count - 1) + 63) // 127
                     self._engine.enqueue_param_change(
-                        track_index, "track", selection, generation=generation)
+                        track_index, "index", selection, generation=generation)
 
     def on_midi(self, event, data=None):
         """rtmidi callback forwarding MIDI into routed tracks."""
