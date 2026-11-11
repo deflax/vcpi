@@ -149,6 +149,10 @@ Same-tempo regions that switch to offbeat accents can support analysis through
 an explicit half-beat alternative without doubling BPM. The output retains one
 anchored phase, not an average of opposite phases; this is not automatic kick
 identification, and `phase_offset` remains available for musical correction.
+Recurring syncopated two-step accents can select full-time tempo over a stable
+half-time pulse (for example 166 rather than 83 BPM), without treating uniform
+hi-hat subdivisions as grounds to double slower tracks. This is a conservative
+rhythm heuristic, not a guarantee of genre or tempo-octave recognition.
 Each has play/pause, vinyl-style speed/pitch, nudge, seek and one cue point.
 While synced, nudge adjusts a persistent per-song phase correction without
 changing shared BPM; releasing retains alignment. Read or set `phase_offset`

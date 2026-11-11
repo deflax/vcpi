@@ -36,6 +36,7 @@ struct Diagnostics {
     std::size_t predicted = 0, boundary = 0, weak = 0, supported = 0;
     std::size_t gaps = 0, unstable = 0, regions = 0, matched = 0, total = 0;
     std::size_t halfBeatMatched = 0;
+    bool twoStep = false;
     double bpm = 0, coverage = -1, rms = -1, confidence = -1;
 
     void log(const juce::AudioFormatReader& reader) const {
@@ -53,7 +54,9 @@ struct Diagnostics {
                 << " region_beats=" << total
                 << " aligned_beats=" << matched - halfBeatMatched
                 << " half_beat_matches=" << halfBeatMatched;
+        message << " two_step_double_time=" << (twoStep ? "true" : "false");
         if (bpm > 0) message << " candidate_bpm=" << bpm;
+        if (twoStep) message << " selected_bpm=" << bpm * 2;
         if (coverage >= 0) message << " coverage=" << coverage;
         if (rms >= 0) message << " rms_error_ms=" << rms * 1000;
         if (confidence >= 0) message << " confidence=" << confidence;
@@ -157,6 +160,58 @@ void appendRegions(const std::vector<Point>& points, std::vector<Region>& region
         regions.push_back(std::move(region));
         begin = end;
     }
+}
+
+// A two-step backbeat can look like a perfectly stable half-time pulse. Look
+// between those pulses for the alternating straight/displaced kick pattern:
+// [backbeat, hat, hat, kick, backbeat, hat, kick, hat], or its bar rotation.
+// Uniform eighth/sixteenth notes are not evidence for choosing double time.
+// This is a rhythmic preference, not a genre classifier: identical audio can
+// legitimately be counted in either octave.
+bool twoStepDoubleTime(const std::vector<double>& novelty, const std::vector<Region>& regions,
+                       double period, double offset, const std::atomic<bool>& cancel) {
+    if (period < 60.0 / 100 || period > 60.0 / 70) return false;
+    std::size_t bars = 0, supported = 0;
+    auto onset = [&](double time) {
+        // Invert the novelty-frame centroid correction used by supported beats.
+        const auto center = static_cast<long long>(std::llround(
+            (time - (window / 2.0 - hop / 2.0) / analysisRate) / step - 2.0));
+        double peak = 0;
+        for (int delta = -2; delta <= 2; ++delta) {
+            const auto index = center + delta;
+            if (index >= 0 && static_cast<std::size_t>(index) < novelty.size())
+                peak = std::max(peak, novelty[static_cast<std::size_t>(index)]);
+        }
+        return peak;
+    };
+    for (const auto& region : regions) {
+        if (cancel.load(std::memory_order_relaxed)) return false;
+        if (std::abs(region.period - period) > tolerance * 2 / region.points.size()) continue;
+        const double phase = regionPhase(region, period, offset);
+        const double start = offset + (std::ceil((region.points.front().time - offset) / period - phase)
+                                       + phase) * period;
+        std::array<std::size_t, 2> patterns{};
+        std::size_t count = 0;
+        for (double time = start; time + 2 * period <= region.points.back().time; time += 2 * period) {
+            if (cancel.load(std::memory_order_relaxed)) return false;
+            std::array<double, 8> energy{};
+            for (std::size_t i = 0; i < energy.size(); ++i)
+                energy[i] = onset(time + i * period / 4);
+            for (int rotation = 0; rotation < 2; ++rotation) {
+                auto at = [&](int index) { return energy[static_cast<std::size_t>((index + rotation * 4) % 8)]; };
+                const double background = std::max({at(1), at(2), at(5), at(7)});
+                const double backbeat = std::min(at(0), at(4));
+                const double kicks = std::min(at(3), at(6));
+                if (backbeat > background * 1.5 && kicks > background * 1.5 &&
+                    kicks > backbeat * 0.2)
+                    ++patterns[static_cast<std::size_t>(rotation)];
+            }
+            ++count;
+        }
+        bars += count;
+        supported += std::max(patterns[0], patterns[1]);
+    }
+    return supported >= 8 && supported >= bars * 0.6;
 }
 
 BeatAnalysis fitGrid(const std::vector<double>& novelty, const std::atomic<bool>& cancel,
@@ -291,6 +346,9 @@ BeatAnalysis fitGrid(const std::vector<double>& novelty, const std::atomic<bool>
     const double confidence = coverage * regularity;
     diagnostic.confidence = confidence;
     if (confidence < 0.65) { diagnostic.reason = "confidence-below-0.65"; return {}; }
+    diagnostic.twoStep = twoStepDoubleTime(novelty, regions, period, offset, cancel);
+    if (cancel.load(std::memory_order_relaxed)) return {};
+    if (diagnostic.twoStep) period *= 0.5;
     diagnostic.reason = "accepted";
     return {60 / period, std::fmod(std::fmod(offset, period) + period, period), confidence};
 }

@@ -632,6 +632,17 @@ stable beats. A beatless intro can be followed by a usable region later in the
 file. Variable tempo, short clips or ambiguous rhythms may still lack a reliable
 constant grid; half/double-tempo ambiguity is not universally resolvable.
 
+For stable 70–100 BPM candidates, a separate two-step rhythm check can select
+140–200 BPM instead (for example, 83 → 166).
+It looks for recurring alternating straight/displaced accents between backbeats,
+not just busy hi-hats. At least
+eight four-beat patterns and 60% of the inspected patterns in tempo-compatible
+stable regions must support that interpretation. Ordinary uniform eighth- or
+sixteenth-note subdivisions do not trigger it. This is an onset-accent heuristic,
+not instrument or genre recognition: atypical breaks may remain half-time, and
+an identically accented slower groove can still be ambiguous. The selected grid
+keeps its original phase anchor, reduced modulo the new beat duration.
+
 Same-tempo stable regions may follow opposite rhythmic phases (for example,
 kicks versus offbeat accents). The fitter allows either the anchor phase or a
 half-beat alternative, choosing one interpretation per region and applying the
@@ -650,7 +661,9 @@ wrapped to ±0.5, measured against the corrected phase target).
 Confidence measures coverage and timing regularity among accepted stable-region
 beats, allowing the selected half-beat interpretation. It is not a probability,
 the fraction of the entire song with beats, or certainty that the chosen phase
-is the musical beat. Unreliable analysis reports `No reliable beat grid` and
+or tempo octave is the musical beat. Two-step selection retains the base pulse's
+confidence; it does not claim that every full-time beat has an onset.
+Unreliable analysis reports `No reliable beat grid` and
 leaves playback manual.
 
 To diagnose a rejected grid, enable `debug on`, then run
@@ -677,6 +690,11 @@ not the whole song.
 and RMS residual use each region's selected interpretation. Half-beat matches
 support the shared tempo/subdivision without claiming direct output-phase
 alignment.
+
+`two_step_double_time=true` identifies the two-step octave preference; in that
+case `selected_bpm` is the full-time tempo shown by deck status. `candidate_bpm`,
+region comparisons, beat counts and confidence continue to describe the fitted
+base pulse before that preference.
 
 When analysis completes grid refinement, a `beat-analysis-region` line precedes
 the summary for each stable region, even if the final grid is rejected. These

@@ -136,6 +136,52 @@ class NativeDeckSyncTests(unittest.TestCase):
             for pulse in reference[1:-1]:
                 self.assertLess(float(np.min(np.abs(pulses - pulse))), 0.018)
 
+    def groove(self, bpm, rhythm):
+        seconds = 40
+        audio = np.zeros(seconds * self.rate)
+        rng = np.random.default_rng(192)
+        t = np.arange(int(0.08 * self.rate)) / self.rate
+        kick = 0.7 * np.exp(-t * 45) * np.sin(2 * math.pi * 75 * t)
+        snare = 0.35 * rng.standard_normal(len(t)) * np.exp(-t * 70)
+        hat = 0.025 * rng.standard_normal(len(t)) * np.exp(-t * 250)
+        period = 60 / bpm
+        for bar in np.arange(0.137, seconds - 4 * period, 4 * period):
+            events = [(0, kick), (2.5 if rhythm == "two-step" else 2, kick),
+                      (1, snare), (3, snare)]
+            spacing = 0.25 if rhythm == "sixteenth" else 0.5
+            events += [(beat, hat) for beat in np.arange(0, 4, spacing)]
+            for beat, pulse in events:
+                start = round((bar + beat * period) * self.rate)
+                audio[start:start + len(pulse)] += pulse
+        path = self.root / f"{rhythm}-{bpm}.wav"
+        with wave.open(str(path), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(self.rate)
+            output.writeframes((np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes())
+        return path
+
+    def test_two_step_breaks_choose_full_tempo_without_doubling_slow_grooves(self):
+        for bpm, rhythm in ((166, "two-step"), (174, "two-step"),
+                            (83, "eighth"), (83, "sixteenth")):
+            with self.subTest(bpm=bpm, rhythm=rhythm):
+                period = 60 / bpm
+                path = self.groove(bpm, rhythm)
+                deck = self.deck([path])
+                plugin, _ = deck
+                status = plugin.deck_status()
+                self.assertAlmostEqual(status["bpm"], bpm, delta=0.2, msg=status)
+                self.assertGreaterEqual(status["beat_confidence"], 0.65)
+                if rhythm == "two-step":
+                    # Snare-anchored phase must still land on the full-time grid.
+                    self.assertLess(abs(math.remainder(status["beat_offset"] - 0.137, period)), 0.025)
+                    self.clock([deck], bpm)
+                    plugin.set_parameter("play", True)
+                    self.render([deck], 3)
+                    status = plugin.deck_status()
+                    self.assertTrue(status["sync_active"], status)
+                    self.assertAlmostEqual(status["playback_speed"], 1, delta=0.01)
+
     def test_kick_grid_survives_eighth_note_hats_and_drives_sync(self):
         for hat_level in (0.1, 0.3, 0.6):
             with self.subTest(hat_level=hat_level):
