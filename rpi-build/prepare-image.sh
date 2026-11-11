@@ -161,7 +161,7 @@ sed -i 's/dtoverlay=vc4-kms-v3d$/dtoverlay=vc4-kms-v3d,noaudio/' "$BOOT_MOUNT/co
 mkdir -p "$MOUNT_DIR/home/pi/vcpi"
 tar -C "$REPO_DIR" --exclude='__pycache__' --exclude='*.egg-info' \
   --exclude='src/vcpi/_vcpi_native*.so' -cf - \
-  src assets sessions \
+  src patches sessions \
   build_native.py pyproject.toml requirements.txt vcpi vcpid README.md USAGE.md \
   LICENSE | tar -C "$MOUNT_DIR/home/pi/vcpi" -xf -
 

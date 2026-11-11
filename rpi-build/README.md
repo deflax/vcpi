@@ -113,7 +113,7 @@ sudo PLUGDATA_URL=https://mirror.example/plugdata-Debian-aarch64.tar.xz \
   importer supports the 0.9.3 state layout reported by v0.9.3-2.
 - The native C++ extension is built, then deck/MIDI/mixer and installed-plugdata
   smoke checks run as `pi` without a display or audio device. The plugdata check
-  imports `assets/patches/sine.pd`, verifies a MIDI-selected tone, and
+  imports `patches/sine.pd`, verifies a MIDI-selected tone, and
   checks silence after note-off. Native build dependencies are retained in the
   checkout-specific cache for offline incremental builds. Provisioning and
   `./vcpid` use the same build-directory calculation at `/home/pi/vcpi`.

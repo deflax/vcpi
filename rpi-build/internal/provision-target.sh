@@ -230,7 +230,7 @@ with tempfile.TemporaryDirectory(prefix="vcpi-image-smoke-") as directory:
 with tempfile.TemporaryDirectory(prefix="vcpi-plugdata-image-smoke-") as directory:
     root = Path(directory)
     plugin = NativePlugin("/usr/local/lib/vst3/plugdata.vst3", 44100, 512, "instrument")
-    plugin.load_preset(str(Path("assets/patches/sine.pd").resolve()))
+    plugin.load_preset(str(Path("patches/sine.pd").resolve()))
     transport = native.Transport(str(root / "audio.mmap"), 512, True)
     runner = native.TrackRunner(transport, plugin.native, 44100, 512)
     try:

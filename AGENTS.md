@@ -20,7 +20,7 @@ Read this file first in new sessions. It is a durable map of the repo, not a ful
 .
 ├── src/vcpi/      Python application package
 ├── src/engine/    C++ audio engine and Python bindings
-├── assets/        Bundled samples and Cardinal/Pure Data patches
+├── patches/       Bundled Cardinal/Pure Data patches
 ├── sessions/      Saved session files
 ├── rpi-build/     Raspberry Pi image build/provisioning tools
 ├── main.py        Top-level Python entry point
@@ -81,7 +81,7 @@ Hidden directories present in the workspace:
 
 - Track sources are `vcv`, `pd`, and `deck`; direct VST instrument tracks are not supported. `track <n|master> fx` still accepts an effect plugin name or full path.
 - VST3 name search checks `VST3_PATH` and `VST_PATH` directories, then the working directory, repository root, `~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`, and documented macOS paths. The former `vst3/` subdirectory is not searched automatically.
-- `track <n> vcv` and `track <n> pd` load from `assets/patches/` by default; `VCPI_PATCHES_DIR` overrides that directory. Loading does not auto-route MIDI channels.
+- `track <n> vcv` and `track <n> pd` load from `patches/` by default; `VCPI_PATCHES_DIR` overrides that directory. Loading does not auto-route MIDI channels.
 
 ## Dependency stack
 

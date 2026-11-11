@@ -159,10 +159,10 @@ VST3 effect search and name resolution:
 
 Cardinal/VCV helpers:
 
-- `track <n> vcv` looks for patch files in `assets/patches/` by default.
+- `track <n> vcv` looks for patch files in `patches/` by default.
 - `track <n> vcv` does not auto-route channels; use `midi link <ch> <track>` explicitly.
 - Override the patch directory with `VCPI_PATCHES_DIR`. Without an override, use
-  the working directory's `assets/patches` if present, otherwise the checkout's.
+  the working directory's `patches` if present, otherwise the checkout's.
 - Override Cardinal plugin path with `CARDINAL_VST3_PATH`.
 - Author patches in Cardinal with Host MIDI and Host Audio modules wired to the
   instrument. Both JSON and compressed `.vcv` projects are imported through
@@ -189,7 +189,7 @@ plugdata/Pure Data helpers:
   `PLUGDATA_VST3_PATH` to the bundle's full path before starting the daemon.
   Repository-local and working-directory plugin folders are not searched
   automatically.
-- `track <n> pd <patch_name[.pd]> [--name <label>]` loads from `assets/patches/`,
+- `track <n> pd <patch_name[.pd]> [--name <label>]` loads from `patches/`,
   sharing `VCPI_PATCHES_DIR` with Cardinal. Absolute paths and nested patch names
   are accepted. Quote names containing spaces, or use unquoted multiword patch
   names; labels require `--name`.
@@ -245,7 +245,7 @@ For example, `set 1 cutoff 950` changes the pad's filter and
 release applies to subsequent note-offs. Long envelopes still need time to play.
 The MIDI Mix fader remains the track gain, not one of these patch controls.
 Automation values are preserved in native plugin session state.
-To edit oscillator detuning or output gain, open `assets/patches/poly-pad.pd` in
+To edit oscillator detuning or output gain, open `patches/poly-pad.pd` in
 Pure Data or plugdata and keep those settings matched across the eight voices.
 The pad's output is 6 dB louder than the original example while retaining
 headroom for chords. Reload it with `track 1 pd poly-pad` after updating
@@ -370,8 +370,8 @@ hardware or empty plugin/effect lists may also yield no choices.
 | Command | Description |
 |---|---|
 | `track <track> deck <audio-file\|directory> [--name <label>]` | Replace the session-owned playlist and reset its song memory, initially paused |
-| `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `assets/patches/<patch_name>.vcv` |
-| `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `assets/patches/` or an absolute path |
+| `track <track> vcv <patch_name> [--name <label>]` | Load Cardinal into track from `patches/<patch_name>.vcv` |
+| `track <track> pd <patch_name[.pd]> [--name <label>]` | Load plugdata with a Pure Data patch from `patches/` or an absolute path |
 | `track <track\|master> fx <path\|vst_name> [--name <label>]` | Load effect into track insert chain or master bus |
 | `track <track> clear` | Clear instrument from track |
 | `track <track\|master> fx clear <fx_index>` | Remove effect by index |

@@ -138,7 +138,7 @@ class PlugdataPatchTests(unittest.TestCase):
         bundle = self.plugdata_bundle()
         directory = self.temporary_directory()
         patch = directory / "classic-subtractive-synth.pd"
-        source = Path(__file__).resolve().parents[1] / "assets" / "patches" / patch.name
+        source = Path(__file__).resolve().parents[1] / "patches" / patch.name
         patch.write_bytes(source.read_bytes())
         plugin = NativePlugin(str(bundle), 44100, 512, "instrument")
         volume = next(name for name, descriptor in plugin.parameters.items()
@@ -236,7 +236,7 @@ class PlugdataPatchTests(unittest.TestCase):
     def test_poly_pad_controls_change_every_voice_and_survive_native_restore(self):
         bundle = self.plugdata_bundle()
         directory = self.temporary_directory()
-        source = Path(__file__).resolve().parents[1] / "assets" / "patches" / "poly-pad.pd"
+        source = Path(__file__).resolve().parents[1] / "patches" / "poly-pad.pd"
         patch = directory / source.name
         patch.write_bytes(source.read_bytes())
         plugin = NativePlugin(str(bundle), 44100, 512, "instrument")

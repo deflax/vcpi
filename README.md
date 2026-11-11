@@ -181,8 +181,7 @@ see [deck commands](USAGE.md#deck-commands).
       pd_state.cpp      # Control-thread plugdata/Pd state conversion
       track_runner.cpp  # Per-track rendering and MIDI consumption
       runtime.cpp       # Output device, mixing and master-effects callback
-  assets/
-    patches/            # Cardinal .vcv and plugdata .pd patches
+  patches/              # Cardinal .vcv and plugdata .pd patches
   sessions/             # User-saved session files, not Python source
   tests/                # Automated Python regression tests
   pyproject.toml        # Python package metadata and src discovery
@@ -472,7 +471,7 @@ SOLO (REC ARM):       Notes 3,6,9,12,15,18,21,24
 Cardinal + VCV patch quick load:
 
 ```text
-# place patch files under ./assets/patches, e.g. ./assets/patches/ambient.vcv
+# place patch files under ./patches, e.g. ./patches/ambient.vcv
 vcpi> track 1 vcv ambient
 vcpi> midi link 1 1
 ```
@@ -495,7 +494,7 @@ vcpi> audio start
 vcpi> note 1 60 --velocity 100 --duration-ms 500
 ```
 
-`track <n> pd <patch_name[.pd]> [--name <label>]` shares the `assets/patches/` directory
+`track <n> pd <patch_name[.pd]> [--name <label>]` shares the `patches/` directory
 and `VCPI_PATCHES_DIR` setting with Cardinal. Names can contain spaces and nested
 paths; Tab completion quotes them as needed. Import supports plugdata's 0.9.3
 state layout and rejects other layouts. Sessions embed the main patch, but its
