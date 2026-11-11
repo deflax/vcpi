@@ -41,12 +41,15 @@ class NativeDeckCacheTests(unittest.TestCase):
             output.writeframes(audio.astype("<i2").tobytes())
         return path
 
-    def catalog(self, song):
+    def catalog(self, song, bpm_hint=None):
+        entry = {"id": "song", "path": str(song), "title": song.stem}
+        if bpm_hint is not None:
+            entry["bpm_hint"] = bpm_hint
         return json.dumps({"version": 1, "id": "cache-test", "bank_path": "session:cache-test",
-                           "tracks": [{"id": "song", "path": str(song), "title": song.stem}]})
+                           "tracks": [entry]})
 
-    def load(self, song=None):
-        plugin = self.backend.Plugin(self.catalog(song or self.song), 48000, 512, "deck")
+    def load(self, song=None, bpm_hint=None):
+        plugin = self.backend.Plugin(self.catalog(song or self.song, bpm_hint), 48000, 512, "deck")
         status = plugin.deck_status()
         self.assertEqual(status["state"], "ready", status)
         self.assertFalse(status["loading"], status)
@@ -54,14 +57,14 @@ class NativeDeckCacheTests(unittest.TestCase):
         gc.collect()
         return status
 
-    def subprocess_status(self, song=None, environment=None):
+    def subprocess_status(self, song=None, environment=None, bpm_hint=None):
         script = """
 import json, sys
 from vcpi.audio_deps import require_native
 plugin = require_native().Plugin(sys.argv[1], 48000, 512, "deck")
 print(json.dumps(plugin.deck_status()))
 """
-        result = subprocess.run([sys.executable, "-c", script, self.catalog(song or self.song)],
+        result = subprocess.run([sys.executable, "-c", script, self.catalog(song or self.song, bpm_hint)],
                                 cwd=Path(__file__).resolve().parents[1],
                                 env=environment, capture_output=True, text=True, timeout=60, check=True)
         status = json.loads(result.stdout.strip().splitlines()[-1])
@@ -105,6 +108,63 @@ print(json.dumps(plugin.deck_status()))
             self.assertLess(time.monotonic(), deadline, status)
             runner.render_once()
             time.sleep(0.001)
+
+    def test_hint_validation_rejects_non_numeric_nonfinite_and_out_of_range(self):
+        catalog = json.loads(self.catalog(self.song))
+        for hint in (True, False, None, "83", [], {}, 59.9, 200.1, float("nan"),
+                     float("inf"), -float("inf")):
+            with self.subTest(hint=hint):
+                catalog["tracks"][0]["bpm_hint"] = hint
+                with self.assertRaises((ValueError, RuntimeError)):
+                    self.backend.Plugin(json.dumps(catalog), 48000, 512, "deck")
+        for hint in (60, 200, 83.25):
+            with self.subTest(hint=hint):
+                self.assertEqual(self.load(bpm_hint=hint)["bpm"], 0)
+
+    def test_hint_cache_slots_and_embedded_identity_are_isolated_across_loads(self):
+        rate = 16000
+        audio = np.zeros(rate * 40)
+        t = np.arange(int(0.025 * rate)) / rate
+        pulse = 0.7 * np.exp(-t * 180) * np.cos(2 * np.pi * 800 * t)
+        for beat in np.arange(0.137, 40 - 0.025, 60 / 83):
+            begin = round(beat * rate)
+            audio[begin:begin + len(pulse)] += pulse
+        with wave.open(str(self.song), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(rate)
+            output.writeframes((audio * 32767).astype("<i2").tobytes())
+        variants = ((None, 83), (174, 166), (83, 83), (174.125, 166))
+        snapshots = {}
+        for hint, expected in variants:
+            with self.subTest(hint=hint):
+                status = self.load(bpm_hint=hint)
+                self.assertAlmostEqual(status["bpm"], expected, delta=0.2, msg=status)
+                entry = next(path for path in self.entries() if path not in snapshots)
+                data = json.loads(entry.read_text())
+                self.assertEqual(data["source"].get("bpm_hint"), hint)
+                if hint is None:
+                    self.assertNotIn("bpm_hint", data["source"])
+                self.assert_grid(status, data)
+                snapshots[entry] = (entry.stat().st_ino, entry.stat().st_mtime_ns, entry.read_bytes())
+        self.assertEqual(len(self.entries()), len(variants))
+        for hint, expected in reversed(variants):
+            self.assertAlmostEqual(self.load(bpm_hint=hint)["bpm"], expected, delta=0.2)
+            self.assertAlmostEqual(self.subprocess_status(bpm_hint=hint)["bpm"], expected, delta=0.2)
+        # Numeric spelling does not create another hint identity.
+        self.assertAlmostEqual(self.load(bpm_hint=83.0)["bpm"], 83, delta=0.2)
+        self.assertEqual(set(self.entries()), set(snapshots))
+        for entry, before in snapshots.items():
+            self.assertEqual((entry.stat().st_ino, entry.stat().st_mtime_ns, entry.read_bytes()), before)
+        low = next(path for path in snapshots
+                   if json.loads(path.read_text())["source"].get("bpm_hint") == 83)
+        high = next(path for path in snapshots
+                    if json.loads(path.read_text())["source"].get("bpm_hint") == 174)
+        high.write_bytes(low.read_bytes())
+        # A correctly named file with the wrong embedded hint must still miss.
+        self.assertAlmostEqual(self.load(bpm_hint=174)["bpm"], 166, delta=0.2)
+        self.assertEqual(json.loads(high.read_text())["source"]["bpm_hint"], 174)
+        self.assertEqual(low.read_bytes(), snapshots[low][2])
 
     def test_reanalyze_replaces_live_and_disk_grid_without_resetting_deck(self):
         self.load()

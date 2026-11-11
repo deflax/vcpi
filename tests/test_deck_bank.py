@@ -53,6 +53,23 @@ class DeckBankTests(unittest.TestCase):
             with self.subTest(tracks=tracks), self.assertRaises(ValueError):
                 make_catalog("set", tracks)
 
+    def test_optional_bpm_hints_are_numeric_bounded_and_per_entry(self):
+        for hint in (60, 87.25, 174, 200):
+            with self.subTest(hint=hint):
+                tracks = [{**self.tracks[0], "bpm_hint": hint},
+                          {"id": "unhinted", "path": str(self.root / "other.wav")}]
+                catalog = json.loads(make_catalog("set", tracks))
+                self.assertEqual(catalog["tracks"][0]["bpm_hint"], hint)
+                self.assertNotIn("bpm_hint", catalog["tracks"][1])
+                self.assertNotIn("bpm_hint", catalog)
+                self.assertNotIn("bpm_hint", self.tracks[0])
+
+    def test_malformed_bpm_hints_are_rejected(self):
+        for hint in (None, True, False, "174", [], {}, 59.999, 200.001,
+                     float("nan"), float("inf"), float("-inf"), 10 ** 1000):
+            with self.subTest(hint=hint), self.assertRaisesRegex(ValueError, "BPM hint"):
+                make_catalog("set", [{**self.tracks[0], "bpm_hint": hint}])
+
     def test_restore_scalars_are_finite_and_bounded(self):
         for arguments in ({"pitch": 17}, {"pitch": float("nan")},
                           {"cue": -1}, {"cue": float("inf")},

@@ -73,6 +73,11 @@ def make_catalog(identity, tracks, *, bank_path=None, track_id=None,
             raise ValueError("inline deck track paths must be absolute")
         entries.append({"id": entry_id, "path": str(path.resolve()),
                         "title": _text(entry.get("title", entry_id), "track title")})
+        if "bpm_hint" in entry:
+            hint = entry["bpm_hint"]
+            if isinstance(hint, bool) or not isinstance(hint, (int, float)) or not 60 <= hint <= 200:
+                raise ValueError("deck BPM hint must be a finite number between 60 and 200")
+            entries[-1]["bpm_hint"] = hint
     initial = 1
     if track_id is not None:
         if track_id not in seen:

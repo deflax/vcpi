@@ -46,10 +46,14 @@ class NativeDeckSyncTests(unittest.TestCase):
             output.writeframes((audio * 32767).astype("<i2").tobytes())
         return path
 
-    def deck(self, paths, **initial):
+    def deck(self, paths, bpm_hint=None, **initial):
+        entries = [{"id": str(i), "title": path.stem, "path": str(path)}
+                   for i, path in enumerate(paths)]
+        if bpm_hint is not None:
+            for entry in entries:
+                entry["bpm_hint"] = bpm_hint
         catalog = {"id": "sync-bank", "bank_path": str(self.root / "bank.json"),
-                   "tracks": [{"id": str(i), "title": path.stem, "path": str(path)}
-                              for i, path in enumerate(paths)], **initial}
+                   "tracks": entries, **initial}
         plugin = self.backend.Plugin(json.dumps(catalog), self.rate, self.frames, "deck")
         transport = self.backend.Transport(str(self.root / f"{len(self.runners)}.mmap"), self.frames, True)
         runner = self.backend.TrackRunner(transport, plugin, self.rate, self.frames)
@@ -181,6 +185,64 @@ class NativeDeckSyncTests(unittest.TestCase):
                     status = plugin.deck_status()
                     self.assertTrue(status["sync_active"], status)
                     self.assertAlmostEqual(status["playback_speed"], 1, delta=0.01)
+
+    def test_hint_selects_octave_without_forcing_tempo_on_same_two_step_audio(self):
+        path = self.groove(166, "two-step")
+        for hint, expected in ((174, 166), (83, 83), (None, 166)):
+            with self.subTest(hint=hint):
+                deck = self.deck([path], bpm_hint=hint)
+                plugin, _ = deck
+                status = plugin.deck_status()
+                self.assertAlmostEqual(status["bpm"], expected, delta=0.2, msg=status)
+                self.assertGreaterEqual(status["beat_confidence"], 0.65)
+                period = 60 / expected
+                self.assertGreaterEqual(status["beat_offset"], 0)
+                self.assertLess(status["beat_offset"], period)
+                # Either kick/snare phase is coherent with the original 166 grid.
+                self.assertLess(abs(math.remainder(status["beat_offset"] - 0.137, 60 / 166)), 0.025)
+                # Start the shared clock on this source grid: octave selection
+                # must not be confused with settling an unrelated phase offset.
+                self.clock([deck], expected, beat=-status["beat_offset"] / period)
+                plugin.set_parameter("play", True)
+                self.render([deck], 3)
+                status = plugin.deck_status()
+                self.assertTrue(status["sync_active"], status)
+                self.assertAlmostEqual(status["playback_speed"], 1, delta=0.01)
+
+    def test_catalog_hint_change_refreshes_active_and_inactive_grids(self):
+        path = self.groove(166, "two-step")
+        plugin, runner = self.deck([path, path], bpm_hint=83)
+        plugin.set_parameter("track_select", 2)
+        self.settle_request((plugin, runner))
+        plugin.set_parameter("track_select", 1)
+        self.settle_request((plugin, runner))
+        plugin.set_parameter("sync", False)
+        plugin.set_parameter("pitch", 2.5)
+        plugin.set_parameter("phase_offset", 0.125)
+        plugin.set_parameter("nudge", 0.2)
+        plugin.deck_command("seek", 2)
+        self.settle_request((plugin, runner))
+        plugin.deck_command("cue_set")
+        plugin.set_parameter("play", True)
+        before = plugin.deck_status()
+        for hint, expected in ((174, 166), (83, 83), (None, 166)):
+            with self.subTest(hint=hint):
+                entries = [{"id": str(i), "title": path.stem, "path": str(path)} for i in range(2)]
+                if hint is not None:
+                    for entry in entries:
+                        entry["bpm_hint"] = hint
+                catalog = {"id": "sync-bank", "bank_path": str(self.root / "bank.json"), "tracks": entries}
+                plugin.update_deck_catalog(json.dumps(catalog))
+                after = plugin.deck_status()
+                self.assertAlmostEqual(after["bpm"], expected, delta=0.2)
+                for key in ("position", "cue", "pitch", "phase_offset", "nudge", "sync", "play"):
+                    self.assertEqual(after[key], before[key], key)
+                plugin.set_parameter("track_select", 2)
+                inactive = self.settle_request((plugin, runner))
+                self.assertAlmostEqual(inactive["bpm"], expected, delta=0.2)
+                plugin.set_parameter("track_select", 1)
+                before = self.settle_request((plugin, runner))
+                self.assertAlmostEqual(before["bpm"], expected, delta=0.2)
 
     def test_kick_grid_survives_eighth_note_hats_and_drives_sync(self):
         for hat_level in (0.1, 0.3, 0.6):

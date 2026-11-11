@@ -143,6 +143,10 @@ playlists. Load an audio file with `track 1 deck song.wav`, or a directory with
 `track 1 deck "/music/Live Set"` to load its supported audio files in filename
 order without scanning subdirectories. Repeat either command to replace the
 whole playlist and reset song memory; mixer, routing and inserts are retained.
+Add `--bpm-hint 174` when loading a path to supply its expected median tempo.
+The optional 60–200 BPM hint guides analysis and half/double-time selection,
+without forcing every song to that exact BPM; it is saved with each playlist
+entry and has a separate analysis cache from other hints or automatic analysis.
 Use `track 1 clear` to remove the whole deck. Queen Mary DSP analyzes the whole selected file for tempo and a stable beat grid; decks
 follow the shared musical timeline's tempo and beat phase by default.
 Same-tempo regions that switch to offbeat accents can support analysis through

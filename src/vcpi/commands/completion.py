@@ -327,8 +327,13 @@ def _complete_track(ctx):
                 return choices(("set",))
             if args[2:] == ["phase"]:
                 return choices(("reset",))
-            if len(args) == 3 and args[2] not in ("reanalyze", "seek", "cue", "phase"):
-                return choices(("--name",))
+            if len(args) >= 3 and args[2] not in ("reanalyze", "seek", "cue", "phase"):
+                flags = ("--name", "--bpm-hint")
+                options = args[3:]
+                if (len(options) % 2 or any(flag not in flags for flag in options[::2])
+                        or len(set(options[::2])) != len(options[::2])):
+                    return empty
+                return choices(flag for flag in flags if flag not in options[::2])
             return empty
         if mode == "vcv":
             if len(args) == 2:

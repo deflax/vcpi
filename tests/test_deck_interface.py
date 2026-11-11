@@ -64,6 +64,17 @@ class DeckCLITests(unittest.TestCase):
         self.engine.deck_command.assert_not_called()
         self.assertIn("Error:", self.output.getvalue())
 
+    def test_malformed_analysis_hint_options_do_not_replace_loaded_deck(self):
+        for suffix in ("--bpm-hint", "--bpm-hint nope",
+                       "--bpm-hint --name DnB", "--bpm-hint 174 --bpm-hint 83",
+                       "--bpm-hint 174 extra", "--bpm-hint 174 --unknown 1"):
+            with self.subTest(suffix=suffix):
+                self.output.seek(0)
+                self.output.truncate()
+                self.cli.onecmd(f'track 1 deck "/music/Live Set" {suffix}')
+                self.assertIn("Error:", self.output.getvalue())
+                self.host.load_deck.assert_not_called()
+
     def test_get_follows_phase_changes_from_render_status(self):
         metadata = {name: replace(parameter)
                     for name, parameter in self.track.plugin.parameters.items()}

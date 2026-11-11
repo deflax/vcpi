@@ -145,9 +145,21 @@ def deck(ctx, track_num, parts, text):
             else:
                 raise ValueError("expected reanalyze, seek <seconds>, cue [set], or phase reset")
         else:
+            bpm_hint = None
+            if "--bpm-hint" in tokens:
+                if tokens.count("--bpm-hint") != 1:
+                    raise ValueError("--bpm-hint may only be supplied once")
+                marker = tokens.index("--bpm-hint")
+                if marker + 1 >= len(tokens) or tokens[marker + 1].startswith("--"):
+                    raise ValueError("--bpm-hint requires an expected median BPM (60–200)")
+                try:
+                    bpm_hint = float(tokens[marker + 1])
+                except ValueError:
+                    raise ValueError("--bpm-hint requires an expected median BPM (60–200)") from None
+                tokens = tokens[:marker] + tokens[marker + 2:]
             sources, name = source_args(tokens, 1)
             track = ctx.host.load_deck(
-                idx, str(Path(sources[0]).expanduser()), name)
+                idx, str(Path(sources[0]).expanduser()), name, bpm_hint=bpm_hint)
             ctx.emit(f"  track {track_num} = {track.name}")
             ctx.emit(f"  Use show {track_num} for playback state or "
                      f"show {track_num} --details for the playlist.")

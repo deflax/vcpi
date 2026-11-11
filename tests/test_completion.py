@@ -363,9 +363,18 @@ class CompletionTests(unittest.TestCase):
         for before, name in (("track 1 vcv Bad", "Bad Patch"),):
             inserted = self.inserted(before, shlex.quote(name))
             self.assertEqual(shlex.split(inserted)[-1], name)
-        for before in ("track 1 vcv Bass ",
-                       'track 1 deck "/music/live set.json" '):
-            self.assertEqual(self.matches(before), ["--name"])
+        self.assertEqual(self.matches("track 1 vcv Bass "), ["--name"])
+
+    def test_deck_analysis_hint_completion_tracks_remaining_options(self):
+        path = 'track 1 deck "/music/Live Set"'
+        self.assertEqual(self.matches(path + " "), ["--bpm-hint", "--name"])
+        self.assertEqual(self.matches(path + " --b"), ["--bpm-hint"])
+        for option in ("--bpm-hint", "--name"):
+            self.assertEqual(self.matches(path + f" {option} "), [])
+        self.assertEqual(self.matches(path + " --bpm-hint 174 "), ["--name"])
+        self.assertEqual(self.matches(path + ' --name "DnB Set" '), ["--bpm-hint"])
+        self.assertEqual(self.matches(path + ' --name "DnB Set" --bpm-hint 174 '), [])
+        self.assertEqual(self.matches(path + " --bpm-hint 174 --bpm-hint 83 "), [])
 
     def test_nested_help_and_option_insertions_match_grammar(self):
         for before, match, expected in (

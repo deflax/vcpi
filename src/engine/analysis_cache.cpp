@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -30,7 +31,7 @@ struct SourceIdentity {
     std::string json;
 };
 
-std::optional<SourceIdentity> identify(const std::string& path) {
+std::optional<SourceIdentity> identify(const std::string& path, std::optional<double> bpmHint) {
     std::error_code error;
     const auto canonical = std::filesystem::canonical(path, error);
     if (error) return std::nullopt;
@@ -56,7 +57,8 @@ std::optional<SourceIdentity> identify(const std::string& path) {
     identity->setProperty("ctime_seconds", static_cast<juce::int64>(changed.tv_sec));
     identity->setProperty("ctime_nanoseconds", static_cast<juce::int64>(changed.tv_nsec));
     identity->setProperty("analyzer_version", beatAnalyzerVersion);
-    return SourceIdentity{canonical.string(), juce::JSON::toString(object, true).toStdString()};
+    if (bpmHint) identity->setProperty("bpm_hint", *bpmHint);
+    return SourceIdentity{canonical.string(), juce::JSON::toString(object, true, 17).toStdString()};
 }
 
 std::string cacheDirectory() {
@@ -80,16 +82,24 @@ std::string cacheDirectory() {
     return (base / "vcpi" / "analysis").string();
 }
 
-std::string cacheFilename(const std::string& path) {
+std::string cacheFilename(const std::string& path, std::optional<double> bpmHint) {
     // The embedded identity is authoritative, so even a hash collision is a miss,
-    // never a grid belonging to another song. One stable slot per canonical path.
+    // never another song's grid. Hint variants have separate stable disk slots.
     std::uint64_t hash = UINT64_C(14695981039346656037);
     for (const unsigned char byte : path) {
         hash ^= byte;
         hash *= UINT64_C(1099511628211);
     }
-    std::array<char, 22> name {};
-    std::snprintf(name.data(), name.size(), "%016llx.json", static_cast<unsigned long long>(hash));
+    std::array<char, 39> name {};
+    if (bpmHint) {
+        std::uint64_t bits;
+        static_assert(sizeof(bits) == sizeof(*bpmHint));
+        std::memcpy(&bits, &*bpmHint, sizeof(bits));
+        std::snprintf(name.data(), name.size(), "%016llx-%016llx.json",
+                      static_cast<unsigned long long>(hash), static_cast<unsigned long long>(bits));
+    } else {
+        std::snprintf(name.data(), name.size(), "%016llx.json", static_cast<unsigned long long>(hash));
+    }
     return name.data();
 }
 
@@ -130,6 +140,8 @@ bool sameIdentity(const juce::var& saved, const std::string& identity) {
         const auto& actual = actualObject->getProperty(property.name);
         if (property.value.isString()) {
             if (!actual.isString() || actual != property.value) return false;
+        } else if (property.value.isDouble()) {
+            if (!numeric(actual) || static_cast<double>(actual) != static_cast<double>(property.value)) return false;
         } else {
             if ((!actual.isInt() && !actual.isInt64()) ||
                 static_cast<juce::int64>(actual) != static_cast<juce::int64>(property.value)) return false;
@@ -139,14 +151,15 @@ bool sameIdentity(const juce::var& saved, const std::string& identity) {
 }
 }
 
-BeatAnalysisCache::BeatAnalysisCache(const std::string& audioPath) noexcept {
+BeatAnalysisCache::BeatAnalysisCache(const std::string& audioPath, std::optional<double> hint) noexcept
+    : bpmHint(hint) {
     try {
         sourcePath = audioPath;
-        const auto identity = identify(sourcePath);
+        const auto identity = identify(sourcePath, bpmHint);
         if (!identity) return;
         sourceIdentity = identity->json;
         directory = cacheDirectory();
-        filename = cacheFilename(identity->path);
+        filename = cacheFilename(identity->path, bpmHint);
     } catch (...) {
         directory.clear();
         filename.clear();
@@ -160,7 +173,7 @@ bool BeatAnalysisCache::matches(const BeatAnalysisCache& other) const noexcept {
 std::optional<BeatAnalysis> BeatAnalysisCache::load() const noexcept {
     try {
         if (sourceIdentity.empty() || directory.empty() || filename.empty()) return std::nullopt;
-        const auto current = identify(sourcePath);
+        const auto current = identify(sourcePath, bpmHint);
         if (!current || current->json != sourceIdentity) return std::nullopt;
         const Descriptor folder(::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
         if (folder.value < 0) return std::nullopt;
@@ -188,7 +201,7 @@ std::optional<BeatAnalysis> BeatAnalysisCache::load() const noexcept {
         const BeatAnalysis analysis{static_cast<double>(entry["bpm"]), static_cast<double>(entry["offset"]),
                                     static_cast<double>(entry["confidence"])};
         if (!validAnalysis(analysis)) return std::nullopt;
-        const auto after = identify(sourcePath);
+        const auto after = identify(sourcePath, bpmHint);
         if (!after || after->json != sourceIdentity) return std::nullopt;
         return analysis;
     } catch (...) {
@@ -211,7 +224,7 @@ void BeatAnalysisCache::erase() const {
 void BeatAnalysisCache::store(const BeatAnalysis& analysis) const noexcept {
     try {
         if (sourceIdentity.empty() || directory.empty() || filename.empty() || !validAnalysis(analysis)) return;
-        const auto current = identify(sourcePath);
+        const auto current = identify(sourcePath, bpmHint);
         if (!current || current->json != sourceIdentity || !prepareDirectory(directory)) return;
         auto* object = new juce::DynamicObject;
         const juce::var entry(object);
@@ -247,7 +260,7 @@ void BeatAnalysisCache::store(const BeatAnalysis& analysis) const noexcept {
                 written += static_cast<std::size_t>(count);
             }
             if (::fsync(file.value) != 0) return;
-            const auto after = identify(sourcePath);
+            const auto after = identify(sourcePath, bpmHint);
             if (!after || after->json != sourceIdentity) return;
             if (::renameat(folder.value, temporary.c_str(), folder.value, filename.c_str()) == 0)
                 ::fsync(folder.value);

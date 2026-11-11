@@ -68,6 +68,7 @@ private:
     };
     struct Track {
         std::string id, path, title;
+        std::optional<double> bpmHint;
         std::optional<BeatAnalysis> grid;
         std::shared_ptr<BeatAnalysisCache> gridSource;
         std::unique_ptr<SongMemory> memory = std::make_unique<SongMemory>();
@@ -100,7 +101,7 @@ private:
     void request(int track, double seconds, Mode mode);
     bool prepare(Stream& stream, const Request& request, Track& track);
     bool fill(Stream& stream);
-    bool analyze(Stream& stream, BeatAnalysis& grid);
+    bool analyze(Stream& stream, BeatAnalysis& grid, std::optional<double> bpmHint);
     void publishGrid(const Stream& stream) noexcept;
     void work() noexcept;
     void rememberSong(double phase) noexcept;

@@ -107,6 +107,54 @@ class DeckSessionTests(unittest.TestCase):
         self.assertEqual(track.plugin.values["track_select"], 2)
         self.assertEqual(status["tracks"], entries)
 
+    def test_mixed_bpm_hints_roundtrip_in_format_three(self):
+        host = self.host()
+        host.load_deck(0, str(self.root), bpm_hint=174)
+        deck = snapshot(host)["tracks"][0]["deck"]
+        entries = deck["tracks"]
+        self.assertEqual([entry["bpm_hint"] for entry in entries], [174, 174])
+        entries[1]["bpm_hint"] = 87.25
+        entries.append({key: value for key, value in
+                        {**entries[0], "id": "unhinted"}.items() if key != "bpm_hint"})
+        host.restore_deck(0, deck)
+        host.save_session()
+        saved = json.loads(self.session.read_text())
+        self.assertEqual(saved["version"], 3)
+        self.assertEqual(saved["tracks"][0]["deck"]["tracks"], entries)
+        self.assertNotIn("bpm_hint", saved["tracks"][0]["deck"])
+        self.assertNotIn("bpm_hint", saved["tracks"][0]["deck"]["tracks"][2])
+
+        restored = self.host()
+        restored.restore_session(start_audio=False)
+        self.assertEqual(restored.engine.tracks[0].deck["tracks"], entries)
+        self.assertEqual(snapshot(restored)["tracks"][0]["deck"]["tracks"], entries)
+
+    def test_malformed_bpm_hints_preserve_existing_deck_on_load_and_restore(self):
+        host = self.host()
+        host.load_deck(0, str(self.root / "first.wav"), "Original", bpm_hint=174)
+        self.await_status(host, 0, lambda state: state.get("state") == "ready")
+        host.engine.set_track_state(0, gain=0.375, muted=True)
+        previous = host.engine.tracks[0]
+        deck = snapshot(host)["tracks"][0]["deck"]
+        for hint in (True, False, "174", [], {}, 59.999, 200.001,
+                     float("nan"), float("inf"), float("-inf"), None):
+            with self.subTest(hint=hint):
+                if hint is not None:
+                    with self.assertRaisesRegex(ValueError, "BPM hint"):
+                        host.load_deck(0, str(self.root / "second.wav"),
+                                       "Replacement", bpm_hint=hint)
+                malformed = {**deck, "tracks": [
+                    {**entry, "bpm_hint": hint} for entry in deck["tracks"]]}
+                with self.assertRaisesRegex(ValueError, "BPM hint"):
+                    host.restore_deck(0, malformed, "Replacement")
+                current = host.engine.tracks[0]
+                self.assertEqual((current.worker_pid, current.generation),
+                                 (previous.worker_pid, previous.generation))
+                self.assertEqual(current.name, "Original")
+                self.assertEqual(current.gain, 0.375)
+                self.assertTrue(current.muted)
+                self.assertEqual(snapshot(host)["tracks"][0]["deck"], deck)
+
     def test_synced_session_restores_selected_song_phase_offset(self):
         host = self.host()
         host.load_deck(0, str(self.root))

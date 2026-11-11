@@ -230,7 +230,7 @@ class VcpiCore:
         return self._loaded_track(track_index)
 
     def load_deck(self, track_index: int, audio_path: str,
-                  name: Optional[str] = None) -> InstrumentTrack:
+                  name: Optional[str] = None, *, bpm_hint=None) -> InstrumentTrack:
         """Replace the playlist and its song memory, retaining mixer and inserts."""
         from uuid import uuid4
         from vcpi.deck_bank import AUDIO_SUFFIXES, audio_entry, make_catalog
@@ -254,6 +254,9 @@ class VcpiCore:
             if resolved not in seen:
                 entries.append(audio_entry(candidate))
                 seen.add(resolved)
+        if bpm_hint is not None:
+            for entry in entries:
+                entry["bpm_hint"] = bpm_hint
         catalog = make_catalog(uuid4().hex, entries)
         track = self.engine.tracks[track_index]
         self._clear_deck_holds(track_index=track_index)

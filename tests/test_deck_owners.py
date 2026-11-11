@@ -168,10 +168,12 @@ class DeckOwnerTests(unittest.TestCase):
         nested.mkdir()
         (nested / "hidden.wav").write_bytes(self.wav.read_bytes())
 
-        track = host.load_deck(0, str(folder), "Directory deck")
+        track = host.load_deck(0, str(folder), "Directory deck", bpm_hint=174)
         original = [dict(entry) for entry in track.deck["tracks"]]
         self.assertEqual([entry["path"] for entry in original],
                          [str(folder / "a.wav"), str(folder / "b.WAV")])
+        self.assertEqual([entry["bpm_hint"] for entry in original], [174, 174])
+        self.assertNotIn("bpm_hint", track.deck)
         self.assertFalse(track.deck["play"])
         selected = track.deck["track_id"]
         owner = (track.worker_pid, track.generation)
@@ -183,6 +185,7 @@ class DeckOwnerTests(unittest.TestCase):
         updated = host.load_deck(0, str(folder))
         self.assertEqual([entry["path"] for entry in updated.deck["tracks"]],
                          [str(folder / name) for name in ("a.wav", "b.WAV", "c.wav")])
+        self.assertTrue(all("bpm_hint" not in entry for entry in updated.deck["tracks"]))
         self.assertNotEqual(updated.deck["track_id"], selected)
         self.assertTrue({entry["id"] for entry in original}.isdisjoint(
             entry["id"] for entry in updated.deck["tracks"]))
@@ -194,9 +197,10 @@ class DeckOwnerTests(unittest.TestCase):
         self.assertEqual(updated.gain, 0.375)
         self.assertTrue(updated.muted)
         self.assertEqual(updated.name, "Directory deck")
-        renamed = host.load_deck(0, str(folder / "a.wav"), "Renamed")
+        renamed = host.load_deck(0, str(folder / "a.wav"), "Renamed", bpm_hint=87.25)
         self.assertEqual(renamed.name, "Renamed")
         self.assertEqual([entry["path"] for entry in renamed.deck["tracks"]], [str(folder / "a.wav")])
+        self.assertEqual(renamed.deck["tracks"][0]["bpm_hint"], 87.25)
         empty = self.root / "empty"
         empty.mkdir()
         (empty / "notes.txt").write_text("no supported files")

@@ -530,6 +530,28 @@ MP3 and FLAC files in filename order. Subdirectories and unsupported files are
 ignored; a directory with no supported audio files reports an error. Symlinks
 resolving to the same file produce only one entry within the new list.
 
+If you know the collection's approximate median tempo, supply an optional hint:
+
+```text
+track 1 deck "/music/DnB" --bpm-hint 174 --name Deck-A
+track 2 deck "/music/downtempo.flac" --bpm-hint 83
+```
+
+`--bpm-hint` accepts a finite number from 60 to 200 and applies to every song
+loaded from that path. It is an expected tempo, not a median calculated from
+the directory and not a fixed BPM override. It guides the tempo tracker and
+prefers the half/double-time interpretation proportionally closest to the hint,
+within the supported 60–200 BPM range. A song near 166 can therefore remain
+166 with a hint of 174, rather than being forced to 174 or reported as 83.
+The hint does not change the shared playback tempo. Omit it for automatic
+analysis. `--name` and `--bpm-hint` may appear in either order.
+
+Hints are retained per song in session playlists and reused for reanalysis.
+Hinted and unhinted cache entries are separate, so loading the same audio with
+a different hint does not reuse another interpretation. Loading the path again
+without the option removes the hint from the replacement playlist and resets
+song memory as usual; it does not erase other cached interpretations.
+
 Each song independently remembers position, play/pause, cue, pitch, sync and
 phase correction. Switching away captures its state; switching back resumes
 that remembered state. Unvisited songs start paused at zero with default
@@ -582,7 +604,7 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 | `show 1 --details` | Full cached deck diagnostics, requested versus applied selection, detected grid and indexed playlist paths |
 | `track 1 deck reanalyze` | Pause at the current position, discard this song's cached grid and run detection again |
 | `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
-| `track 1 deck <audio-file|directory> [--name <label>]` | Replace the playlist, resetting its song memory; retain mixer, routing and inserts |
+| `track 1 deck <audio-file|directory> [--bpm-hint <bpm>] [--name <label>]` | Replace the playlist, optionally supplying its expected median tempo; retain mixer, routing and inserts |
 | `track 1 clear` | Remove the whole deck |
 | `set 1 seek 90` | Set position in source seconds, bounded to duration; retain play/pause state |
 | `set 1 play true` / `set 1 play false` | Resume / pause, preserving source position |
@@ -632,8 +654,8 @@ stable beats. A beatless intro can be followed by a usable region later in the
 file. Variable tempo, short clips or ambiguous rhythms may still lack a reliable
 constant grid; half/double-tempo ambiguity is not universally resolvable.
 
-For stable 70–100 BPM candidates, a separate two-step rhythm check can select
-140–200 BPM instead (for example, 83 → 166).
+Without an explicit BPM hint, stable 70–100 BPM candidates receive a separate
+two-step rhythm check that can select 140–200 BPM instead (for example, 83 → 166).
 It looks for recurring alternating straight/displaced accents between backbeats,
 not just busy hi-hats. At least
 eight four-beat patterns and 60% of the inspected patterns in tempo-compatible
@@ -669,7 +691,7 @@ leaves playback manual.
 To diagnose a rejected grid, enable `debug on`, then run
 `track 1 deck reanalyze` (replace `1` with the mixer track). Reanalysis bypasses
 the selected song's cache and pauses it at its current position. Each fresh
-analysis emits one `beat-analysis` summary to the **vcpid terminal**, prefixed
+analysis emits a `beat-analysis` summary to the **vcpid terminal**, prefixed
 with its worker (for example `[track 1]`); it is not printed in the client.
 Use `LOG_LEVEL=DEBUG ./vcpid` to include initial-load analysis. Cached loads
 do not rerun analysis or emit a summary. Output follows the existing native
@@ -690,11 +712,16 @@ not the whole song.
 and RMS residual use each region's selected interpretation. Half-beat matches
 support the shared tempo/subdivision without claiming direct output-phase
 alignment.
-
 `two_step_double_time=true` identifies the two-step octave preference; in that
 case `selected_bpm` is the full-time tempo shown by deck status. `candidate_bpm`,
 region comparisons, beat counts and confidence continue to describe the fitted
 base pulse before that preference.
+Explicit BPM hints also select an octave after the base fit, without changing
+those base-fit metrics; deck status shows the selected tempo. If a hinted
+tracker pass cannot produce a reliable grid, analysis makes one ordinary-prior
+pass over the same decoded onset data, then applies the same hint preference.
+That recovery emits a second summary, not a second audio decode. A hint cannot
+turn beatless or unstable audio into a reliable grid.
 
 When analysis completes grid refinement, a `beat-analysis-region` line precedes
 the summary for each stable region, even if the final grid is rejected. These
@@ -750,11 +777,12 @@ Analysis is cached persistently as small per-file JSON records:
 | Linux default | `~/.cache/vcpi/analysis/` |
 | macOS default | `~/Library/Caches/vcpi/analysis/` |
 
-The same audio file shares its result across decks, playlists, session restores
-and daemon restarts. Identity includes the canonical path, file size, device and
-inode, high-resolution modification/change times, and analyzer/grid version.
-Changed files or analyzer versions invalidate the entry; moving a file to a new
-canonical path requires fresh analysis. No-grid results are cached too.
+The same audio file with the same BPM hint (or no hint) shares its result across
+decks, playlists, session restores and daemon restarts. Identity includes the
+canonical path, file size, device and inode, high-resolution modification/change
+times, analyzer/grid version and BPM hint. Different hints have separate cache
+records. Changed files or analyzer versions invalidate the entry; moving a file
+to a new canonical path requires fresh analysis. No-grid results are cached too.
 
 The cache is separate from sessions and music folders. Missing, malformed or
 stale records are recomputed; unavailable/unwritable storage does not prevent

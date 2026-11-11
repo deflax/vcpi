@@ -64,6 +64,15 @@ Deck::Catalog Deck::parseCatalog(const juce::var& parsed) {
         if (track.id.empty() || !ids.insert(track.id).second ||
             !juce::File::isAbsolutePath(juce::String(track.path)))
             throw std::invalid_argument("Invalid resolved deck track ID or absolute path");
+        if (entry.hasProperty("bpm_hint")) {
+            const auto& hint = entry["bpm_hint"];
+            if (!hint.isDouble() && !hint.isInt() && !hint.isInt64())
+                throw std::invalid_argument("Deck bpm_hint must be a finite number in [60, 200]");
+            const double bpm = static_cast<double>(hint);
+            if (!std::isfinite(bpm) || bpm < 60 || bpm > 200)
+                throw std::invalid_argument("Deck bpm_hint must be a finite number in [60, 200]");
+            track.bpmHint = bpm;
+        }
         if (track.title.empty()) track.title = track.id;
         const juce::Identifier key{juce::String(track.id)};
         if (saved.hasProperty(key)) {
@@ -149,10 +158,13 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
     for (std::size_t i = 0; i < tracks.size(); ++i) {
         if (remap[i] == 0) continue;
         auto& replacementTrack = replacement.tracks[static_cast<std::size_t>(remap[i] - 1)];
+        if (replacementTrack.bpmHint != tracks[i].bpmHint) continue;
         replacementTrack.grid = tracks[i].grid;
         replacementTrack.gridSource = tracks[i].gridSource;
     }
     int oldTrack, newTrack, prepared = -1;
+    bool refreshActive = false;
+    DeckSongState activeSong;
     std::uint64_t id;
     {
         ControlOwnership lock(ownership);
@@ -161,13 +173,20 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
             if (i != current) streams[i].state.store(retired, std::memory_order_release);
         oldTrack = appliedTrack.load(std::memory_order_relaxed);
         newTrack = remap[static_cast<std::size_t>(oldTrack - 1)];
+        refreshActive = newTrack != 0 &&
+            tracks[static_cast<std::size_t>(oldTrack - 1)].bpmHint !=
+                replacement.tracks[static_cast<std::size_t>(newTrack - 1)].bpmHint;
+        if (refreshActive)
+            activeSong = {cursor / streams[current].rate, cueSeconds.load(std::memory_order_relaxed),
+                          pitchTarget.load(std::memory_order_relaxed), phaseOffset.load(std::memory_order_relaxed),
+                          syncEnabled.load(std::memory_order_relaxed), playing.load(std::memory_order_relaxed)};
         id = latestRequest.load(std::memory_order_relaxed) + 1;
         requested = {id, oldTrack, 0, selection};
         requestedTrack.store(oldTrack, std::memory_order_relaxed);
         finishedRequest.store(id, std::memory_order_relaxed);
         latestRequest.store(id, std::memory_order_release);
         streams[current].request.id = id;
-        if (newTrack == 0) prepared = (current + 1) % static_cast<int>(streams.size());
+        if (newTrack == 0 || refreshActive) prepared = (current + 1) % static_cast<int>(streams.size());
     }
     { std::lock_guard<std::mutex> lock(errorMutex); lastError.clear(); }
     // No worker remains, and all pending streams are retired. Clearing this
@@ -175,15 +194,17 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
     stopping.store(false, std::memory_order_release);
     try {
         if (prepared >= 0) {
-            newTrack = replacement.bank == bank
-                ? std::min(oldTrack, static_cast<int>(replacement.tracks.size())) : replacement.initialTrack;
+            if (newTrack == 0)
+                newTrack = replacement.bank == bank
+                    ? std::min(oldTrack, static_cast<int>(replacement.tracks.size())) : replacement.initialTrack;
             streams[prepared].state.store(preparing, std::memory_order_release);
             auto& next = replacement.tracks[static_cast<std::size_t>(newTrack - 1)];
             // Cancelled pending selections cannot mutate inactive memory.
             const auto old = oldEntries.find(next.id);
-            const auto song = old == oldEntries.end()
+            const auto song = refreshActive ? activeSong : old == oldEntries.end()
                 ? next.memory->load() : tracks[old->second].memory->load();
-            const Request wanted{id, newTrack, song.position, selection, song};
+            // A hint change refreshes analysis, not the song's performance controls.
+            const Request wanted{id, newTrack, song.position, refreshActive ? seek : selection, song};
             if (!prepare(streams[prepared], wanted, next))
                 throw std::runtime_error("Deck playlist replacement was cancelled");
         }
@@ -279,13 +300,13 @@ bool Deck::fill(Stream& stream) {
     stream.written.store(next, std::memory_order_release);
     return true;
 }
-bool Deck::analyze(Stream& stream, BeatAnalysis& grid) {
+bool Deck::analyze(Stream& stream, BeatAnalysis& grid, std::optional<double> bpmHint) {
     // QM's dynamic programs do not accept callbacks. Keep them on a preparation
     // task while this thread continues feeding the active stream. Bounded tracker
     // windows check cancellation between expensive stages; no detached work can
     // retain a reader or Deck after a selection change or destruction.
     std::atomic<bool> cancel{false};
-    auto result = std::async(std::launch::async, [&] { return analyzeBeats(*stream.reader, cancel); });
+    auto result = std::async(std::launch::async, [&] { return analyzeBeats(*stream.reader, cancel, bpmHint); });
     while (result.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
         if (cancelled(stream.request.id)) cancel.store(true, std::memory_order_relaxed);
         for (auto& other : streams) {
@@ -319,7 +340,7 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
         throw std::invalid_argument("Deck audio must be a regular file");
     // Capture identity for every preparation, even seeks. In-memory reuse is
     // valid only for exactly the source revision that produced the cached grid.
-    auto source = std::make_shared<BeatAnalysisCache>(track.path);
+    auto source = std::make_shared<BeatAnalysisCache>(track.path, track.bpmHint);
     stream.reader.reset(formats.createReaderFor(file));
     if (!stream.reader) throw std::runtime_error("Unable to decode deck audio: " + file.getFullPathName().toStdString());
     if (stream.reader->numChannels < 1 || stream.reader->numChannels > 2)
@@ -337,7 +358,7 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
         auto grid = wanted.mode == reanalysis ? std::optional<BeatAnalysis>{} : source->load();
         if (!grid) {
             BeatAnalysis analyzed;
-            if (!analyze(stream, analyzed)) return false;
+            if (!analyze(stream, analyzed, track.bpmHint)) return false;
             source->store(analyzed);
             grid = analyzed;
         }

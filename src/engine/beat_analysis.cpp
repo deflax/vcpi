@@ -215,7 +215,8 @@ bool twoStepDoubleTime(const std::vector<double>& novelty, const std::vector<Reg
 }
 
 BeatAnalysis fitGrid(const std::vector<double>& novelty, const std::atomic<bool>& cancel,
-                     Diagnostics& diagnostic, const juce::AudioFormatReader& reader) {
+                     Diagnostics& diagnostic, const juce::AudioFormatReader& reader,
+                     std::optional<double> bpmHint, double trackerTempo) {
     std::vector<Region> regions;
     for (std::size_t start = 0; start < novelty.size(); start += trackerWindow - trackerOverlap) {
         if (cancel.load(std::memory_order_relaxed)) return {};
@@ -229,7 +230,7 @@ BeatAnalysis fitGrid(const std::vector<double>& novelty, const std::atomic<bool>
         for (auto& value : df) value /= peak;
         std::vector<double> periods(df.size(), 0), tempi, beats;
         TempoTrackV2 tracker(analysisRate, hop);
-        tracker.calculateBeatPeriod(df, periods, tempi);
+        tracker.calculateBeatPeriod(df, periods, tempi, trackerTempo, false);
         if (cancel.load(std::memory_order_relaxed)) return {};
         if (std::any_of(periods.begin(), periods.end(), [](double p) { return p < 1 || !std::isfinite(p); })) {
             ++diagnostic.invalidWindows;
@@ -346,15 +347,32 @@ BeatAnalysis fitGrid(const std::vector<double>& novelty, const std::atomic<bool>
     const double confidence = coverage * regularity;
     diagnostic.confidence = confidence;
     if (confidence < 0.65) { diagnostic.reason = "confidence-below-0.65"; return {}; }
-    diagnostic.twoStep = twoStepDoubleTime(novelty, regions, period, offset, cancel);
+    if (bpmHint) {
+        // Keep the acoustically fitted tempo, choosing only its octave. The
+        // prior guides QM too, but never substitutes the requested BPM for a fit.
+        double selected = period;
+        double distance = std::abs(std::log2((60 / period) / *bpmHint));
+        for (const double candidate : {period * 0.5, period * 2}) {
+            if (candidate < 60.0 / 200 || candidate > 60.0 / 60) continue;
+            const double nextDistance = std::abs(std::log2((60 / candidate) / *bpmHint));
+            if (nextDistance < distance) {
+                selected = candidate;
+                distance = nextDistance;
+            }
+        }
+        period = selected;
+    } else {
+        diagnostic.twoStep = twoStepDoubleTime(novelty, regions, period, offset, cancel);
+        if (diagnostic.twoStep) period *= 0.5;
+    }
     if (cancel.load(std::memory_order_relaxed)) return {};
-    if (diagnostic.twoStep) period *= 0.5;
     diagnostic.reason = "accepted";
     return {60 / period, std::fmod(std::fmod(offset, period) + period, period), confidence};
 }
 } // namespace
 
-BeatAnalysis analyzeBeats(juce::AudioFormatReader& reader, const std::atomic<bool>& cancel) {
+BeatAnalysis analyzeBeats(juce::AudioFormatReader& reader, const std::atomic<bool>& cancel,
+                          std::optional<double> bpmHint) {
     Diagnostics diagnostic;
     DFConfig config{hop, window, DF_COMPLEXSD, 3, false, -1, -1};
     DetectionFunction detector(config);
@@ -413,7 +431,15 @@ BeatAnalysis analyzeBeats(juce::AudioFormatReader& reader, const std::atomic<boo
         const int padding = window - buffered;
         for (int i = 0; i < padding; ++i) appendSample(0);
     }
-    const auto result = fitGrid(novelty, cancel, diagnostic, reader);
+    auto result = fitGrid(novelty, cancel, diagnostic, reader, bpmHint, bpmHint.value_or(120.0));
+    if (bpmHint && *bpmHint != 120 && result.bpm == 0 && !cancel.load(std::memory_order_relaxed)) {
+        // A fast prior can predict unsupported subdivisions of a sparse pulse.
+        // Recover the ordinary stable fit before applying the same explicit
+        // octave preference; reuse decoded novelty and keep cancellation bounded.
+        diagnostic.log(reader);
+        diagnostic = {};
+        result = fitGrid(novelty, cancel, diagnostic, reader, bpmHint, 120.0);
+    }
     diagnostic.log(reader);
     return result;
 }

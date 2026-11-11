@@ -4,8 +4,9 @@ Saved state includes:
   - Per-track: source kind (deck/vcv/pd), backend path, name, gain,
     enabled, muted, solo, insert effect paths/names, and opaque native VST3 state
   - Master effects: paths, names, and opaque native VST3 state
-  - Decks: inline playlist, stable active ID, position/play and durable per-song
-    cue, pitch, sync and phase correction; no transient nudge or VST chunk
+  - Decks: inline playlist with optional per-entry BPM hints, stable active ID,
+    position/play and durable per-song cue, pitch, sync and phase correction;
+    no transient nudge or VST chunk
   - Shared track focus (one-based)
   - Master gain
   - MIDI channel -> track routing
