@@ -95,6 +95,12 @@ def get(ctx, arg):
                 found = True
                 value = plugin.values.get(name, parameter.string_value or "???")
                 units = f" {parameter.units}" if parameter.units else ""
+                if name == "pitch" and idx is not None and fx_idx is None:
+                    track = ctx.host.engine.tracks[idx]
+                    if track.source_type == "deck":
+                        speed = track.deck.get("playback_speed")
+                        if speed is not None:
+                            units += f" (manual; effective {(speed - 1) * 100:+.2f}%)"
                 details = ""
                 if parameter.kind == "enum" and parameter.valid_values:
                     details = f"  (choices {', '.join(parameter.valid_values)})"

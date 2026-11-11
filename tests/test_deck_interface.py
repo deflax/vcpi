@@ -76,6 +76,24 @@ class DeckCLITests(unittest.TestCase):
         self.assertEqual(self.track.deck["phase_offset"], -0.125)
         self.engine.request.assert_not_called()
 
+    def test_get_pitch_distinguishes_manual_setting_from_synced_speed(self):
+        apply_deck_status(self.track, {"pitch": -1.25, "sync": True,
+                                      "sync_active": True, "playback_speed": 1.25})
+        for command in ("get 1 pitch", "get 1", "get 1 --all"):
+            with self.subTest(command=command):
+                self.output.seek(0)
+                self.output.truncate()
+                self.cli.onecmd(command)
+                lines = self.output.getvalue().splitlines()
+                pitch = next(line for line in lines if line.startswith("  pitch = "))
+                self.assertIn("-1.25 % (manual; effective +25.00%)", pitch)
+                rendered = io.StringIO()
+                display_response(Console(file=rendered, width=140, color_system=None),
+                                 command, lines)
+                self.assertIn("effective +25.00%", rendered.getvalue())
+        self.assertEqual(self.track.plugin.values["pitch"], -1.25)
+        self.engine.request.assert_not_called()
+
     def test_get_and_completion_never_request_live_state(self):
         self.cli.onecmd("get 1")
         self.assertIn("deck", complete_line(self.cli, "track 1 ")["matches"])

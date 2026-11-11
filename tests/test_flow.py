@@ -151,6 +151,19 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(midi["Deck note 64"], "nudge_up")
         self.assertIn("pitch", midi["Deck CC 20"])
 
+    def test_deck_pitch_uses_applied_speed_in_compact_and_detailed_views(self):
+        self.track.source_type = "deck"
+        for sync, speed, expected in ((True, 1.25, "+25.00%"), (False, 0.98, "-2.00%"),
+                                      (True, None, "not cached")):
+            self.track.deck = {"pitch": -1.25, "sync": sync, "sync_active": sync}
+            if speed is not None:
+                self.track.deck["playback_speed"] = speed
+            for details in (False, True):
+                with self.subTest(sync=sync, speed=speed, details=details):
+                    rows = {row[0]: row[1] for row in self.rows("track1", details=details)}
+                    self.assertEqual(rows["Deck pitch"], "-1.25 %")
+                    self.assertEqual(rows["Effective pitch"], expected)
+
     def test_deck_bpm_distinguishes_pending_and_unavailable_grid(self):
         self.track.source_type = "deck"
         for state, bpm, expected in (("loading", 0, "analyzing"), ("ready", 0, "unavailable"),

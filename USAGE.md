@@ -604,12 +604,14 @@ ranges. Return nudge to zero after nudging. Remaining controls are `play`, `pitc
 while audio is actually advancing; while unsynced it retains temporary ±2% speed.
 
 `get <track>` lists the deck's exposed controls, just like other sources;
-`get <track> <parameter>` reads one value. `get 1 seek` reads position and
-`set 1 seek <seconds>` moves it while preserving play/pause.
+`get <track> <parameter>` reads one value. The `pitch` row keeps the manual
+setting and adds effective pitch as a percentage derived from cached playback
+speed, including sync and nudge; the listed range applies to the manual control.
+`get 1 seek` reads position and `set 1 seek <seconds>` moves it while preserving play/pause.
 `track 1 deck seek <seconds>` is equivalent. MIDI seek mappings are unchanged.
 Use `show <track>` for compact operational
-info: title, transport, detected BPM, requested versus active
-sync and any load, analysis or sync errors. Detected BPM is the song's analyzed
+info: title, transport, detected BPM, manual and effective pitch, requested versus
+active sync and any load, analysis or sync errors. Detected BPM is the song's analyzed
 tempo, distinct from the shared/global tempo; pending or missing analysis displays
 analyzing/unavailable rather than 0. Add `--details` for full transport and grid
 diagnostics (including confidence and offsets), requested versus applied selection,

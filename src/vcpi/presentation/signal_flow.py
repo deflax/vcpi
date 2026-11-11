@@ -327,6 +327,11 @@ def _build_flow_snapshot(host, engine, details):
                 track_row("Detected BPM", detected, "source grid, not global tempo")
                 track_row("Deck sync", f"requested {_value(deck.get('sync', 'not cached'))}; "
                           f"active {_value(deck.get('sync_active', 'not cached'))}")
+                track_row("Deck pitch", f"{_value(deck.get('pitch', 'not cached'))} %",
+                          "manual setting; ignored while sync is active")
+                speed = deck.get("playback_speed")
+                track_row("Effective pitch", f"{(speed - 1) * 100:+.2f}%" if speed is not None else "not cached",
+                          "applied playback speed, including sync / nudge")
                 for field in ("error", "sync_error"):
                     if deck.get(field):
                         track_row(f"Deck {field}", deck[field], state="error" if field == "error" else "warning")
@@ -343,7 +348,7 @@ def _build_flow_snapshot(host, engine, details):
                         track_row(field, path)
                 if track.source_type == "deck":
                     for field in ("bank_id", "track_id", "track_title", "requested_track_id", "request_id",
-                                  "cue", "pitch", "nudge", "phase_offset", "beat_offset",
+                                  "cue", "nudge", "phase_offset", "beat_offset",
                                   "beat_confidence", "playback_speed", "beat_phase_error"):
                         track_row(f"Deck {field}", _value(track.deck.get(field, "not cached")))
                     for ordinal, entry in enumerate(track.deck.get("tracks", []), 1):
