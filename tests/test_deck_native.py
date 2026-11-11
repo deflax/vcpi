@@ -422,6 +422,34 @@ class NativeDeckTests(unittest.TestCase):
                 self.assertGreater(transport.stats()["progress"], 0)
                 self.assertAlmostEqual(plugin.deck_status()["position"], 21 * 512 / 48000, places=7)
 
+    def test_fractional_seek_matches_continuous_stereo_after_ring_wrap(self):
+        rate, frames, pitch = 96000, 512, 11.25
+        path = self.root / "independent-stereo.wav"
+        audio = np.random.default_rng(7481).uniform(-0.5, 0.5, (rate * 4, 2))
+        with wave.open(str(path), "wb") as output:
+            output.setnchannels(2)
+            output.setsampwidth(2)
+            output.setframerate(rate)
+            output.writeframes((audio * 32767).astype("<i2").tobytes())
+        plugin, runner, _ = self.deck([path], frames=frames, pitch=pitch, sync=False, play=True)
+        # Run beyond the source read-ahead ring's wrap, yielding to its actual
+        # decoder. The channels deliberately contain unrelated broadband audio.
+        for block in range(241):
+            runner.render_once()
+            self.assertFalse(plugin.deck_status()["buffering"])
+            if block % 8 == 0:
+                time.sleep(0.001)
+        position = plugin.deck_status()["position"]
+        self.assertAlmostEqual(position, 241 * frames / 48000 * (1 + pitch / 100), places=8)
+        reference = runner.render_once()
+        restored, restored_runner, _ = self.deck(
+            [path], frames=frames, pitch=pitch, sync=False, play=True, position=position)
+        resumed = restored_runner.render_once()
+        # Ignore only the new deck's documented 5 ms start ramp. Seek priming,
+        # fractional phase and both channel histories must match uninterrupted DSP.
+        np.testing.assert_allclose(resumed[240:], reference[240:], rtol=0, atol=1e-5)
+        self.assertAlmostEqual(restored.deck_status()["position"], plugin.deck_status()["position"], places=8)
+
     def test_pcm24_and_float_wav_decoding(self):
         rate = 48000
         samples = np.sin(np.arange(rate // 2) * (2 * math.pi * 1000 / rate)) * 0.25

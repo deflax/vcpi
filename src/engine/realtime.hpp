@@ -34,7 +34,7 @@ struct RealtimeStats {
 // Shared by the renderer and control readers (including other processes).
 // Only startup performs a scheduling operation; stats queries stay off render threads.
 struct RealtimeRecord {
-    enum class Phase : std::uint32_t { Inactive, Pending, Attempted, Exited };
+    enum class Phase : std::uint32_t { Inactive, Pending, Attempted, Exited, Disabled };
     static_assert(std::atomic<Phase>::is_always_lock_free, "Realtime phase must be lock free");
     static_assert(std::atomic<std::int32_t>::is_always_lock_free, "Realtime diagnostics must be lock free");
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free, "Thread IDs must be lock free");
@@ -94,6 +94,15 @@ struct RealtimeRecord {
         (void) periodSeconds;
 #endif
     }
+#if defined(__APPLE__)
+    void leaveUnchanged() noexcept {
+        std::uint64_t tid = 0;
+        (void) pthread_threadid_np(nullptr, &tid);
+        threadId.store(tid, std::memory_order_relaxed);
+        promotionError.store(0, std::memory_order_relaxed);
+        phase.store(Phase::Disabled, std::memory_order_release);
+    }
+#endif
     void exited() noexcept { phase.store(Phase::Exited, std::memory_order_release); }
 
     RealtimeStats stats(int requestedPriority) const noexcept {
@@ -130,6 +139,14 @@ struct RealtimeRecord {
             // CoreAudio owns its callback's scheduling. Do not overwrite it.
             result.policy = result.requestedPolicy = "CoreAudio";
             result.state = current == Phase::Inactive ? "inactive" : "backend-managed";
+            return result;
+        }
+        if (current == Phase::Disabled) {
+            result.state = "disabled";
+            result.policy = "unchanged";
+            result.requestedPolicy = "none";
+            result.errorDomain = "none";
+            result.threadId = threadId.load(std::memory_order_relaxed);
             return result;
         }
         result.policy = result.requestedPolicy = "THREAD_TIME_CONSTRAINT";

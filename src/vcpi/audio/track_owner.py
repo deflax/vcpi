@@ -224,13 +224,17 @@ def _run_track_owner(sample_rate, frames, index, operation, arguments,
             track = owner.engine.tracks[index]
             if track.source_type == "deck" and now - last_status >= 0.1:
                 last_status = now
-                current = dict(track.plugin.native.deck_status())
-                current["status_time"] = now
-                metadata_key = (current.get("track_id"), current.get("duration"),
-                                tuple(entry["id"] for entry in track.deck["tracks"]))
-                if metadata_key != deck_metadata_key:
-                    deck_parameters = capture_plugin(track.plugin, {}, {}).parameters
-                    deck_metadata_key = metadata_key
+                try:
+                    current = dict(track.plugin.native.deck_status())
+                    current["status_time"] = now
+                    metadata_key = (current.get("track_id"), current.get("duration"),
+                                    tuple(entry["id"] for entry in track.deck["tracks"]))
+                    if metadata_key != deck_metadata_key:
+                        deck_parameters = capture_plugin(track.plugin, {}, {}).parameters
+                        deck_metadata_key = metadata_key
+                finally:
+                    # A request may have arrived while metadata owned the plugin.
+                    owner.engine.runner.wake()
                 current["parameters"] = deck_parameters
                 track.deck.update((key, value) for key, value in current.items()
                                   if key != "parameters")
@@ -256,7 +260,13 @@ def _run_track_owner(sample_rate, frames, index, operation, arguments,
                 owner.engine.runner.barrier()
                 if operation == "shutdown":
                     stopping.set()
-                reply = _execute(owner, index, operation, request["arguments"])
+                runner = owner.engine.runner
+                try:
+                    reply = _execute(owner, index, operation, request["arguments"])
+                finally:
+                    # Resume a request deferred by native plugin/control ownership,
+                    # even when a setter or state capture raises.
+                    runner.wake()
                 data = (encode_native_message(reply, STATE_LIMIT)
                         if operation == "sync_state" else _encode(reply, STATE_LIMIT))
             except Exception as error:

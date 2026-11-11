@@ -30,6 +30,8 @@ def format_realtime(info: dict) -> str:
     state = info["state"]
     if state == "unsupported":
         return "unsupported"
+    if state == "disabled":
+        return f"disabled: promotion not requested; OS policy unchanged, TID {info['thread_id']}"
     policy = info.get("policy", "unknown")
     requested_policy = info.get("requested_policy") or (
         policy if policy in {"THREAD_TIME_CONSTRAINT", "CoreAudio"} else "SCHED_FIFO"

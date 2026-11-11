@@ -16,6 +16,7 @@ public:
     ~TrackRunner();
     void setEffects(const std::vector<std::shared_ptr<Plugin>>& effects);
     void barrier();
+    void wake() noexcept { transport->notify(); }
     void shutdown();
     std::vector<float> renderOnce();
 private:
@@ -27,6 +28,9 @@ private:
     std::vector<std::shared_ptr<Plugin>> effects;
     double sampleRate;
     int frames;
+#if defined(__APPLE__)
+    bool macosTrackRealtime = true;
+#endif
     Ownership gate;
     std::mutex controls;
     std::atomic<bool> stopping{false};

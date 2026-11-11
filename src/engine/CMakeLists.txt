@@ -117,8 +117,8 @@ else()
     pkg_check_modules(JUCE_SYSTEM REQUIRED IMPORTED_TARGET freetype2 fontconfig x11 xext)
     target_link_libraries(vcpi_juce PUBLIC PkgConfig::JUCE_SYSTEM)
 endif()
-pybind11_add_module(_vcpi_native NO_EXTRAS bindings.cpp plugin.cpp pd_state.cpp deck.cpp
-    beat_analysis.cpp analysis_cache.cpp transport.cpp runtime.cpp track_runner.cpp)
+pybind11_add_module(_vcpi_native NO_EXTRAS bindings.cpp plugin.cpp pd_state.cpp deck.cpp stereo_sinc.cpp
+    beat_analysis.cpp analysis_cache.cpp transport.cpp wakeup.cpp runtime.cpp track_runner.cpp)
 target_link_libraries(_vcpi_native PRIVATE vcpi_juce vcpi_qm_dsp portaudio_static)
 target_include_directories(_vcpi_native PRIVATE "${portaudio_SOURCE_DIR}/include")
 set_target_properties(_vcpi_native PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../vcpi")

@@ -558,7 +558,16 @@ Supported audio is mono (duplicated to stereo) or stereo AIFF (`.aif`, `.aiff`,
 MP3 and FLAC, at source rates from 8 kHz to 768 kHz. Other formats and multichannel
 layouts are rejected. Decoding uses native JUCE readers; FFmpeg is not a runtime
 dependency. Audio is streamed through bounded read-ahead storage and retained
-sinc interpolation, not loaded in full for playback. Decks do not apply an
+sinc interpolation, not loaded in full for playback.
+
+The stereo renderer shares coefficients derived from JUCE's existing 200-sample
+sinc kernel, prepared once per process off the render thread. Contiguous retained
+histories allow SIMD-friendly convolution without reducing the filter length or
+changing sample-by-sample pitch, nudge and sync updates. Floating-point summation
+differs slightly from the former independent-channel renderer; output is not
+bit-identical. Playback performs no coefficient-table allocation or initialization.
+
+Decks do not apply an
 additional fixed low-pass prefilter: playback prioritizes preserving source
 bandwidth rather than cutting treble for the maximum possible speed. Speeding
 up audio or converting to a lower output sample rate can therefore introduce
@@ -989,6 +998,202 @@ For persistent underruns, restart the daemon with `./vcpid --buffer-size 1024` (
 `2048`), reconnect, and issue `audio start`. Larger buffers provide more
 scheduling headroom at the cost of note-to-sound latency.
 
+#### Audio benchmarking
+
+Start the daemon, load your usual session, start audio, and run the benchmark
+from a second terminal using the Python environment where vcpi is installed:
+
+```bash
+python -m vcpi.benchmark --output baseline.json
+```
+
+The defaults allow 30 seconds of warmup, then measure for 300 seconds with
+one-second CPU sampling intervals. For a shorter run or a non-default socket:
+
+```bash
+python -m vcpi.benchmark --socket /tmp/my-vcpi.sock \
+  --warmup 5 --duration 60 --interval 1 --output baseline.json
+```
+
+The benchmark observes an already-running workload; it does not load patches,
+generate notes, or change polling/scheduling. Keep the audio device, sample rate,
+buffer size, track/effect setup, musical pattern, logging level, and background
+load the same between runs. Measure on the target hardware. Repeat each version
+several times before drawing conclusions.
+
+The console summary and optional JSON report include:
+
+- **CPU:** daemon and descendant process CPU, counted once per process;
+  100% means one fully occupied core. The separate benchmark client is excluded.
+  The summary also lists whole-window contributions for the daemon, audio-output
+  process, each track worker, and other observed descendants. JSON process rows
+  retain PID and OS creation time, so reused PIDs are not merged. Each contribution
+  uses the full measurement-window duration, not an average of interval percentages.
+  Process churn or inaccessible CPU readings make the CPU measurement incomplete;
+  partial process totals are marked incomplete and retain observed contributions.
+- **Audio counters:** increases during the measurement window, not lifetime
+  totals, including callbacks, underruns, render errors, deadline misses, and
+  per-track missing blocks. A missing block silences that track even when output
+  underruns remain zero.
+- **Request-to-render delay:** time from publishing a track's audio request to
+  starting its DSP. This includes notification/scheduling delay, ownership contention,
+  and MIDI collection; it is not a pure OS wakeup-latency measurement.
+- **Render elapsed:** wall-clock duration of processing the track instrument and
+  inserts, including time the renderer is descheduled or blocked during DSP,
+  excluding publication of its completed audio block.
+- **Render CPU:** user plus system CPU time consumed by that same renderer
+  thread around DSP, measured with `CLOCK_THREAD_CPUTIME_ID`. It excludes time
+  asleep/descheduled, other threads' work, deck read-ahead, and notification or
+  bookkeeping outside DSP. This is distinct from whole-process CPU percentages.
+- **Elapsed-minus-CPU:** mean elapsed duration minus mean renderer CPU duration.
+  A large gap suggests non-running time inside the measured interval, which can
+  include plugin blocking as well as scheduling delays. It is not a direct
+  measurement of scheduler latency, core placement, or CPU frequency.
+
+Timing is disabled normally and enabled only for the benchmark connection.
+Stopping the benchmark or disconnecting releases it; concurrent benchmarks are
+not allowed. Timing uses fixed-size native histograms, monotonic wall timestamps,
+and thread CPU timestamps without audio-thread logging or allocation. CPU timing
+adds two thread-clock reads per measured render; the elapsed interval includes
+those reads. Instrumentation itself adds overhead, so compare runs with the same
+measurement settings. CPU-clock failures invalidate the measurement rather than
+being reported as zero CPU; rendering continues normally.
+
+Timing means are calculated from duration sums; p50/p95/p99 are approximate
+**upper bounds** from power-of-two nanosecond histogram buckets, not exact
+percentiles. Only requests actually rendered produce timing samples: skipped
+requests are not represented by a latency sample. Read missing-block counters
+alongside timing, never in isolation.
+
+The independent wall/CPU clocks have platform-dependent resolution, so a small
+negative elapsed-minus-CPU value can reflect clock quantization and is not clamped.
+Both duration distributions are reported separately; subtracting their percentile
+bounds does not produce a percentile of non-running time.
+
+JSON reports use schema version `3`: whole-window process CPU rows are in
+`aggregate.cpu.processes`, and each track's native `wakeup_mode` appears in
+baseline/end snapshots and interval/aggregate audio rows. Renderer CPU
+sums/histograms and the signed `render_wall_minus_cpu_mean_ns` diagnostic remain.
+Restart the daemon through `./vcpid` after updating to rebuild the native engine;
+the benchmark rejects a daemon without CPU timing or explicit wakeup-mode support.
+
+Runs with stopped/replaced audio, changed track identities/configuration, worker
+failures, or unusable timing snapshots are rejected rather than presented as
+comparable results. Avoid editing the session during a run. The client keeps its
+waits outside the daemon, so other CLI commands and playback can continue.
+
+`VALID` means the measurement is usable, not that playback was dropout-free;
+nonzero missing blocks or underruns remain reliability problems to investigate.
+
+Prefer lower CPU or shorter timing tails only if audio reliability does not
+regress. Synthetic/null outputs can exercise reporting but do not establish
+real-device latency, dropout performance, or suitability for live playback.
+
+##### Comparing polling and notifications
+
+`VCPI_TRACK_WAKEUP=poll` is the default on Linux and macOS. Track workers check
+for work and sleep for 100 microseconds when idle. `VCPI_TRACK_WAKEUP=notify`
+instead blocks on shared futexes (Linux) or Mach semaphores (macOS). Polling
+transports do not create or signal native wakeup objects, including the macOS
+semaphore broker. Only `notify` and `poll` are accepted.
+
+An exported `VCPI_TRACK_WAKEUP=notify` still overrides the default. Use
+`unset VCPI_TRACK_WAKEUP` before a normal launch to clear an earlier override.
+
+This switch changes only worker wakeups: both modes use the same optimized sinc
+renderer, realtime scheduling requests, MIDI handling, and one-block buffering.
+Polling reproduces the idle-wait approach on the current engine, not the entire
+historical implementation. It is a diagnostic comparison, not an assumed CPU
+or latency improvement.
+
+Use `shutdown` in the vcpi CLI before changing modes, then start the first run:
+
+```bash
+VCPI_TRACK_WAKEUP=notify VCPI_MACOS_TRACK_REALTIME=1 ./vcpid
+```
+
+Play the usual session and run in another terminal:
+
+```bash
+.venv/bin/python -m vcpi.benchmark --duration 60 --output wakeup-notify.json
+```
+
+Use `shutdown` again, restart with polling, and replay the same workload:
+
+```bash
+VCPI_TRACK_WAKEUP=poll VCPI_MACOS_TRACK_REALTIME=1 ./vcpid
+```
+
+In the other terminal:
+
+```bash
+.venv/bin/python -m vcpi.benchmark --duration 60 --output wakeup-poll.json
+```
+
+Both measurements keep the default 30-second warmup. Keep power source, Low
+Power Mode, device, sample rate, buffer size, musical pattern, effects, logging,
+and background load fixed. Then repeat the notification run to check for
+order-dependent drift; repeat both modes before concluding that a difference
+is reproducible. The realtime setting is ignored on Linux, where FIFO requests
+are unchanged.
+
+Every track summary must show the intended `wakeup mode` and matching scheduling
+requests. Compare total and per-process CPU, render CPU, request-to-render tails,
+and missing blocks/underruns together. Wakeup modes are chosen when the output
+owner creates each transport; joining renderers obey its shared mode, not their
+own environment. Restart the whole daemon between runs. The switch is not saved
+in sessions, and changing a track's reported mode during measurement invalidates
+the run. To return to normal operation, restart without `VCPI_TRACK_WAKEUP` or
+set it explicitly to `poll`.
+
+##### Comparing macOS renderer scheduling
+
+`VCPI_MACOS_TRACK_REALTIME` is a macOS-only startup setting: `1` (the default)
+requests the existing time-constraint policy; `0` skips that request and leaves
+each new renderer thread's OS scheduling unchanged. It does not change Mach
+semaphore wakeups, DSP, CoreAudio scheduling, Linux FIFO requests, or session
+files. Only `0` and `1` are accepted on macOS.
+
+Shut down the current daemon with `shutdown`, then start the enabled run:
+
+```bash
+VCPI_MACOS_TRACK_REALTIME=1 ./vcpid
+```
+
+Load/play your usual session and, in another terminal, measure it:
+
+```bash
+.venv/bin/python -m vcpi.benchmark --duration 60 --output realtime-on.json
+```
+
+Use `shutdown` again (not `quit`), restart with promotion disabled, and replay the
+same session/pattern at the same buffer size and sample rate:
+
+```bash
+VCPI_MACOS_TRACK_REALTIME=0 ./vcpid
+```
+
+In the other terminal:
+
+```bash
+.venv/bin/python -m vcpi.benchmark --duration 60 --output realtime-off.json
+```
+
+Both runs retain the default 30-second warmup. Keep power source, Low Power Mode,
+background load, effects, and musical workload fixed. The setting is read when a
+renderer is constructed; it does not change existing workers and is not saved in
+the session. Restart the whole daemon between modes so all spawned workers
+inherit the intended environment.
+
+Each benchmark track now prints its scheduling state and includes its native
+`realtime` diagnostics in the aggregate and interval JSON rows. Check for
+`configured` in the enabled run and `disabled` in the disabled run. If enabled
+reports `denied`, that run did not obtain the requested policy. `configured`
+still reports only startup acceptance, not a continuously verified live policy.
+Changing the requested policy during a measurement invalidates that run.
+Compare CPU and render timing together with missing blocks/underruns; neither
+mode is assumed faster or more reliable.
+
 #### Selective realtime scheduling
 
 On Linux, native rendering attempts `SCHED_FIFO` priority **20** for the output
@@ -1005,6 +1210,11 @@ with a nominal computation budget of half that period and preemption enabled.
 The output callback remains **CoreAudio-managed**;
 vcpi does not change its scheduling policy. Python and process-control threads
 are not promoted.
+
+For a controlled macOS comparison, set `VCPI_MACOS_TRACK_REALTIME=0` before
+starting the daemon to skip track promotion. Diagnostics report `disabled`,
+`policy=unchanged`, and `requested_policy=none`, not FIFO or a claimed live policy.
+Omitting the setting or setting it to `1` preserves the usual startup request.
 
 There is no whole-daemon realtime-priority flag. Other platforms report
 `unsupported` and change no scheduling policy. Build the extension on each
@@ -1026,6 +1236,7 @@ the thread, so this state does not establish continued realtime scheduling.
 | `pending` | Scheduling setup has not completed; on Linux output, the first callback has not attempted promotion yet. |
 | `active` | Linux: the live thread has `SCHED_FIFO` at exactly the requested priority. |
 | `configured` | macOS track: Mach accepted the time-constraint request at startup; continued live policy is not monitored. |
+| `disabled` | macOS track: promotion was explicitly skipped; vcpi leaves OS scheduling unchanged. |
 | `backend-managed` | macOS output: the stream is started and scheduling is managed by CoreAudio, not changed or verified by vcpi. |
 | `denied` | The initial scheduling request failed. Linux reports actual policy/priority and errno; macOS reports the Mach error code and message. Rendering continues. |
 | `degraded` | Linux: promotion succeeded initially, but the live policy/priority no longer matches the request. |
@@ -1051,6 +1262,9 @@ priorities), `error_domain=mach`, a Mach `kern_return_t` error and its
 output uses `policy=requested_policy=CoreAudio`, priority fields of 0, error 0
 and TID 0: those values do not describe its actual callback scheduling policy.
 Before track startup, TID is 0.
+When macOS track promotion is disabled, policy is `unchanged`, requested policy
+and error domain are `none`, priority/error fields are 0, and the renderer's
+native TID is still reported.
 The control facade carries output health as `RemoteAudioEngine.output_realtime`
 and track health as `InstrumentTrack.worker_realtime` in initial state and through
 its existing periodic update channel.
@@ -1063,17 +1277,47 @@ does not inherit the service's allowance, so manual startup may report `denied`;
 inspect the shell's limit with `ulimit -r`. Do not run the whole daemon under
 `chrt` or as root to bypass this distinction.
 
-This scheduling change does **not** change buffers, the one-block track handoff
-latency, or the existing track polling/wakeup mechanism. It does not guarantee
-dropout-free audio or that overloaded plugins, device backends, or the OS meet
+Realtime promotion does **not** change buffers or the one-block track handoff
+latency. Track-worker wakeups use the event-driven mechanism below independently
+of scheduling policy. Neither change guarantees dropout-free audio or that
+overloaded plugins, device backends, or the OS meet
 deadlines. Under desktop CPU contention, a track renderer can miss its handoff
 even when the output callback runs on time: the callback mixes silence for that
 track and increments its missing-block counter. Callback underruns instead
 reflect the output backend running short of audio; zero underruns do not mean
 that every track block arrived. Measure callback timing, underruns, and missing
-track blocks separately before tuning; global realtime promotion, wakeup
-replacement, memory locking, affinity, governor changes, and kernel tuning are
-outside this feature.
+track blocks separately before tuning. Global realtime promotion, memory locking,
+affinity, governor changes, and kernel tuning are not enabled by these features.
+
+#### Event-driven track wakeups
+
+Native track workers wait for notifications rather than checking for requests
+every 100 microseconds. Linux uses a process-shared futex; macOS uses a Mach
+semaphore with its send right transferred separately into each spawned process.
+Notification setup happens before rendering, not in the audio callback.
+
+The callback publishes a request and signals the worker without waiting for it
+to finish. Notifications coalesce: a busy worker renders the latest available
+request rather than accumulating an unbounded queue of wakeups. A notification
+published before the worker begins waiting remains pending. Barriers, native
+track-control completion, and shutdown also wake the worker, including when
+audio output is stopped. Control-thread waits and deck read-ahead are separate
+from this worker-request mechanism.
+
+On macOS, each transport's creator has a control-only Mach rendezvous thread;
+spawned workers import their own semaphore send rights through a UUID-named
+bootstrap endpoint. The processes must share an accessible bootstrap namespace
+with permission to register/resolve that endpoint. Setup errors are reported;
+there is no polling fallback. Rendezvous ports and semaphore rights are released
+when their transports are retired. Cleanup decrements the owned receive/send
+references explicitly rather than using deprecated blanket port destruction.
+
+Restart the daemon through `./vcpid` after updating so the native engine rebuilds
+and all audio processes use the new transport layout. Existing session files and
+one-block audio latency are unchanged. Use the same session and
+`python -m vcpi.benchmark --output event-driven.json` to compare against a saved
+polling baseline; changing the wakeup mechanism alone establishes no performance
+or reliability improvement.
 
 ### MIDI Commands
 

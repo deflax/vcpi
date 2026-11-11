@@ -331,7 +331,9 @@ class NativeAudioTests(unittest.TestCase):
     def test_realtime_targets_track_thread_and_leaves_offline_control_unchanged(self):
         control_policy = os.sched_getscheduler(0)
         control_priority = os.sched_getparam(0).sched_priority
-        track = self.track(0)
+        # The macOS experiment must not disable Linux FIFO requests.
+        with patch.dict(os.environ, {"VCPI_MACOS_TRACK_REALTIME": "0"}):
+            track = self.track(0)
         self.block()
         np.testing.assert_allclose(self.block(), self.level, atol=1e-6)
         self.assertEqual(os.sched_getscheduler(0), control_policy)
@@ -393,38 +395,45 @@ class NativeAudioTests(unittest.TestCase):
             return tuple(values), default.value
 
         before = policy(caller)
-        track = self.track(0)
-        self.block()
-        np.testing.assert_allclose(self.block(), 0.25, atol=1e-6)
-        realtime = track.render_owner.transport.stats()["realtime"]
-        self.assertEqual(realtime["state"], "configured", realtime)
-        self.assertEqual(policy(caller), before)
+        for index, enabled in enumerate((False, True)):
+            with self.subTest(promotion_enabled=enabled):
+                with patch.dict(os.environ, {"VCPI_MACOS_TRACK_REALTIME": str(int(enabled))}):
+                    track = self.track(index)
+                self.block()
+                np.testing.assert_allclose(self.block(), self.level * (index + 1), atol=1e-6)
+                realtime = track.render_owner.transport.stats()["realtime"]
+                self.assertEqual(realtime["state"], "configured" if enabled else "disabled", realtime)
+                self.assertEqual(policy(caller), before)
 
-        ports, count = ct.POINTER(uint)(), uint()
-        self.assertEqual(system.task_threads(task, ct.byref(ports), ct.byref(count)), 0)
-        try:
-            worker_policy = None
-            for port in ports[:count.value]:
-                identity, size = (ct.c_uint64 * 3)(), uint(6)
-                if system.thread_info(port, 4, identity, ct.byref(size)) == 0:
-                    if identity[0] == realtime["thread_id"]:
-                        worker_policy = policy(port)
-                        break
-            self.assertIsNotNone(worker_policy, "Reported track thread must exist")
-            values, default = worker_policy
-            self.assertEqual(default, 0, "Track must have an actual time constraint")
-            timebase = (uint * 2)()
-            system.mach_timebase_info.argtypes = [ct.c_void_p]
-            self.assertEqual(system.mach_timebase_info(timebase), 0)
-            expected = int(64 / 44100 * 1e9 * timebase[1] / timebase[0])
-            self.assertAlmostEqual(values[0], expected, delta=1)
-            self.assertAlmostEqual(values[1], expected / 2, delta=1)
-            self.assertEqual(values[2], values[0])
-        finally:
-            for port in ports[:count.value]:
-                system.mach_port_deallocate(task, port)
-            system.vm_deallocate(task, ct.cast(ports, ct.c_void_p).value,
-                                 count.value * ct.sizeof(uint))
+                ports, count = ct.POINTER(uint)(), uint()
+                self.assertEqual(system.task_threads(task, ct.byref(ports), ct.byref(count)), 0)
+                try:
+                    worker_policy = None
+                    for port in ports[:count.value]:
+                        identity, size = (ct.c_uint64 * 3)(), uint(6)
+                        if system.thread_info(port, 4, identity, ct.byref(size)) == 0:
+                            if identity[0] == realtime["thread_id"]:
+                                worker_policy = policy(port)
+                                break
+                    self.assertIsNotNone(worker_policy, "Reported track thread must exist")
+                    values, default = worker_policy
+                    self.assertEqual(default, 0 if enabled else 1)
+                    if enabled:
+                        timebase = (uint * 2)()
+                        system.mach_timebase_info.argtypes = [ct.c_void_p]
+                        self.assertEqual(system.mach_timebase_info(timebase), 0)
+                        expected = int(64 / 44100 * 1e9 * timebase[1] / timebase[0])
+                        self.assertAlmostEqual(values[0], expected, delta=1)
+                        self.assertAlmostEqual(values[1], expected / 2, delta=1)
+                        self.assertEqual(values[2], values[0])
+                    else:
+                        self.assertEqual(realtime["requested_policy"], "none")
+                        self.assertEqual(realtime["policy"], "unchanged")
+                finally:
+                    for port in ports[:count.value]:
+                        system.mach_port_deallocate(task, port)
+                    system.vm_deallocate(task, ct.cast(ports, ct.c_void_p).value,
+                                         count.value * ct.sizeof(uint))
 
 
 if __name__ == "__main__":

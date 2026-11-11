@@ -10,6 +10,7 @@ import time
 import unittest
 import wave
 from pathlib import Path
+from functools import partial, wraps
 from multiprocessing.connection import wait as wait_connections
 from multiprocessing.reduction import DupFd
 from unittest.mock import patch
@@ -22,8 +23,24 @@ from vcpi.audio_deps import require_native
 from vcpi.audio.control import AudioEngine
 from vcpi.audio.track_client import TrackWorker
 from vcpi.audio.track_protocol import MIDI_CAPACITY, TrackProcessError
-from vcpi.audio.track_owner import _watch_parent
+from vcpi.audio.track_owner import _track_owner, _watch_parent
 from vcpi.deck_bank import make_catalog
+
+
+def _both_wakeup_modes(test):
+    @wraps(test)
+    def run(self):
+        for mode in ("notify", "poll"):
+            with self.subTest(wakeup_mode=mode), patch.dict(
+                    os.environ, {"VCPI_TRACK_WAKEUP": mode}):
+                test(self)
+    return run
+
+
+def _track_owner_with_wakeup_env(mode, *args):
+    # A real spawned owner must ignore even an invalid joining environment.
+    os.environ["VCPI_TRACK_WAKEUP"] = mode
+    _track_owner(*args)
 
 
 def _own_track_for_orphan_test(connection, catalog):
@@ -78,6 +95,7 @@ class NativeTransportTests(unittest.TestCase):
             self.transport.send_midi(bytes((0x80, 60, 0)))
         self.assertEqual(self.peer.stats()["midi_pending"], MIDI_CAPACITY)
 
+
     def test_unconsumed_native_requests_are_silent_not_stale(self):
         engine = AudioEngine(buffer_size=64)
         self.addCleanup(engine.shutdown)
@@ -92,6 +110,87 @@ class NativeTransportTests(unittest.TestCase):
         with self.assertRaises((ValueError, BufferError, RuntimeError)):
             self.transport.send_midi(bytes((0xf0,)) + bytes(1023) + bytes((0xf7,)))
         self.assertEqual(self.peer.stats()["midi_pending"], 0)
+
+    def test_invalid_creation_mode_does_not_create_or_modify_transport(self):
+        backend = require_native()
+        existing = Path(self.path).read_bytes()
+        missing = Path(self.path + ".invalid")
+        for value in ("", "Notify", "POLL", "poll ", " notify", "1"):
+            with self.subTest(value=value), patch.dict(
+                    os.environ, {"VCPI_TRACK_WAKEUP": value}):
+                with self.assertRaisesRegex(ValueError, "VCPI_TRACK_WAKEUP"):
+                    backend.Transport(str(missing), 64, True)
+                self.assertFalse(missing.exists())
+                with self.assertRaisesRegex(ValueError, "VCPI_TRACK_WAKEUP"):
+                    backend.Transport(self.path, 128, True)
+                self.assertEqual(Path(self.path).read_bytes(), existing)
+                # Invalid environment is a creator error, never a joiner error.
+                peer = backend.Transport(self.path, 64, False)
+                self.assertEqual(peer.stats()["wakeup_mode"],
+                                 self.transport.stats()["wakeup_mode"])
+        self.transport.send_midi(bytes((0x90, 60, 127)))
+        self.assertEqual(self.peer.stats()["midi_pending"], 1)
+
+    @_both_wakeup_modes
+    def test_requests_survive_prepublication_and_coalescing(self):
+        backend = require_native()
+        path = self.path + "." + os.environ["VCPI_TRACK_WAKEUP"]
+        transport = backend.Transport(path, 64, True)
+        peer = backend.Transport(path, 64, False)
+        sample_path = Path(self.path).with_suffix(".wav")
+        with wave.open(str(sample_path), "wb") as sample:
+            sample.setparams((1, 2, 44100, 0, "NONE", "not compressed"))
+            sample.writeframes(struct.pack("<h", 4096) * 44100)
+        catalog = make_catalog("wakeup-test", [
+            {"id": "tone", "path": str(sample_path), "title": "Tone"},
+        ], play=True, sync=False)
+        plugin = backend.Plugin(catalog, 44100, 64, "deck")
+        engine = backend.Engine(44100, 64)
+        self.addCleanup(engine.shutdown)
+        engine.attach(0, transport, 1.0, False, False)
+        # Publish before a renderer even exists. Waiting must consume this
+        # durable notification without requiring a second callback or barrier.
+        engine.render_block()
+        runner = backend.TrackRunner(peer, plugin, 44100, 64)
+        self.addCleanup(runner.shutdown)
+
+        def await_sequence(sequence):
+            deadline = time.monotonic() + 5
+            while transport.stats()["submitted"] < sequence:
+                self.assertLess(time.monotonic(), deadline,
+                                "a published request lost its wakeup")
+                time.sleep(0.001)
+
+        await_sequence(1)
+        position = plugin.deck_status()["position"]
+        runner.barrier()
+        self.assertEqual(plugin.deck_status()["position"], position)
+        for _ in range(4):
+            # Several notifications may collapse into one; the latest request
+            # must still complete after publication stops.
+            for _ in range(64):
+                engine.render_block()
+            sequence = transport.stats()["sequence"]
+            await_sequence(sequence)
+            self.assertEqual(transport.stats()["submitted"], sequence)
+            runner.barrier()
+        self.assertEqual(transport.stats()["failure"], "")
+        progress = transport.stats()["progress"]
+        transport.send_midi(bytes((0x90, 60, 127)))
+        runner.barrier()
+        self.assertEqual(transport.stats()["midi_pending"], 1)
+        self.assertEqual(transport.stats()["progress"], progress)
+        runner.set_effects([])
+        offline = runner.render_once()
+        self.assertEqual(offline.shape, (64, 2))
+        self.assertTrue(np.isfinite(offline).all())
+        self.assertGreater(np.max(np.abs(offline)), 0)
+        runner.barrier()
+        self.assertEqual(transport.stats()["midi_pending"], 0)
+        self.assertEqual(transport.stats()["midi_consumed"], 1)
+        self.assertEqual(transport.stats()["progress"], progress + 1)
+        runner.shutdown()
+        self.assertEqual(transport.stats()["renderer_pid"], 0)
 
 
 
@@ -148,6 +247,7 @@ class SpawnedTrackTests(unittest.TestCase):
             audio = self.render(worker)
         return audio
 
+    @_both_wakeup_modes
     def test_persistent_native_owner_and_one_block_deck_audio(self):
         worker = self.worker()
         self.assertNotEqual(worker.pid, os.getpid())
@@ -175,6 +275,116 @@ class SpawnedTrackTests(unittest.TestCase):
         self.assertFalse(worker._process.is_alive())
         self.assertFalse(worker._io_thread.is_alive())
         self.assertEqual(worker._process.exitcode, 0)
+
+    @_both_wakeup_modes
+    def test_native_timing_is_opt_in_and_cumulative_across_processes(self):
+        worker = self.worker()
+        np.testing.assert_allclose(self.settled_audio(worker), 0.125, rtol=0.02)
+        self.await_render(worker, worker.transport.stats()["sequence"])
+        initial = worker.transport.stats()
+        self.assertEqual(initial["wakeup_mode"], os.environ["VCPI_TRACK_WAKEUP"])
+        self.assertEqual(initial["renderer_pid"], worker.pid)
+        self.assertFalse(initial["timing_enabled"])
+        self.assertTrue(initial["timing"]["coherent"])
+        self.assertEqual(initial["timing"]["count"], 0)
+        self.assertEqual(initial["timing"]["wakeup_ns_sum"], 0)
+        self.assertEqual(initial["timing"]["render_ns_sum"], 0)
+        self.assertEqual(initial["timing"]["render_cpu_ns_sum"], 0)
+        self.assertEqual(initial["timing"]["cpu_clock_errors"], 0)
+        self.assertEqual(initial["timing"]["wakeup_histogram"], [0] * 64)
+        self.assertEqual(initial["timing"]["render_histogram"], [0] * 64)
+        self.assertEqual(initial["timing"]["render_cpu_histogram"], [0] * 64)
+
+        expected_count = 0
+        previous = initial["timing"]
+        for enabled, blocks in ((True, 4), (False, 3), (True, 3), (True, 2), (False, 2)):
+            with self.subTest(enabled=enabled, blocks=blocks):
+                worker.transport.set_timing_enabled(enabled)
+                # Enabling (even repeatedly) must not reset an accumulated sample.
+                self.assertEqual(worker.transport.stats()["timing"], previous)
+                for _ in range(blocks):
+                    np.testing.assert_allclose(self.render(worker), 0.125, rtol=0.02)
+                    self.await_render(worker, worker.transport.stats()["sequence"])
+                if enabled:
+                    expected_count += blocks
+                stats = worker.transport.stats()
+                timing = stats["timing"]
+                self.assertEqual(stats["timing_enabled"], enabled)
+                self.assertTrue(timing["coherent"])
+                self.assertEqual(timing["count"], expected_count)
+                self.assertEqual(timing["cpu_clock_errors"], 0)
+                if expected_count:
+                    self.assertGreater(timing["render_cpu_ns_sum"], 0)
+                if not enabled:
+                    self.assertEqual(timing, previous)
+                for name in ("wakeup", "render", "render_cpu"):
+                    histogram = timing[f"{name}_histogram"]
+                    total = timing[f"{name}_ns_sum"]
+                    self.assertEqual(len(histogram), 64)
+                    self.assertEqual(sum(histogram), expected_count)
+                    self.assertTrue(all(count >= 0 for count in histogram))
+                    lower = sum(count * (0 if i == 0 else 1 << i)
+                                for i, count in enumerate(histogram))
+                    upper = sum(count * ((1 << (i + 1)) - 1)
+                                for i, count in enumerate(histogram))
+                    self.assertGreaterEqual(total, lower)
+                    self.assertLessEqual(total, upper)
+                    self.assertGreaterEqual(total, previous[f"{name}_ns_sum"])
+                    self.assertTrue(all(new >= old for new, old in
+                                        zip(histogram, previous[f"{name}_histogram"])))
+                previous = timing
+
+    @_both_wakeup_modes
+    def test_creator_mode_controls_spawned_rendering_despite_joiner_environment(self):
+        creator_mode = os.environ["VCPI_TRACK_WAKEUP"]
+        other_mode = "poll" if creator_mode == "notify" else "notify"
+        for joiner_mode in (other_mode, "invalid-joiner-mode"):
+            with self.subTest(joiner_mode=joiner_mode), patch(
+                    "vcpi.audio.track_client._track_owner",
+                    partial(_track_owner_with_wakeup_env, joiner_mode)):
+                worker = self.worker()
+                self.assertNotEqual(worker.pid, os.getpid())
+                self.assertEqual(worker.transport.stats()["wakeup_mode"], creator_mode)
+                worker.transport.set_timing_enabled(True)
+                worker.transport.send_midi(bytes((0x90, 60, 127)))
+                # An idle barrier must acknowledge buffered MIDI without DSP.
+                initial_position = worker.request("sync_state")["state"]["deck"]["position"]
+                self.assertEqual(worker.transport.stats()["progress"], 0)
+                self.assertEqual(worker.transport.stats()["midi_pending"], 1)
+                with patch.dict(os.environ, {"VCPI_TRACK_WAKEUP": other_mode}):
+                    for sequence in range(1, 17):
+                        # Exercise idle waits, not just a continuously busy renderer.
+                        time.sleep(0.002)
+                        audio = self.render(worker)
+                        self.await_render(worker, sequence)
+                        stats = worker.transport.stats()
+                        self.assertEqual(stats["wakeup_mode"], creator_mode)
+                        self.assertEqual(stats["submitted"], sequence)
+                        self.assertEqual(stats["progress"], sequence)
+                        self.assertEqual(stats["timing"]["count"], sequence)
+                        self.assertEqual(stats["midi_pending"], 0)
+                        self.assertEqual(stats["midi_consumed"], 1)
+                        # Control ownership and a barrier must not create another
+                        # render, nor lose the next request after releasing ownership.
+                        worker.request("deck_command", action="cue_set")
+                        state = worker.request("sync_state")["state"]["deck"]
+                        self.assertAlmostEqual(
+                            state["position"] - initial_position, sequence * 64 / 44100)
+                    np.testing.assert_allclose(audio, 0.125, rtol=0.02)
+                    time.sleep(0.01)
+                    final = worker.transport.stats()
+                    self.assertEqual(final["progress"], 16)
+                    self.assertEqual(final["timing"]["count"], 16)
+                    self.assertGreater(final["timing"]["wakeup_ns_sum"], 0)
+                    self.assertGreater(final["timing"]["render_ns_sum"], 0)
+                    self.assertGreater(final["timing"]["render_cpu_ns_sum"], 0)
+                    self.assertEqual(final["failure"], "")
+                worker.test_engine.clear_track(2)
+                transport = worker.transport
+                worker.shutdown()
+                self.assertEqual(worker._process.exitcode, 0)
+                self.assertFalse(worker._io_thread.is_alive())
+                self.assertEqual(transport.stats()["renderer_pid"], 0)
 
     def test_track_ignores_foreground_interrupt_and_still_cleans_up(self):
         worker = self.worker()
@@ -219,6 +429,7 @@ class SpawnedTrackTests(unittest.TestCase):
                 child.kill()
             child.join(2)
 
+    @_both_wakeup_modes
     @unittest.skipUnless(hasattr(signal, "SIGSTOP"), "requires POSIX process suspension")
     def test_snapshot_barrier_does_not_render_an_extra_discarded_block(self):
         ramp = np.arange(4096, dtype="<i2")

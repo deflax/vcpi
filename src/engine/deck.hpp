@@ -3,6 +3,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "ownership.hpp"
 #include "analysis_cache.hpp"
+#include "stereo_sinc.hpp"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -54,7 +55,7 @@ public:
     const std::string& bankPath() const noexcept { return locator; }
 private:
     static constexpr std::size_t capacity = 262144, mirror = 512;
-    static constexpr int decodeFrames = 4096, history = 200;
+    static constexpr int decodeFrames = 4096, history = StereoSinc::history;
     enum State { free, preparing, ready, held, active, retired };
     enum Mode { selection, seek, recall, restore, reanalysis };
     // Atomic scalars keep concurrent status snapshots race-free. Only the
@@ -89,7 +90,7 @@ private:
         Request request;
         std::unique_ptr<juce::AudioFormatReader> reader;
         std::array<std::vector<float>, 2> ring;
-        std::array<juce::WindowedSincInterpolator, 2> sinc;
+        StereoSinc sinc;
         std::atomic<std::uint64_t> read{0}, written{0};
         double rate = 0, target = 0;
         BeatAnalysis grid;

@@ -71,6 +71,7 @@ class _OwnerRuntime:
         self.master_snapshots = []
         self._last_track_health = 0.0
         self._last_output_realtime = None
+        self.benchmark_revision = 0
         try:
             import mido
         except ImportError:
@@ -372,11 +373,53 @@ class _OwnerRuntime:
                 "muted": bool(track.muted),
                 "solo": bool(track.solo),
                 "worker_failure": worker.failure,
+                "generation": self.generations[index],
+                "transport_path": worker.transport_path,
+                "worker_pid": worker.pid,
             })
             tracks.append(stats)
         return {"output": output, "tracks": tracks}
 
+    def benchmark(self, enabled=None):
+        """Opt-in native counters only; never wait for a measurement window."""
+        if enabled is not None:
+            if type(enabled) is not bool:
+                raise ValueError("timing enabled must be a boolean")
+            transports = [track.render_owner.transport for track in self.engine.tracks
+                          if track is not None]
+            errors = []
+            for transport in transports:
+                try:
+                    transport.set_timing_enabled(enabled)
+                except Exception as exc:
+                    errors.append(exc)
+            if errors:
+                if enabled:
+                    # Roll back every transport, including a setter that failed
+                    # after changing its shared flag.
+                    for transport in transports:
+                        try:
+                            transport.set_timing_enabled(False)
+                        except Exception:
+                            logger.exception("benchmark timing rollback failed")
+                raise RuntimeError(f"cannot set benchmark timing: {errors[0]}")
+        snapshot = self.diagnose()
+        snapshot["config"] = {
+            "sample_rate": self.engine.sample_rate,
+            "buffer_size": self.engine.buffer_size,
+            "output_channels": self.engine.output_channels,
+            "output_index": self.engine.output_index,
+            "revision": self.benchmark_revision,
+            "owner_pid": os.getpid(),
+        }
+        return snapshot
+
     def execute(self, operation, arguments):
+        if operation in LIFECYCLE_OPERATIONS or operation in {
+            "start_audio", "stop_audio", "load_plugin_state",
+        }:
+            # Preserve evidence of stop/restart or replace/restore between samples.
+            self.benchmark_revision += 1
         if operation in {
             "restore_patch", "load_vcv", "load_vcv_patch",
             "load_pd", "load_pd_patch", "load_deck",
@@ -523,6 +566,8 @@ class _OwnerRuntime:
             result = dict(self.engine.channel_map)
         elif operation == "diagnose":
             result = self.diagnose()
+        elif operation == "benchmark":
+            result = self.benchmark(**arguments)
         elif operation == "set_log_level":
             result = set_log_level(**arguments)
             for track in self.engine.tracks:

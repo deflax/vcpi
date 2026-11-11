@@ -121,6 +121,20 @@ py::dict transportDict(const TransportStats& info) {
     result["midi_consumed"] = info.midiConsumed;
     result["audio_peak"] = info.audioPeak;
     result["realtime"] = realtimeDict(info.realtime);
+    result["renderer_pid"] = info.rendererPid;
+    result["wakeup_mode"] = info.wakeupMode == WakeupMode::poll ? "poll" : "notify";
+    result["timing_enabled"] = info.timingEnabled;
+    py::dict timing;
+    timing["coherent"] = info.timing.coherent;
+    timing["count"] = info.timing.count;
+    timing["wakeup_ns_sum"] = info.timing.wakeupNsSum;
+    timing["render_ns_sum"] = info.timing.renderNsSum;
+    timing["render_cpu_ns_sum"] = info.timing.renderCpuNsSum;
+    timing["cpu_clock_errors"] = info.timing.cpuClockErrors;
+    timing["wakeup_histogram"] = info.timing.wakeupHistogram;
+    timing["render_histogram"] = info.timing.renderHistogram;
+    timing["render_cpu_histogram"] = info.timing.renderCpuHistogram;
+    result["timing"] = std::move(timing);
     return result;
 }
 py::dict engineDict(const EngineStats& info) {
@@ -222,6 +236,7 @@ PYBIND11_MODULE(_vcpi_native, module) {
         }, py::arg("state"));
     py::class_<Transport, std::shared_ptr<Transport>>(module, "Transport")
         .def(py::init<const std::string&, int, bool>(), py::arg("path"), py::arg("frames"), py::arg("create"), py::call_guard<py::gil_scoped_release>())
+        .def("set_timing_enabled", &Transport::setTimingEnabled, py::arg("enabled"))
         .def("send_midi", [](Transport& transport, const py::bytes& bytes) {
             const std::string message = bytes;
             py::gil_scoped_release release;
@@ -237,6 +252,7 @@ PYBIND11_MODULE(_vcpi_native, module) {
              py::arg("transport"), py::arg("plugin"), py::arg("sample_rate"), py::arg("frames"), py::call_guard<py::gil_scoped_release>())
         .def("set_effects", &TrackRunner::setEffects, py::arg("effects"), py::call_guard<py::gil_scoped_release>())
         .def("barrier", &TrackRunner::barrier, py::call_guard<py::gil_scoped_release>())
+        .def("wake", &TrackRunner::wake)
         .def("shutdown", &TrackRunner::shutdown, py::call_guard<py::gil_scoped_release>())
         .def("render_once", [](TrackRunner& runner) {
             std::vector<float> result;

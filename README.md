@@ -115,12 +115,22 @@ Selective scheduling targets only native audio threads. Linux requests
 output callback scheduling to CoreAudio (`backend-managed` in diagnostics).
 A macOS track's `configured` state means the startup request was accepted, not
 that its live policy is continuously verified; the kernel can later demote it.
-The one-block buffering and track polling/wakeup mechanism are unchanged, and
-dropout-free audio is not guaranteed. Under desktop CPU contention, late track
+By default, track workers check for work and sleep for 100 microseconds when idle;
+one-block buffering is unchanged. `VCPI_TRACK_WAKEUP=notify` instead blocks on
+shared futexes on Linux or Mach semaphores on macOS. Both modes use the same
+optimized renderer; see [wakeup comparisons](USAGE.md#comparing-polling-and-notifications).
+Dropout-free audio is
+not guaranteed. Under desktop CPU contention, late track
 blocks can be replaced by silence even with no callback underruns: inspect
 missing track blocks as well as output timing and underruns. See
 [selective realtime scheduling](USAGE.md#selective-realtime-scheduling) for
 platform-specific states and Linux permissions.
+
+To measure a running session before changing audio scheduling, use
+`python -m vcpi.benchmark --output baseline.json` from the installed Python
+environment. It samples CPU and audio-counter deltas and temporarily enables
+native request-to-render/render-duration measurements without pausing playback.
+See [audio benchmarking](USAGE.md#audio-benchmarking) for repeatable comparisons.
 
 Sessions save native VST3 state chunks for instruments, track inserts, and master
 effects. Sessions save track focus, while decks embed

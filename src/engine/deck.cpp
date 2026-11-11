@@ -354,15 +354,10 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
         if (!fill(stream)) break;
     }
     if (cancelled(wanted.id)) return false;
-    // Prime all 200 retained sinc history samples around the requested cursor;
-    // the final priming step preserves a fractional source-frame seek target.
-    float ignored = 0;
-    for (int channel = 0; channel < 2; ++channel) {
-        stream.sinc[channel].reset();
-        for (int i = 0; i < history; ++i)
-            stream.sinc[channel].process(i == history - 1 ? 1.0 + stream.target - targetFrame : 1.0,
-                                        stream.ring[channel].data() + i, &ignored, 1);
-    }
+    // Prime the retained history directly; no discarded convolution is needed.
+    // Preserve the fractional source-frame seek phase for the first output.
+    stream.sinc.reset(stream.ring[0].data(), stream.ring[1].data(),
+                      stream.target - targetFrame);
     stream.read.store(history, std::memory_order_release);
     return true;
 }
@@ -533,8 +528,8 @@ void Deck::render(float* left, float* right, int frames) noexcept {
             if (activeSync && targetNudge != 0)
                 phase = std::remainder(phase + 0.02 * targetNudge * beatStep, 1.0);
             const auto offset = static_cast<std::size_t>(consumed) & (capacity - 1);
-            const auto used = stream.sinc[0].process(ratio, stream.ring[0].data() + offset, &lastLeft, 1);
-            stream.sinc[1].process(ratio, stream.ring[1].data() + offset, &lastRight, 1);
+            const auto used = stream.sinc.process(ratio, stream.ring[0].data() + offset,
+                                                  stream.ring[1].data() + offset, lastLeft, lastRight);
             stream.read.store(consumed + static_cast<std::uint64_t>(used), std::memory_order_release);
             cursor = std::min(cursor + ratio, static_cast<double>(stream.length));
             if (cursor >= stream.length) {

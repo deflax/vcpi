@@ -15,6 +15,9 @@ instance.  The protocol is line-oriented text:
   views. It returns one JSON object using the same response framing and is
   not a public CLI command.
 
+  ``\\x03`` followed by a JSON object is the connection-owned benchmark
+  control protocol (start/sample/stop), using the same sentinel framing.
+
 The sentinel is a NUL byte on its own line (``\\x00\\n``).  The client reads
 lines until it sees the sentinel, then prints everything before it and
 prompts for the next command.
@@ -36,6 +39,8 @@ import signal
 import socket
 import sys
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import NamedTuple
 
@@ -60,6 +65,7 @@ class _CommandRequest(NamedTuple):
     # Mutable container so the main thread can store the result.
     # [0] = output (str | None), [1] = shutdown_requested (bool)
     result_box: list[str | bool | None]
+    disconnected: bool = False
 
 
 class VcpiServer:
@@ -74,6 +80,7 @@ class VcpiServer:
         self._running = False
         # Commands enqueued by reader threads, executed on the main thread.
         self._cmd_queue: queue.Queue[_CommandRequest] = queue.Queue()
+        self._benchmark_owner: str | None = None
 
     # ------------------------------------------------------------------
 
@@ -134,6 +141,10 @@ class VcpiServer:
             except queue.Empty:
                 return
             try:
+                if req.disconnected:
+                    self._release_benchmark(req.client_id)
+                    req.result_box[:] = [None, False]
+                    continue
                 output, shutdown = self._run_command(req.line, req.client_id)
                 req.result_box[:] = [output, shutdown]
                 if shutdown:
@@ -149,6 +160,7 @@ class VcpiServer:
     def stop(self):
         """Shut down the server and clean up."""
         self._running = False
+        self._release_benchmark(self._benchmark_owner)
         if self._server_sock:
             try:
                 self._server_sock.shutdown(socket.SHUT_RDWR)
@@ -196,7 +208,7 @@ class VcpiServer:
 
     def _handle_client(self, conn: socket.socket):
         """Serve one connected CLI client (reader thread — I/O only)."""
-        client_id = f"client-{id(conn):x}"
+        client_id = f"client-{uuid.uuid4().hex}"
         logger.info("%s connected", client_id)
         try:
             rfile = conn.makefile("r", encoding="utf-8", errors="replace")
@@ -240,11 +252,63 @@ class VcpiServer:
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             logger.warning("%s connection error: %s", client_id, e)
         finally:
+            # Cleanup must run on the control thread, not this socket reader.
+            self._cmd_queue.put(_CommandRequest(
+                "", client_id, threading.Event(), [None, False], disconnected=True))
+            for stream in (locals().get("rfile"), locals().get("wfile")):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
             try:
                 conn.close()
             except OSError:
                 pass
             logger.info("%s disconnected", client_id)
+
+    def _release_benchmark(self, client_id):
+        if client_id is None or self._benchmark_owner != client_id:
+            return
+        try:
+            self.host.engine.request("benchmark", enabled=False)
+        except Exception as exc:
+            logger.exception("benchmark timing cleanup failed")
+            return str(exc)
+        finally:
+            self._benchmark_owner = None
+
+    def _benchmark_request(self, line, client_id):
+        try:
+            request = json.loads(line[1:])
+            if not isinstance(request, dict) or set(request) != {"action"}:
+                raise ValueError("benchmark request requires only an action")
+            action = request["action"]
+            if action not in {"start", "sample", "stop"}:
+                raise ValueError("unknown benchmark action")
+            if action == "start":
+                if self._benchmark_owner is not None:
+                    raise RuntimeError("a benchmark already owns timing on this daemon")
+                self._benchmark_owner = client_id
+                try:
+                    snapshot = self.host.engine.request("benchmark", enabled=True)
+                except BaseException:
+                    self._release_benchmark(client_id)
+                    raise
+            else:
+                if self._benchmark_owner != client_id:
+                    raise RuntimeError("this connection does not own a benchmark")
+                if action == "stop":
+                    error = self._release_benchmark(client_id)
+                    if error is not None:
+                        raise RuntimeError(f"timing cleanup failed: {error}")
+                    return json.dumps({"ok": True}) + "\n", False
+                snapshot = self.host.engine.request("benchmark")
+            snapshot["daemon_pid"] = os.getpid()
+            snapshot["sampled_at"] = time.monotonic()
+            return json.dumps({"ok": True, "snapshot": snapshot}) + "\n", False
+        except Exception as exc:
+            return json.dumps({"ok": False, "error": str(exc)}) + "\n", False
 
     def _run_command(self, line: str, client_id: str) -> tuple[str | None, bool]:
         """Execute one CLI command and capture its printed output.
@@ -255,6 +319,8 @@ class VcpiServer:
 
         Must be called on the main thread.
         """
+        if line.startswith("\x03"):
+            return self._benchmark_request(line, client_id)
         buf = io.StringIO()
 
         # Build a throw-away HostCLI that prints into our buffer.
