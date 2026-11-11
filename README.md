@@ -553,7 +553,7 @@ vcpi> show 2
 ```
 
 Both decks initially load paused. Select playlist entries with
-`set 1 track_select 2`; switching is asynchronous and restores each song's
+`set 1 track 2`; switching is asynchronous and restores each song's
 remembered position, play/pause and calibration without replacing the worker or
 inserts. Repeating `track 1 deck <path>` replaces the list and resets that memory.
 Inspect `show 1` for compact operational info,

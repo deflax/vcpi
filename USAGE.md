@@ -561,7 +561,7 @@ correction. Momentary nudge is reset, not remembered. Looping is not implemented
 
 ```text
 show 1 --details
-set 1 track_select 2
+set 1 track 2
 save live-set
 ```
 
@@ -603,7 +603,7 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 | `show 1` | Cached compact deck title, transport, detected BPM, requested/active sync and errors |
 | `show 1 --details` | Full cached deck diagnostics, requested versus applied selection, detected grid and indexed playlist paths |
 | `track 1 deck reanalyze` | Pause at the current position, discard this song's cached grid and run detection again |
-| `set 1 track_select 2` | Request entry 2; acknowledgement means accepted, not loaded |
+| `set 1 track 2` | Request entry 2; acknowledgement means accepted, not loaded |
 | `track 1 deck <audio-file|directory> [--bpm-hint <bpm>] [--name <label>]` | Replace the playlist, optionally supplying its expected median tempo; retain mixer, routing and inserts |
 | `track 1 clear` | Remove the whole deck |
 | `set 1 seek 90` | Set position in source seconds, bounded to duration; retain play/pause state |
@@ -617,7 +617,7 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 | `get 1 phase_offset` / `set 1 phase_offset 0.125` | Read / set per-song phase correction in beats, -0.5..+0.5; positive advances the deck |
 | `track 1 deck phase reset` | Clear phase correction without seeking, pausing or changing shared BPM |
 
-The first three exposed sound controls are **`track_select`, `seek`, `nudge`**,
+The first three exposed sound controls are **`track`, `seek`, `nudge`**,
 so MIDI Mix maps them automatically to the top, middle and bottom knobs of each
 track strip. Selection spans playlist entries 1..N; seek spans 0..song duration;
 nudge spans -1..+1. Playlist edits and committed song changes refresh those
@@ -1464,7 +1464,7 @@ but their rotaries and performance pads make no changes.
 | 6 | Unassigned | Bank control 5 |
 | 7 | Unassigned | Bank control 6 |
 | 8 | Unassigned | Bank control 7 |
-| 9 | Immediate stepped `track_select` | Previous/next source-control bank |
+| 9 | Immediate stepped `track` | Previous/next source-control bank |
 | 10 | Insert-effect control 1 | Bank control 8 |
 | 11 | Insert-effect control 2 | Bank control 9 |
 | 12 | Insert-effect control 3 | Bank control 10 |

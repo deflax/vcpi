@@ -392,7 +392,7 @@ def _complete_parameters(ctx):
             if parameter is not None and plugin.parameter_group(remaining[0]) == "unused":
                 return empty
             if parameter is not None:
-                if (remaining[0] == "track_select" and track_index is not None
+                if (remaining[0] == "track" and track_index is not None
                         and fx_index is None):
                     track = ctx.host.engine.tracks[track_index]
                     if track.source_type == "deck":

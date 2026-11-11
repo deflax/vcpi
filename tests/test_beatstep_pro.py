@@ -15,7 +15,7 @@ from vcpi.timeline import MusicalTimeline
 
 
 def deck(generation=7):
-    plugin = PluginSnapshot(1, values={"track_select": 1})
+    plugin = PluginSnapshot(1, values={"track": 1})
     track = InstrumentTrack("Deck", "", plugin, source_type="deck", generation=generation)
     track.deck = {"sync": False, "pitch": 0.0, "position": 12.0,
                   "duration": 127.0, "tracks": [{"id": str(n)} for n in range(4)]}
@@ -351,14 +351,14 @@ class BeatStepProTests(unittest.TestCase):
     def test_song_steps_are_immediate_accumulate_and_clamp(self):
         for expected in (2, 3, 4, 4):
             self.rotary(8, 1)
-            self.assertEqual(self.engine.commands[-1], (0, "track_select", expected, None, 7))
+            self.assertEqual(self.engine.commands[-1], (0, "track", expected, None, 7))
         for expected in (3, 2, 1, 1):
             self.rotary(8, 127)
-            self.assertEqual(self.engine.commands[-1], (0, "track_select", expected, None, 7))
-        self.assertEqual(self.engine.tracks[0].plugin.values["track_select"], 1)
+            self.assertEqual(self.engine.commands[-1], (0, "track", expected, None, 7))
+        self.assertEqual(self.engine.tracks[0].plugin.values["track"], 1)
         self.engine.tracks[0] = deck(77)
         self.rotary(8, 1)
-        self.assertEqual(self.engine.commands[-1], (0, "track_select", 2, None, 77))
+        self.assertEqual(self.engine.commands[-1], (0, "track", 2, None, 77))
 
     def test_absolute_delta_controls_seed_again_after_focus_change(self):
         self.configure(rotary_modes=("absolute",) * 16)
@@ -368,7 +368,7 @@ class BeatStepProTests(unittest.TestCase):
         self.rotary(8, 65)
         self.rotary(3, 65)
         self.assertEqual(self.engine.commands, [
-            (0, "track_select", 2, None, 7), (0, "seek", 12.1, None, 7)])
+            (0, "track", 2, None, 7), (0, "seek", 12.1, None, 7)])
         self.press(1)
         self.rotary(8, 10)
         self.rotary(3, 10)
@@ -376,7 +376,7 @@ class BeatStepProTests(unittest.TestCase):
         self.rotary(8, 11)
         self.rotary(3, 11)
         self.assertEqual(self.engine.commands[-2:], [
-            (1, "track_select", 2, None, 8), (1, "seek", 12.1, None, 8)])
+            (1, "track", 2, None, 8), (1, "seek", 12.1, None, 8)])
         self.press(0)
         self.rotary(8, 100)
         self.rotary(3, 100)
@@ -394,7 +394,7 @@ class BeatStepProTests(unittest.TestCase):
         self.rotary(8, 11)
         self.rotary(3, 11)
         self.assertEqual(self.engine.commands, [
-            (0, "track_select", 2, None, 7), (0, "seek", 12.1, None, 7)])
+            (0, "track", 2, None, 7), (0, "seek", 12.1, None, 7)])
 
     def test_reselecting_same_focus_preserves_absolute_delta_baselines(self):
         self.configure(rotary_modes=("absolute",) * 16)
@@ -408,7 +408,7 @@ class BeatStepProTests(unittest.TestCase):
         self.rotary(8, 65)
         self.rotary(3, 65)
         self.assertEqual(self.engine.commands, [
-            (0, "track_select", 2, None, 7), (0, "seek", 12.1, None, 7)])
+            (0, "track", 2, None, 7), (0, "seek", 12.1, None, 7)])
 
     def test_deck_inserts_flatten_seven_exposed_typed_parameters(self):
         self.engine.tracks[0].effects = [
