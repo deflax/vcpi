@@ -175,6 +175,7 @@ class _OwnerRuntime:
             if update[0] != "parameter" or update[1] is not None:
                 continue
             _, _, fx_index, name, actual, raw, display = update
+            self._queue_parameter_log(None, fx_index, name, actual)
             if fx_index is None or not 0 <= fx_index < len(self.master_snapshots):
                 continue
             plugin = self.master_snapshots[fx_index]
@@ -217,11 +218,18 @@ class _OwnerRuntime:
         track.plugin = worker.track.plugin
         track.effects = worker.track.effects
         track.deck = worker.track.deck
+        result = reply.get("result")
+        if operation == "set_parameter":
+            self._queue_parameter_log(
+                index, arguments.get("fx_index"), arguments["name"], result)
+        elif operation == "set_parameters":
+            for name, actual in result["values"].items():
+                self._queue_parameter_log(index, arguments.get("fx_index"), name, actual)
         self.engine._applied_updates.extend(reply.get("updates", ()))
         if reply.get("deck") is not None:
             self.engine._applied_updates.append(
                 ("deck", index, self.generations[index], reply["deck"]))
-        return reply.get("result")
+        return result
 
     def apply_track_parameters(self):
         # Bound command work per dispatcher pass; never process these on the
@@ -249,26 +257,31 @@ class _OwnerRuntime:
                     self.track_request(index, "set_deck_clock",
                                        bpm=bpm, beat=beat, sampled_at=sampled_at)
                     continue
-                actual = self.track_request(index, "set_parameter", name=name, value=value,
-                                            fx_index=fx_index)
-                self._pending_parameter_logs[index, fx_index, name] = (
-                    generation, actual, time.monotonic() + self._parameter_log_quiet_seconds)
+                self.track_request(index, "set_parameter", name=name, value=value,
+                                   fx_index=fx_index)
             except Exception as error:
                 worker = self._track_worker(index)
                 worker.failure = f"parameter update failed: {error}"
         self.send_updates()
         self._flush_parameter_logs()
 
+    def _queue_parameter_log(self, index, fx_index, name, actual):
+        generation = self.generations[index] if index is not None else None
+        self._pending_parameter_logs[index, fx_index, name] = (
+            generation, actual, time.monotonic() + self._parameter_log_quiet_seconds)
+
     def _flush_parameter_logs(self, *, force=False):
         now = time.monotonic()
         for (index, fx_index, name), (generation, actual, deadline) in tuple(
                 self._pending_parameter_logs.items()):
-            if generation != self.generations[index]:
+            if index is not None and generation != self.generations[index]:
                 del self._pending_parameter_logs[index, fx_index, name]
                 continue
             if not force and now < deadline:
                 continue
-            target = f"track {index + 1}" + (f" fx {fx_index + 1}" if fx_index is not None else "")
+            target = "master" if index is None else f"track {index + 1}"
+            if fx_index is not None:
+                target += f" fx {fx_index + 1}"
             logger.info("%s %s -> %s (applied)", target, name, actual)
             del self._pending_parameter_logs[index, fx_index, name]
 

@@ -87,6 +87,45 @@ class AppliedKnobLoggingTests(unittest.TestCase):
                 runtime.apply_track_parameters()
                 runtime._flush_parameter_logs(force=True)
 
+    def test_manual_and_automatic_changes_share_a_quiet_period(self):
+        runtime, worker = self.runtime()
+        with self.assertLogs("vcpi.audio.owner", level="INFO") as captured:
+            with patch("vcpi.audio.owner.time.monotonic") as clock:
+                clock.return_value = 10
+                runtime.track_request(0, "set_parameter", name="cutoff", value=1)
+                self.assertEqual(captured.records, [])
+                clock.return_value = 10.2
+                worker.request.return_value = {"result": 0.5}
+                runtime.pending_parameters.append(
+                    (0, 1, "cutoff", 0.5, "parameter", None, None))
+                runtime.apply_track_parameters()
+                clock.return_value = 10.4
+                runtime._flush_parameter_logs()
+                self.assertEqual(captured.records, [])
+                clock.return_value = 10.6
+                runtime._flush_parameter_logs()
+                self.assertEqual([record.args for record in captured.records],
+                                 [("track 1", "cutoff", 0.5)])
+                runtime._flush_parameter_logs(force=True)
+                self.assertEqual(len(captured.records), 1)
+
+    def test_batch_logs_only_accepted_values_and_keeps_targets_separate(self):
+        runtime, worker = self.runtime()
+        worker.request.return_value = {
+            "result": {"values": {"mix": 0.25}, "errors": {"invalid": "rejected"}}}
+        with self.assertLogs("vcpi.audio.owner", level="INFO") as captured:
+            with patch("vcpi.audio.owner.time.monotonic", return_value=10):
+                runtime.track_request(
+                    0, "set_parameters", fx_index=1, params={"mix": 2, "invalid": 1})
+                runtime._cache_master_updates([
+                    ("parameter", None, 0, "mix", 0.75, None, None)])
+                self.assertEqual(captured.records, [])
+            with patch("vcpi.audio.owner.time.monotonic", return_value=11):
+                runtime._flush_parameter_logs()
+        self.assertEqual([record.args for record in captured.records],
+                         [("track 1 fx 2", "mix", 0.25),
+                          ("master fx 1", "mix", 0.75)])
+
 
 
 if __name__ == "__main__":

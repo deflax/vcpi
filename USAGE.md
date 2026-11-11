@@ -1902,9 +1902,11 @@ Server logs now include:
   interval, even across queue drains. Gain changes themselves remain immediate;
   only logging is delayed. Track replacement discards the old track's pending
   summary, and shutdown flushes pending final values without waiting.
-- Final applied MIDI Mix knob parameters at `INFO`, using the same 300 ms quiet
-  interval independently for each track/parameter. Summaries use the value
-  acknowledged by the track worker, not the requested MIDI value. Failed,
+- Final applied plugin parameters at `INFO`, whether set manually with `set`,
+  changed by automatic parameter updates, or changed by MIDI controls. Summaries use a 300 ms
+  quiet interval independently for each track/master, effect, and parameter,
+  and report the acknowledged value rather than the requested value. Further
+  changes replace the pending summary and restart its interval. Failed,
   unbound, and retired-track requests do not produce successful applied logs.
   Parameter changes are immediate; only the summary is delayed. Shutdown flushes
-  pending final knob values.
+  pending final parameter values.
