@@ -130,8 +130,8 @@ def encode_deck_message(message, ordinary_limit):
 
 
 def encode_deck_status(status, ordinary_limit, state_limit):
-    """Keep ordinary metadata bounded while carrying a full song-state map."""
-    metadata = {**status, "song_states": None}
+    """Bound ordinary metadata separately from both full per-song status maps."""
+    metadata = {**status, "song_states": None, "song_bpms": None}
     if len(pickle.dumps(metadata, protocol=pickle.HIGHEST_PROTOCOL)) > ordinary_limit:
         raise BufferError(f"deck status metadata exceeds {ordinary_limit} bytes")
     data = pickle.dumps(status, protocol=pickle.HIGHEST_PROTOCOL)
@@ -148,7 +148,7 @@ def encode_deck_update(message, ordinary_limit, state_limit):
     _, index, generation, status = updates[0]
     encode_deck_status(status, ordinary_limit, state_limit)
     metadata = (kind, epoch, serial, [("deck", index, generation,
-                                     {**status, "song_states": None})])
+                                     {**status, "song_states": None, "song_bpms": None})])
     if len(pickle.dumps(metadata, protocol=pickle.HIGHEST_PROTOCOL)) > ordinary_limit:
         raise BufferError(f"deck update metadata exceeds {ordinary_limit} bytes")
     data = pickle.dumps(message, protocol=pickle.HIGHEST_PROTOCOL)

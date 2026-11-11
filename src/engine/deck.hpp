@@ -30,6 +30,8 @@ struct DeckStatus {
     bool sync = true, syncActive = false;
     double bpm = 0, beatOffset = 0, beatConfidence = 0, playbackSpeed = 1, beatPhaseError = 0;
     std::unordered_map<std::string, DeckSongState> songStates;
+    std::unordered_map<std::string, std::optional<double>> songBpms;
+    std::string analyzingTrackId;
 };
 
 // Readers and ring storage belong to this object until its worker joins.
@@ -66,12 +68,18 @@ private:
         DeckSongState load() const noexcept;
         void store(const DeckSongState& state) noexcept;
     };
+    struct AnalysisMemory {
+        // Negative means pending; grids themselves remain worker-owned.
+        std::atomic<double> bpm{-1};
+        std::atomic<bool> force{false};
+    };
     struct Track {
         std::string id, path, title;
         std::optional<double> bpmHint;
         std::optional<BeatAnalysis> grid;
         std::shared_ptr<BeatAnalysisCache> gridSource;
         std::unique_ptr<SongMemory> memory = std::make_unique<SongMemory>();
+        std::unique_ptr<AnalysisMemory> analysis = std::make_unique<AnalysisMemory>();
     };
     struct Catalog {
         std::string bank, locator;
@@ -101,7 +109,11 @@ private:
     void request(int track, double seconds, Mode mode);
     bool prepare(Stream& stream, const Request& request, Track& track);
     bool fill(Stream& stream);
-    bool analyze(Stream& stream, BeatAnalysis& grid, std::optional<double> bpmHint);
+    bool feedStreams();
+    std::unique_ptr<juce::AudioFormatReader> openReader(const Track& track);
+    bool ensureGrid(Track& track, std::uint64_t id, juce::AudioFormatReader* reader = nullptr);
+    bool analyze(Track& track, juce::AudioFormatReader& reader, std::uint64_t id, BeatAnalysis& grid);
+    void unavailable(Track& track, std::uint64_t id);
     void publishGrid(const Stream& stream) noexcept;
     void work() noexcept;
     void rememberSong(double phase) noexcept;
@@ -118,6 +130,7 @@ private:
     mutable std::mutex controlMutex, errorMutex;
     Request requested;
     std::string lastError;
+    std::string analyzingTrackId; // Protected by controlMutex, never read by render().
     std::atomic<std::uint64_t> latestRequest{0}, finishedRequest{0}, commitSequence{0};
     std::atomic<int> requestedTrack{1}, appliedTrack{1};
     std::atomic<bool> stopping{false}, playing{false}, buffering{false}, ended{false};

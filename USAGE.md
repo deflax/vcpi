@@ -381,7 +381,7 @@ hardware or empty plugin/effect lists may also yield no choices.
 | `set <track> <name> <value>` | Set instrument parameter |
 | `set <track> fx <fx_index> <name> <value>` | Set track-effect parameter |
 | `set master <fx_index> <name> <value>` | Set master-effect parameter; explicit index required |
-| `show <track> [--details]` | Show chain, routing, mixer, mapped controls and compact deck info; details adds full instrument metadata, deck diagnostics and indexed playlist paths |
+| `show <track> [--details]` | Show chain, routing, mixer, mapped controls and deck playlist with current entry and detected BPMs; details adds metadata, diagnostics and playlist paths |
 | `show <track> fx <fx_index> [--details]` | Inspect a track effect; details adds full metadata; explicit 1-based index required |
 | `show master fx <fx_index> [--details]` | Inspect a master effect; details adds full metadata; explicit 1-based index required |
 
@@ -565,7 +565,8 @@ set 1 index 2
 save live-set
 ```
 
-`show 1 --details` lists song titles, paths and 1-based selection indexes.
+`show 1` lists playlist titles, 1-based indexes and detected BPMs, marking the
+current entry and any different requested selection. `show 1 --details` adds paths.
 To change the songs, replace the whole playlist with `track 1 deck <path>`.
 Use `track 1 clear` to remove the whole deck.
 
@@ -600,8 +601,8 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 | Command | Behaviour |
 |---|---|
 | `get 1` | Deck control values, units and ranges, including seek position |
-| `show 1` | Cached compact deck title, transport, detected BPM, requested/active sync and errors |
-| `show 1 --details` | Full cached deck diagnostics, requested versus applied selection, detected grid and indexed playlist paths |
+| `show 1` | Cached deck transport, current entry, ordered playlist with detected BPMs, requested/active sync and errors |
+| `show 1 --details` | Full cached deck diagnostics, requested versus applied selection, detected grid and playlist paths |
 | `track 1 deck reanalyze` | Pause at the current position, discard this song's cached grid and run detection again |
 | `set 1 index 2` | Request playlist entry 2 on mixer track 1; acknowledgement means accepted, not loaded |
 | `track 1 deck <audio-file|directory> [--bpm-hint <bpm>] [--name <label>]` | Replace the playlist, optionally supplying its expected median tempo; retain mixer, routing and inserts |
@@ -632,14 +633,17 @@ setting and adds effective pitch as a percentage derived from cached playback
 speed, including sync and nudge; the listed range applies to the manual control.
 `get 1 seek` reads position and `set 1 seek <seconds>` moves it while preserving play/pause.
 `track 1 deck seek <seconds>` is equivalent. MIDI seek mappings are unchanged.
-Use `show <track>` for compact operational
-info: title, transport, detected BPM, manual and effective pitch, requested versus
-active sync and any load, analysis or sync errors. Detected BPM is the song's analyzed
-tempo, distinct from the shared/global tempo; pending or missing analysis displays
-analyzing/unavailable rather than 0. Add `--details` for full transport and grid
-diagnostics (including confidence and offsets), requested versus applied selection,
-and the indexed playlist with paths. Both views read cached state without waiting
-for the worker. Empty `error` or `sync_error` fields are normal when no error is present.
+Use `show <track>` for operational info: title, transport, detected BPM, manual
+and effective pitch, requested versus active sync and any load, analysis or sync
+errors. Decks also show the whole ordered playlist with per-entry detected BPMs.
+`(current)` marks the applied entry, even while another entry is `(requested)`.
+Playlist entries show `pending analysis`, `analyzing` or `unavailable` until a
+reliable BPM is known; unreadable or beatless entries never display 0 BPM.
+Detected BPM is the source tempo, distinct from shared/global playback tempo.
+Add `--details` for full transport/grid diagnostics (including confidence and
+offsets), requested versus applied selection and playlist paths. Both views
+read cached state without waiting for analysis or reading files. Empty `error`
+or `sync_error` fields are normal when no error is present.
 
 Queen Mary DSP analyzes the entire selected file off the render thread, using
 complex-domain spectral onset detection and tempo tracking. vcpi fits a constant
@@ -647,6 +651,14 @@ tempo and phase from supported stable beat regions; the old energy-envelope
 detectors are no longer used. Analysis normalizes its private input to 22.05 kHz
 with a 512-frame FFT and 256-frame hop; this never resamples or filters the
 playback signal. Source audio is decoded in chunks, not retained in full.
+
+After preparing the selected entry, the deck analyzes the remaining playlist
+entries in the background, reusing source- and BPM-hint-validated cache results.
+Selection, seek and reanalysis take priority; background analysis does not
+change selection, position or play/pause. A failed background entry is marked
+unavailable without stopping another entry's playback. BPMs update in the
+published status as analysis finishes; `show` itself never starts analysis.
+Analysis remains derived cache data, not saved session song state.
 
 An uncached load waits for analysis and read-ahead preparation before becoming
 ready. During selection, existing audio remains usable while the new file is

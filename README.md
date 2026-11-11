@@ -367,9 +367,10 @@ the owning process and reports the actual applied value, including clamping.
 See [USAGE.md](USAGE.md#plugin-commands) for capture details and parameter examples.
 
 `show <track>` summarizes the chain, routing, mixer state and relevant controller
-bindings, plus compact deck title, transport, detected BPM, requested/active sync
-and errors. Add `--details` for instrument metadata, paths and worker diagnostics,
-including full deck diagnostics and indexed playlist paths.
+bindings, plus deck transport, detected BPM, requested/active sync and errors.
+Deck views also list every playlist entry with its detected BPM and mark the
+current entry separately from a pending requested selection. Add `--details`
+for instrument metadata, playlist paths and full deck/worker diagnostics.
 Use `show <track> fx <index> --details` or `show master fx <index> --details`
 for full effect metadata; both require an explicit 1-based effect index.
 
@@ -556,11 +557,13 @@ Both decks initially load paused. Select playlist entries with
 `set 1 index 2` (1-based playlist index); switching is asynchronous and restores each song's
 remembered position, play/pause and calibration without replacing the worker or
 inserts. Repeating `track 1 deck <path>` replaces the list and resets that memory.
-Inspect `show 1` for compact operational info,
-including errors. Detected BPM is the song's analyzed tempo, distinct from the
-shared/global tempo; pending or missing analysis reads analyzing/unavailable,
-not 0. Use `show 1 --details` for requested versus applied selection, confidence,
-grid offsets, full diagnostics and indexed playlist paths. `get 1` remains the
+Inspect `show 1` for operational info and the ordered playlist with detected
+BPMs. The applied entry is marked `(current)`; a different requested selection
+is marked `(requested)` until committed. Remaining entries are analyzed in the
+background without changing playback, with `pending analysis`, `analyzing` or
+`unavailable` shown instead of a misleading 0 BPM. BPM is the source tempo,
+distinct from shared/global tempo. `show 1 --details` adds paths, confidence,
+grid offsets and full diagnostics. `get 1` remains the
 list of deck controls; `get 1 seek` reads position and `set 1 seek <seconds>`
 moves it. `track 1 deck seek <seconds>` is an equivalent convenience command.
 Automatic Queen Mary analysis fits stable 60–200 BPM regions across the whole

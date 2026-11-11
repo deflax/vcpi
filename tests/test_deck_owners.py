@@ -219,6 +219,24 @@ class DeckOwnerTests(unittest.TestCase):
         reply = worker.request("sync_state")
         self.assertIsNone(reply["state"]["plugin"].native_state)
 
+    def test_background_analysis_reaches_status_and_rpc_snapshots_without_rendering(self):
+        worker, _ = self.worker(track_id="2", cue=0.25, pitch=-1.25)
+        expected = {entry["id"]: 0.0 for entry in self.entries}
+        status = self.await_status(
+            worker, lambda state: state.get("song_bpms") == expected
+            and state.get("analyzing_track_id") == "")
+        self.assertEqual(status["track_id"], "2")
+        self.assertEqual(status["position"], 0.25)
+        self.assertEqual(status["pitch"], -1.25)
+        self.assertEqual(status["bpm"], 0)
+        self.assertFalse(status["play"])
+        reply = worker.request("set_parameter", name="pitch", value=2)
+        self.assertEqual(reply["deck"]["song_bpms"], expected)
+        self.assertEqual(reply["deck"]["analyzing_track_id"], "")
+        captured = worker.request("sync_state")["state"]["deck"]
+        self.assertEqual(captured["song_bpms"], expected)
+        self.assertEqual(captured["analyzing_track_id"], "")
+
     def test_newest_selection_and_missing_asset_keep_worker_and_mixer(self):
         worker, engine = self.worker()
         pid = worker.pid
@@ -384,11 +402,26 @@ class DeckCacheTests(unittest.TestCase):
         engine.tracks = [None] * NUM_TRACKS
         track = InstrumentTrack("deck", "bank", PluginSnapshot(1),
                                 source_type="deck", generation=7,
-                                deck={"track_id": "new", "position": 0})
+                                deck={"track_id": "new", "position": 0,
+                                      "song_bpms": {"new": None}, "analyzing_track_id": "new"})
         engine.tracks[0] = track
-        engine._apply_updates(3, 1, [("deck", 0, 7, {"track_id": "old"})])
-        engine._apply_updates(4, 2, [("deck", 0, 6, {"track_id": "old"})])
+        stale = {"track_id": "old", "song_bpms": {"old": 150.0},
+                 "analyzing_track_id": "old"}
+        engine._apply_updates(3, 1, [("deck", 0, 7, stale)])
+        engine._apply_updates(4, 2, [("deck", 0, 6, stale)])
         self.assertEqual(track.deck["track_id"], "new")
-        engine._apply_updates(4, 3, [("deck", 0, 7, {"position": 2, "pitch": -2})])
+        self.assertEqual(track.deck["song_bpms"], {"new": None})
+        self.assertEqual(track.deck["analyzing_track_id"], "new")
+        bpms = {"new": 0.0, "pending": None, "known": 123.5}
+        engine._apply_updates(4, 3, [("deck", 0, 7, {
+            "position": 2, "pitch": -2, "song_bpms": bpms,
+            "analyzing_track_id": "pending"})])
         self.assertEqual(track.deck["position"], 2)
         self.assertEqual(track.plugin.values["pitch"], -2)
+        self.assertEqual(track.deck["song_bpms"], bpms)
+        self.assertEqual(track.deck["analyzing_track_id"], "pending")
+        self.assertNotIn("song_bpms", track.plugin.values)
+        engine._apply_updates(4, 4, [("deck", 0, 7, {
+            "song_bpms": {"new": 120.0}, "analyzing_track_id": ""})])
+        self.assertEqual(track.deck["song_bpms"], {"new": 120.0})
+        self.assertEqual(track.deck["analyzing_track_id"], "")

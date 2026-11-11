@@ -109,6 +109,56 @@ print(json.dumps(plugin.deck_status()))
             runner.render_once()
             time.sleep(0.001)
 
+    def test_unvisited_entries_reuse_hint_specific_persistent_grids(self):
+        expected = {}
+        for hint, bpm in ((None, 137.25), (83, 83.25), (174, 166.25)):
+            self.load(bpm_hint=hint)
+            entry = next(path for path in self.entries()
+                         if json.loads(path.read_text())["source"].get("bpm_hint") == hint)
+            data = json.loads(entry.read_text())
+            data.update(bpm=bpm, offset=0.125, confidence=0.875)
+            entry.write_text(json.dumps(data))
+            expected[str(hint)] = bpm
+        cached = {path: path.read_bytes() for path in self.entries()}
+        active = self.tone("active")
+        catalog = json.loads(self.catalog(active))
+        for hint in (None, 83, 174):
+            track = {"id": str(hint), "path": str(self.song), "title": str(hint)}
+            if hint is not None:
+                track["bpm_hint"] = hint
+            catalog["tracks"].append(track)
+        plugin = self.backend.Plugin(json.dumps(catalog), 48000, 512, "deck")
+        deadline = time.monotonic() + 5
+        while True:
+            status = plugin.deck_status()
+            if all(bpm is not None for bpm in status["song_bpms"].values()):
+                break
+            self.assertLess(time.monotonic(), deadline, status)
+            time.sleep(0.001)
+        self.assertEqual(status["song_bpms"], {"song": 0, **expected})
+        self.assertEqual(status["track_id"], "song")
+        self.assertEqual(status["bpm"], 0)
+        self.assertEqual(status["error"], "")
+        self.assertFalse(status["play"])
+        for path, content in cached.items():
+            self.assertEqual(path.read_bytes(), content)
+        # Status is a memory snapshot, not a filesystem freshness probe.
+        self.song.unlink()
+        self.assertEqual(plugin.deck_status()["song_bpms"], status["song_bpms"])
+        # A catalog edit DOES revalidate retained source identities, including
+        # inactive entries. Removed sources must not keep their old cached BPM.
+        plugin.update_deck_catalog(json.dumps(catalog))
+        deadline = time.monotonic() + 5
+        while True:
+            status = plugin.deck_status()
+            if all(bpm is not None for bpm in status["song_bpms"].values()):
+                break
+            self.assertLess(time.monotonic(), deadline, status)
+            time.sleep(0.001)
+        self.assertEqual(status["song_bpms"], {key: 0 for key in ("song", "None", "83", "174")})
+        self.assertEqual(status["error"], "")
+        self.assertEqual(status["track_id"], "song")
+
     def test_hint_validation_rejects_non_numeric_nonfinite_and_out_of_range(self):
         catalog = json.loads(self.catalog(self.song))
         for hint in (True, False, None, "83", [], {}, 59.9, 200.1, float("nan"),
@@ -194,8 +244,11 @@ print(json.dumps(plugin.deck_status()))
         accepted = plugin.deck_status()
         self.assertFalse(accepted["play"])
         self.assertGreater(accepted["request_id"], before["request_id"])
+        self.assertIn(accepted["song_bpms"]["song"], (None, 0))
+        self.assert_grid(accepted, seeded)  # Only render may replace the applied grid.
         after = self.await_status(plugin, runner, lambda status: not status["loading"])
         self.assertEqual((after["bpm"], after["beat_offset"], after["beat_confidence"]), (0, 0, 0))
+        self.assertEqual(after["song_bpms"], {"song": 0})
         self.assertEqual(after["error"], "")
         self.assertFalse(after["play"])
         self.assertAlmostEqual(after["position"], before["position"])

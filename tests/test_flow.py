@@ -139,8 +139,8 @@ class FlowTests(unittest.TestCase):
         detailed = {row[0]: row[1] for row in self.rows("track1", details=True)}
         self.assertEqual(detailed["Deck track_id"], "opening")
         self.assertEqual(detailed["Deck requested_track_id"], "next")
-        self.assertEqual(detailed["Deck selection 1"], "Opening title")
-        playlist = next(row for row in self.rows("track1", details=True) if row[0] == "Deck selection 1")
+        self.assertEqual(detailed["Playlist 1 (current)"], "Opening title")
+        playlist = next(row for row in self.rows("track1", details=True) if row[0] == "Playlist 1 (current)")
         self.assertIn("/music/opening.wav", playlist[2])
         for field, expected in (("beat_offset", "0.125"), ("beat_confidence", "0.9"),
                                 ("playback_speed", "1.02"), ("beat_phase_error", "-0.01")):
@@ -194,6 +194,35 @@ class FlowTests(unittest.TestCase):
         self.assertIn("/music/opening.wav", detailed)
         self.assertIn("second", detailed)
         self.engine.request.assert_not_called()
+
+    def test_deck_playlist_keeps_applied_selection_and_per_song_analysis_distinct(self):
+        self.track.source_type = "deck"
+        self.track.deck = {
+            "track_id": "current", "track_title": "Playing", "bpm": 166,
+            "requested_track_id": "next", "state": "loading",
+            "analyzing_track_id": "next",
+            "song_bpms": {"current": 166, "next": None, "slow": 83, "silent": 0, "waiting": None},
+            "tracks": [{"id": key, "title": title, "path": f"/music/{key}.wav"}
+                       for key, title in (("current", "Playing"), ("next", "Next"),
+                                          ("slow", "Slow"), ("silent", "Silent"),
+                                          ("waiting", "Waiting"))],
+        }
+        rows = [row for row in self.rows("track1") if row[0].startswith("Playlist ")]
+        self.assertEqual(rows, [
+            ["Playlist 1 (current)", "Playing", "166 BPM"],
+            ["Playlist 2 (requested)", "Next", "analyzing"],
+            ["Playlist 3", "Slow", "83 BPM"],
+            ["Playlist 4", "Silent", "unavailable"],
+            ["Playlist 5", "Waiting", "pending analysis"],
+        ])
+        # A prepared/requested entry does not become current until commit.
+        self.track.deck.update(track_id="next", requested_track_id="next",
+                               track_title="Next", state="ready", bpm=174,
+                               analyzing_track_id="")
+        self.track.deck["song_bpms"]["next"] = 174
+        rows = [row for row in self.rows("track1") if row[0].startswith("Playlist ")]
+        self.assertEqual(rows[0][0], "Playlist 1")
+        self.assertEqual(rows[1], ["Playlist 2 (current)", "Next", "174 BPM"])
 
     def test_output_eligibility_tracks_independent_blockers(self):
         self.assertEqual(self.track_state(), "eligible")

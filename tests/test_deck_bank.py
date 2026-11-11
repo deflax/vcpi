@@ -1,13 +1,15 @@
 """Inline playlist validation and multipart catalog coverage."""
 
 import json
+import pickle
 import tempfile
 import unittest
 from pathlib import Path
 
+from vcpi.audio.protocol import CONTROL_LIMIT, STATE_LIMIT, UPDATE_LIMIT
 from vcpi.deck_bank import (
     CATALOG_LIMIT, audio_entry, deck_status_frames, encode_deck_message,
-    encode_deck_update, make_catalog, receive_deck_status,
+    encode_deck_status, encode_deck_update, make_catalog, receive_deck_status,
 )
 from vcpi.state_transport import receive_frame, send_frame
 
@@ -63,6 +65,14 @@ class DeckBankTests(unittest.TestCase):
                 self.assertNotIn("bpm_hint", catalog["tracks"][1])
                 self.assertNotIn("bpm_hint", catalog)
                 self.assertNotIn("bpm_hint", self.tracks[0])
+
+    def test_catalog_keeps_hints_but_discards_derived_entry_analysis(self):
+        entry = {**self.tracks[0], "bpm_hint": 174, "bpm": 166.0,
+                 "song_bpms": {"first": 166.0}, "analyzing_track_id": "first"}
+        catalog = json.loads(make_catalog("set", [entry]))
+        self.assertEqual(catalog["tracks"], [{**self.tracks[0], "bpm_hint": 174}])
+        self.assertNotIn("song_bpms", catalog)
+        self.assertNotIn("analyzing_track_id", catalog)
 
     def test_malformed_bpm_hints_are_rejected(self):
         for hint in (None, True, False, "174", [], {}, 59.999, 200.001,
@@ -189,19 +199,64 @@ class DeckBankTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 make_catalog("set", self.tracks, song_states={"first": {**state, field: value}})
 
-    def test_full_status_map_uses_bounded_multipart_without_enlarging_metadata(self):
+    def test_full_status_maps_use_bounded_multipart_without_enlarging_metadata(self):
         state = {"position": 1.25, "cue": 0.5, "pitch": -2.0, "sync": False,
                  "phase_offset": -0.25, "play": True}
-        status = {"track_id": "0", "song_states": {
-            str(index): dict(state) for index in range(2000)}}
-        frames = deck_status_frames(status, 65536, 16 * 1024 * 1024)
+        identities = [f"song-{index:04d}-" + "x" * 64 for index in range(2000)]
+        status = {
+            "track_id": identities[0], "analyzing_track_id": identities[1],
+            "song_states": {identity: dict(state) for identity in identities},
+            "song_bpms": {identity: (None, 0.0, 123.5)[index % 3]
+                          for index, identity in enumerate(identities)},
+        }
+        for field in ("song_states", "song_bpms"):
+            self.assertGreater(len(pickle.dumps(status[field])), CONTROL_LIMIT)
+        frames = deck_status_frames(status, CONTROL_LIMIT, STATE_LIMIT)
         self.assertGreater(len(frames), 1)
-        self.assertTrue(all(len(frame) <= 65536 for frame in frames))
-        self.assertEqual(receive_deck_status(frames, 65536), status)
+        self.assertTrue(all(len(frame) <= CONTROL_LIMIT for frame in frames))
+        self.assertEqual(receive_deck_status(frames, CONTROL_LIMIT), status)
         message = ("updates", 1, 2, [("deck", 0, 1, status)])
-        self.assertGreater(len(encode_deck_update(message, 65536, 16 * 1024 * 1024)), 65536)
-        with self.assertRaisesRegex(BufferError, "metadata"):
-            deck_status_frames({**status, "title": "x" * 65536}, 65536, 16 * 1024 * 1024)
+        data = encode_deck_update(message, UPDATE_LIMIT, STATE_LIMIT)
+        self.assertGreater(len(data), UPDATE_LIMIT)
+        self.assertLessEqual(len(data), STATE_LIMIT)
+        self.assertEqual(pickle.loads(data), message)
+        for field in ("title", "analyzing_track_id", "other_map"):
+            oversized = {**status, field: "x" * CONTROL_LIMIT}
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(BufferError, "metadata"):
+                    deck_status_frames(oversized, CONTROL_LIMIT, STATE_LIMIT)
+                with self.assertRaisesRegex(BufferError, "metadata"):
+                    encode_deck_update(
+                        ("updates", 1, 2, [("deck", 0, 1, oversized)]),
+                        UPDATE_LIMIT, STATE_LIMIT)
         with self.assertRaisesRegex(BufferError, "ordinary"):
-            encode_deck_update(("updates", 1, 2, [("other", "x" * 65536)]),
-                               65536, 16 * 1024 * 1024)
+            encode_deck_update(("updates", 1, 2, [("other", "x" * UPDATE_LIMIT)]),
+                               UPDATE_LIMIT, STATE_LIMIT)
+        with self.assertRaisesRegex(BufferError, "ordinary"):
+            encode_deck_update(("updates", 1, 2, [
+                ("deck", 0, 1, status), ("deck", 1, 1, status)]),
+                UPDATE_LIMIT, STATE_LIMIT)
+
+    def test_status_maps_share_one_exact_total_budget_including_update_envelope(self):
+        status = {
+            "track_id": "0", "analyzing_track_id": "",
+            "song_states": {str(index): {"position": index} for index in range(100)},
+            "song_bpms": {str(index): 120.0 for index in range(100)},
+        }
+        status_data = encode_deck_status(status, CONTROL_LIMIT, STATE_LIMIT)
+        shared_limit = max(
+            len(pickle.dumps({**status, field: {}}, protocol=pickle.HIGHEST_PROTOCOL))
+            for field in ("song_states", "song_bpms"))
+        with self.assertRaisesRegex(BufferError, "deck status exceeds"):
+            encode_deck_status(status, CONTROL_LIMIT, shared_limit)
+        self.assertEqual(
+            encode_deck_status(status, CONTROL_LIMIT, len(status_data)), status_data)
+        with self.assertRaisesRegex(BufferError, "deck status exceeds"):
+            encode_deck_status(status, CONTROL_LIMIT, len(status_data) - 1)
+        message = ("updates", 1, 2, [("deck", 0, 1, status)])
+        update_data = encode_deck_update(message, UPDATE_LIMIT, STATE_LIMIT)
+        self.assertGreater(len(update_data), len(status_data))
+        self.assertEqual(
+            encode_deck_update(message, UPDATE_LIMIT, len(update_data)), update_data)
+        with self.assertRaisesRegex(BufferError, "deck update exceeds"):
+            encode_deck_update(message, UPDATE_LIMIT, len(update_data) - 1)

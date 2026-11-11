@@ -335,6 +335,22 @@ def _build_flow_snapshot(host, engine, details):
                 for field in ("error", "sync_error"):
                     if deck.get(field):
                         track_row(f"Deck {field}", deck[field], state="error" if field == "error" else "warning")
+                song_bpms = deck.get("song_bpms", {})
+                for ordinal, entry in enumerate(deck.get("tracks", []), 1):
+                    song_id = entry["id"]
+                    current = song_id == deck.get("track_id")
+                    requested = not current and song_id == deck.get("requested_track_id")
+                    marker = " (current)" if current else " (requested)" if requested else ""
+                    song_bpm = song_bpms.get(song_id, bpm if current else None)
+                    if song_bpm is not None:
+                        analysis = f"{_value(song_bpm)} BPM" if song_bpm > 0 else "unavailable"
+                    else:
+                        analysis = ("analyzing" if song_id == deck.get("analyzing_track_id")
+                                    else "pending analysis")
+                    if details:
+                        analysis += f"; {song_id} — {entry.get('path', 'not cached')}"
+                    title = entry.get("title") or Path(entry.get("path", "")).name or song_id
+                    track_row(f"Playlist {ordinal}{marker}", title, analysis)
             if details:
                 track_row("Source path", track.path)
                 track_row("Worker", f"PID {track.worker_pid if track.worker_pid is not None else 'none'}",
@@ -351,9 +367,6 @@ def _build_flow_snapshot(host, engine, details):
                                   "cue", "nudge", "phase_offset", "beat_offset",
                                   "beat_confidence", "playback_speed", "beat_phase_error"):
                         track_row(f"Deck {field}", _value(track.deck.get(field, "not cached")))
-                    for ordinal, entry in enumerate(track.deck.get("tracks", []), 1):
-                        track_row(f"Deck selection {ordinal}", entry.get("title") or entry["id"],
-                                  f"{entry['id']} — {entry.get('path', 'not cached')}")
                 for number in linked_banks[index]:
                     track_row(f"Bank {number}", _pattern(banks[number - 1]), f"velocity {banks[number - 1].velocity}")
         for binding in _visible_bindings([binding for binding in all_bindings if binding.track == index + 1], details):

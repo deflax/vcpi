@@ -1,6 +1,7 @@
 """Format-3 deck identity, paused restore, routed input and daemon commands."""
 
 import json
+import pickle
 from pathlib import Path
 import socket
 import struct
@@ -11,6 +12,9 @@ import unittest
 from unittest.mock import patch
 import wave
 
+import numpy as np
+
+from vcpi.audio.protocol import CONTROL_LIMIT, STATE_LIMIT
 from vcpi.controllers.midi_input import MidiInputController
 from vcpi.client import _read_response_lines
 from vcpi.deps import HAS_MIDO, mido
@@ -45,8 +49,8 @@ class DeckSessionTests(unittest.TestCase):
         self.hosts.append(host)
         return host
 
-    def await_status(self, host, index, predicate):
-        deadline = time.monotonic() + 5
+    def await_status(self, host, index, predicate, timeout=5):
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             status = host.engine.tracks[index].deck
             if predicate(status):
@@ -128,6 +132,70 @@ class DeckSessionTests(unittest.TestCase):
         restored.restore_session(start_audio=False)
         self.assertEqual(restored.engine.tracks[0].deck["tracks"], entries)
         self.assertEqual(snapshot(restored)["tracks"][0]["deck"]["tracks"], entries)
+
+    def test_unvisited_song_bpms_reach_host_cache_and_stay_out_of_sessions(self):
+        rate = 16000
+        audio = np.zeros(rate * 40)
+        t = np.arange(int(0.025 * rate)) / rate
+        pulse = 0.7 * np.exp(-t * 180) * np.cos(2 * np.pi * 800 * t)
+        for beat in np.arange(0.137, 40 - 0.025, 60 / 83):
+            begin = round(beat * rate)
+            audio[begin:begin + len(pulse)] += pulse
+        song = self.root / "pulse.wav"
+        with wave.open(str(song), "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(rate)
+            stream.writeframes((audio * 32767).astype("<i2").tobytes())
+        entries = [
+            dict(self.entries[0]),
+            {"id": "slow", "path": str(song), "title": "Slow", "bpm_hint": 83},
+            {"id": "fast", "path": str(song), "title": "Fast", "bpm_hint": 174},
+            {"id": "missing", "path": str(self.root / "absent.wav"), "title": "Missing"},
+        ]
+        host = self.host()
+        host.restore_deck(0, {
+            "bank_id": "analysis", "bank_path": "session:analysis", "track_id": "first",
+            "tracks": entries, "cue": 0.1, "pitch": 2, "position": 0.25,
+            "play": False, "sync": False, "phase_offset": 0.125, "song_states": {},
+        })
+        track = host.engine.tracks[0]
+        identity = (track.worker_pid, track.generation)
+        transport = {key: track.deck[key] for key in (
+            "track_id", "requested_track_id", "position", "cue", "pitch", "play",
+            "sync", "phase_offset", "bpm")}
+        ids = {entry["id"] for entry in entries}
+        # Only read the control cache while both native owners publish asynchronously.
+        with patch.object(host.engine, "request", side_effect=AssertionError("unexpected RPC")):
+            status = self.await_status(
+                host, 0, lambda state: set(state.get("song_bpms", {})) == ids
+                and all(value is not None for value in state["song_bpms"].values())
+                and state.get("analyzing_track_id") == "", timeout=15)
+        self.assertEqual({key: status[key] for key in transport}, transport)
+        self.assertEqual((track.worker_pid, track.generation), identity)
+        self.assertEqual(status["song_bpms"]["first"], 0)
+        self.assertEqual(status["song_bpms"]["missing"], 0)
+        self.assertAlmostEqual(status["song_bpms"]["slow"], 83, delta=0.2)
+        self.assertAlmostEqual(status["song_bpms"]["fast"], 166, delta=0.2)
+        self.assertEqual(status["tracks"], entries)
+        self.assertFalse(status["error"])
+        self.assertFalse(track.worker_failure)
+        expected = dict(status["song_bpms"])
+        host.save_session()
+        self.assertEqual(host.engine.tracks[0].deck["song_bpms"], expected)
+        self.assertEqual(host.engine.tracks[0].deck["analyzing_track_id"], "")
+        saved = json.loads(self.session.read_text())["tracks"][0]["deck"]
+        self.assertEqual(saved["tracks"], entries)
+        for field in ("song_bpms", "analyzing_track_id", "bpm", "beat_confidence"):
+            self.assertNotIn(field, saved)
+            self.assertTrue(all(field not in entry for entry in saved["tracks"]))
+        restored = self.host()
+        restored.restore_session(start_audio=False)
+        completed = self.await_status(
+            restored, 0, lambda state: state.get("song_bpms") == expected
+            and state.get("analyzing_track_id") == "", timeout=15)
+        self.assertEqual(completed["tracks"], entries)
+        self.assertEqual(completed["track_id"], "first")
 
     def test_malformed_bpm_hints_preserve_existing_deck_on_load_and_restore(self):
         host = self.host()
@@ -211,25 +279,38 @@ class DeckSessionTests(unittest.TestCase):
         self.assertEqual({key: current[key] for key in states[first]}, states[first])
         self.assertEqual(current["song_states"], expected)
 
-    def test_large_song_map_propagates_through_live_status_channels(self):
+    def test_large_song_maps_propagate_through_live_status_channels(self):
         host = self.host()
         count = 1200
+        identities = [f"song-{index:04d}-" + "x" * 64 for index in range(count)]
         host.restore_deck(0, {
-            "bank_id": "large-set", "bank_path": "session:large-set", "track_id": "0",
-            "tracks": [{"id": str(index), "path": str(self.root / "first.wav"),
-                        "title": str(index)} for index in range(count)],
+            "bank_id": "large-set", "bank_path": "session:large-set", "track_id": identities[0],
+            "tracks": [{"id": identity, "path": str(self.root / "first.wav"),
+                        "title": str(index)} for index, identity in enumerate(identities)],
             "cue": 0, "pitch": 0, "position": 0, "play": False,
             "sync": True, "phase_offset": 0, "song_states": {},
         })
         host.engine.set_parameter(0, "phase_offset", 0.25)
         status = self.await_status(
             host, 0, lambda state: state.get("phase_offset") == 0.25
-            and len(state.get("song_states", {})) == count)
-        self.assertEqual(status["song_states"]["0"]["phase_offset"], 0.25)
-        self.assertEqual(status["song_states"][str(count - 1)]["position"], 0)
+            and len(state.get("song_states", {})) == count
+            and len(state.get("song_bpms", {})) == count)
+        self.assertEqual(status["song_states"][identities[0]]["phase_offset"], 0.25)
+        self.assertEqual(status["song_states"][identities[-1]]["position"], 0)
+        self.assertEqual(set(status["song_bpms"]), set(identities))
+        self.assertIn("analyzing_track_id", status)
+        self.assertFalse(host.engine.tracks[0].worker_failure)
+        for field in ("song_states", "song_bpms"):
+            self.assertGreater(len(pickle.dumps(status[field])), CONTROL_LIMIT)
+        self.assertLess(len(pickle.dumps(status)), STATE_LIMIT)
         host.save_session()
         saved = json.loads(self.session.read_text())["tracks"][0]["deck"]
         self.assertEqual(len(saved["song_states"]), count)
+        self.assertNotIn("song_bpms", saved)
+        self.assertNotIn("analyzing_track_id", saved)
+        captured = host.engine.tracks[0].deck
+        self.assertEqual(set(captured["song_bpms"]), set(identities))
+        self.assertIn("analyzing_track_id", captured)
 
     def test_invalid_phase_offset_restore_preserves_existing_deck(self):
         host = self.host()

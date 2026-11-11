@@ -86,6 +86,47 @@ class NativeDeckSyncTests(unittest.TestCase):
             time.sleep(0.001)
         return plugin.deck_status()
 
+    def settle_analysis(self, plugin):
+        deadline = time.monotonic() + 15
+        while True:
+            status = plugin.deck_status()
+            if all(bpm is not None for bpm in status["song_bpms"].values()):
+                return status
+            self.assertLess(time.monotonic(), deadline, status)
+            time.sleep(0.001)
+
+    def test_unvisited_playlist_bpms_complete_without_render_or_selection(self):
+        paths = [self.percussion(f"background-{bpm}", bpm=bpm) for bpm in (120, 90, 150)]
+        plugin, _ = self.deck(paths, cue=0.25, pitch=2, phase_offset=0.125)
+        before = plugin.deck_status()
+        self.assertEqual(set(before["song_bpms"]), {"0", "1", "2"})
+        after = self.settle_analysis(plugin)
+        for track_id, bpm in zip(("0", "1", "2"), (120, 90, 150)):
+            self.assertAlmostEqual(after["song_bpms"][track_id], bpm, delta=0.15)
+        self.assertEqual(after["analyzing_track_id"], "")
+        for key in ("track_id", "requested_track_id", "request_id", "index", "position",
+                    "cue", "pitch", "phase_offset", "play", "bpm", "song_states"):
+            self.assertEqual(after[key], before[key], key)
+        self.assertTrue(after["ready"])
+        self.assertFalse(after["loading"])
+        self.assertEqual(after["error"], "")
+
+    def test_unvisited_entries_with_same_source_keep_independent_hints(self):
+        path = self.groove(166, "two-step")
+        plugin, _ = self.deck([path, path, path], bpm_hint=83)
+        entries = [{"id": str(i), "title": path.stem, "path": str(path)} for i in range(3)]
+        entries[0]["bpm_hint"] = 83
+        entries[1]["bpm_hint"] = 174
+        plugin.update_deck_catalog(json.dumps({
+            "id": "sync-bank", "bank_path": str(self.root / "bank.json"), "tracks": entries,
+        }))
+        status = self.settle_analysis(plugin)
+        for track_id, bpm in (("0", 83), ("1", 166), ("2", 166)):
+            self.assertAlmostEqual(status["song_bpms"][track_id], bpm, delta=0.2)
+        self.assertEqual(status["track_id"], "0")
+        self.assertAlmostEqual(status["bpm"], 83, delta=0.2)
+        self.assertFalse(status["play"])
+
     def pulse_times(self, audio):
         indices = np.flatnonzero(np.abs(audio) > 0.08)
         self.assertGreater(len(indices), 0)
@@ -237,6 +278,9 @@ class NativeDeckSyncTests(unittest.TestCase):
                 self.assertAlmostEqual(after["bpm"], expected, delta=0.2)
                 for key in ("position", "cue", "pitch", "phase_offset", "nudge", "sync", "play"):
                     self.assertEqual(after[key], before[key], key)
+                analyzed = self.settle_analysis(plugin)
+                for bpm in analyzed["song_bpms"].values():
+                    self.assertAlmostEqual(bpm, expected, delta=0.2)
                 plugin.set_parameter("index", 2)
                 inactive = self.settle_request((plugin, runner))
                 self.assertAlmostEqual(inactive["bpm"], expected, delta=0.2)

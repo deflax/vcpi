@@ -81,6 +81,8 @@ py::dict deckDict(const DeckStatus& info) {
     result["playback_speed"] = info.playbackSpeed;
     result["beat_phase_error"] = info.beatPhaseError;
     result["error"] = info.error;
+    result["song_bpms"] = py::cast(info.songBpms);
+    result["analyzing_track_id"] = info.analyzingTrackId;
     py::dict songs;
     for (const auto& entry : info.songStates) {
         const auto& state = entry.second;

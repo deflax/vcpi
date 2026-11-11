@@ -381,6 +381,11 @@ class NativeDeckTests(unittest.TestCase):
             try:
                 while not stop.is_set():
                     peaks.append(float(np.max(np.abs(runner.render_once()))))
+                    snapshot = plugin.deck_status()
+                    self.assertEqual(set(snapshot["song_bpms"]), set(snapshot["song_states"]))
+                    self.assertIn(snapshot["track_id"], snapshot["song_bpms"])
+                    if snapshot["analyzing_track_id"]:
+                        self.assertIn(snapshot["analyzing_track_id"], snapshot["song_bpms"])
                     started.set()
                     stop.wait(0.001)
             except BaseException as error:
@@ -602,6 +607,88 @@ class NativeDeckTests(unittest.TestCase):
         self.assertEqual(status["error"], "")
         self.assertEqual(plugin.deck_status()["phase_offset"], 0.3)
         self.assertEqual(plugin.deck_status()["song_states"]["track-2"], remembered["track-2"])
+
+    def test_background_unavailable_entries_do_not_fail_or_select_the_deck(self):
+        corrupt = self.root / "corrupt.wav"
+        corrupt.write_bytes(b"not an audio file")
+        paths = [self.tone("active", seconds=12), self.root / "missing.wav",
+                 corrupt, self.tone("unreliable")]
+        plugin, runner, _ = self.deck(paths, cue=0.25, pitch=1.5, sync=False)
+        before = plugin.deck_status()
+        status = self.await_state(plugin, runner, lambda s: all(
+            bpm is not None for bpm in s["song_bpms"].values()))
+        self.assertEqual(status["song_bpms"], {f"track-{i}": 0 for i in range(1, 5)})
+        self.assertEqual(status["analyzing_track_id"], "")
+        self.assertEqual(status["song_states"], before["song_states"])
+        self.assertEqual(status["request_id"], before["request_id"])
+        self.assertEqual(status["track_id"], "track-1")
+        self.assertEqual(status["error"], "")
+        self.assertTrue(status["ready"])
+        plugin.set_parameter("play", True)
+        self.assertGreater(np.max(np.abs(self.render(runner, 8))), 0.1)
+        plugin.set_parameter("index", 2)
+        failed = self.await_state(plugin, runner, lambda s: bool(s["error"]))
+        self.assertEqual(failed["track_id"], "track-1")
+        self.assertEqual(failed["requested_track_id"], "track-2")
+        self.assertTrue(failed["play"])
+        self.assertEqual(failed["song_bpms"]["track-2"], 0)
+
+    def test_background_analysis_feeds_playback_and_yields_to_selection_and_catalog(self):
+        paths = [self.tone("playing", seconds=20),
+                 self.sparse_wav("background.wav", 48000, 20000),
+                 self.tone("priority", seconds=20, frequency=700)]
+        plugin, runner, _ = self.deck(paths, sync=False)
+        analyzing = self.await_state(plugin, runner, lambda s: s["analyzing_track_id"] == "track-2")
+        self.assertIsNone(analyzing["song_bpms"]["track-2"])
+        self.assertEqual(analyzing["track_id"], "track-1")
+        self.assertFalse(analyzing["loading"])
+        plugin.set_parameter("play", True)
+        # Consume more than one entire read-ahead ring while the large private
+        # analysis reader runs. The worker must still refill the playing reader.
+        for _ in range(600):
+            audio = runner.render_once()
+            self.assertGreater(np.max(np.abs(audio)), 0.1)
+            self.assertFalse(plugin.deck_status()["buffering"])
+            time.sleep(0.001)
+        plugin.deck_command("seek", 0.5)
+        sought = self.await_state(plugin, runner, lambda s: not s["loading"])
+        self.assertEqual(sought["track_id"], "track-1")
+        self.assertTrue(sought["play"])
+        self.assertGreaterEqual(sought["position"], 0.5)
+        self.assertEqual(sought["error"], "")
+        self.await_state(plugin, runner, lambda s: s["analyzing_track_id"] == "track-2")
+        before = plugin.deck_status()
+        plugin.set_parameter("index", 3)
+        requested = plugin.deck_status()
+        self.assertEqual(requested["track_id"], "track-1")
+        self.assertEqual(requested["requested_track_id"], "track-3")
+        self.assertEqual(requested["bpm"], before["bpm"])
+        selected = self.await_state(plugin, runner, lambda s: not s["loading"])
+        self.assertEqual(selected["track_id"], "track-3")
+        self.assertEqual(selected["error"], "")
+        self.assertFalse(selected["play"])
+        self.await_state(plugin, runner, lambda s: s["analyzing_track_id"] == "track-2")
+        start = time.monotonic()
+        plugin.update_deck_catalog(self.catalog([paths[2], self.root / "removed-missing.wav"], ids=[3, 4]))
+        self.assertLess(time.monotonic() - start, 5, "Catalog edit must join cancelled background analysis")
+        after = self.await_state(plugin, runner, lambda s: s["song_bpms"].get("track-4") == 0)
+        self.assertEqual(set(after["song_bpms"]), {"track-3", "track-4"})
+        self.assertEqual(after["analyzing_track_id"], "")
+        self.assertEqual(after["track_id"], "track-3")
+        self.assertEqual(after["index"], 1)
+        self.assertEqual(after["error"], "")
+        self.assertEqual(after["song_states"]["track-3"], selected["song_states"]["track-3"])
+
+    def test_teardown_joins_unvisited_analysis(self):
+        plugin, runner, transport = self.deck([
+            self.tone("active"), self.sparse_wav("unvisited.wav", 48000, 20000)])
+        self.await_state(plugin, runner, lambda s: s["analyzing_track_id"] == "track-2")
+        start = time.monotonic()
+        runner.shutdown()
+        self.runners.remove(runner)
+        del runner, plugin, transport
+        gc.collect()
+        self.assertLess(time.monotonic() - start, 5, "Teardown must join the background analyzer")
 
     def test_cd_audio_preserves_treble_at_unity_speed(self):
         for output_rate in (44100, 48000):

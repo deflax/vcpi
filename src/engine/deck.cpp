@@ -159,8 +159,13 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
         if (remap[i] == 0) continue;
         auto& replacementTrack = replacement.tracks[static_cast<std::size_t>(remap[i] - 1)];
         if (replacementTrack.bpmHint != tracks[i].bpmHint) continue;
+        replacementTrack.analysis->force.store(tracks[i].analysis->force.load());
+        if (!tracks[i].gridSource ||
+            !BeatAnalysisCache(replacementTrack.path, replacementTrack.bpmHint).matches(*tracks[i].gridSource))
+            continue;
         replacementTrack.grid = tracks[i].grid;
         replacementTrack.gridSource = tracks[i].gridSource;
+        replacementTrack.analysis->bpm.store(tracks[i].analysis->bpm.load());
     }
     int oldTrack, newTrack, prepared = -1;
     bool refreshActive = false;
@@ -247,6 +252,11 @@ void Deck::request(int track, double seconds, Mode mode) {
         previous == finishedRequest.load(std::memory_order_acquire)) return;
     const auto song = mode == selection
         ? tracks[static_cast<std::size_t>(track - 1)].memory->load() : DeckSongState{};
+    if (mode == reanalysis) {
+        auto& analysis = *tracks[static_cast<std::size_t>(track - 1)].analysis;
+        analysis.force.store(true, std::memory_order_release);
+        analysis.bpm.store(-1, std::memory_order_release);
+    }
     requested = {previous + 1, track, mode == selection ? song.position : seconds, mode, song};
     requestedTrack.store(track, std::memory_order_relaxed);
     {
@@ -300,26 +310,100 @@ bool Deck::fill(Stream& stream) {
     stream.written.store(next, std::memory_order_release);
     return true;
 }
-bool Deck::analyze(Stream& stream, BeatAnalysis& grid, std::optional<double> bpmHint) {
-    // QM's dynamic programs do not accept callbacks. Keep them on a preparation
-    // task while this thread continues feeding the active stream. Bounded tracker
-    // windows check cancellation between expensive stages; no detached work can
-    // retain a reader or Deck after a selection change or destruction.
-    std::atomic<bool> cancel{false};
-    auto result = std::async(std::launch::async, [&] { return analyzeBeats(*stream.reader, cancel, bpmHint); });
-    while (result.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
-        if (cancelled(stream.request.id)) cancel.store(true, std::memory_order_relaxed);
-        for (auto& other : streams) {
-            if (&other == &stream || other.state.load(std::memory_order_acquire) != active) continue;
-            try { fill(other); }
-            catch (const std::exception& error) {
-                other.failed.store(true, std::memory_order_release);
-                setError(other.request.id, error.what());
-            }
+bool Deck::feedStreams() {
+    bool didWork = false;
+    for (auto& stream : streams) {
+        const auto state = stream.state.load(std::memory_order_acquire);
+        if (state != active && state != ready && state != held) continue;
+        try { didWork = fill(stream) || didWork; }
+        catch (const std::exception& error) {
+            stream.failed.store(true, std::memory_order_release);
+            setError(stream.request.id, error.what());
+        } catch (...) {
+            stream.failed.store(true, std::memory_order_release);
+            setError(stream.request.id, "Unknown deck read failure");
         }
     }
-    grid = result.get();
-    return !cancelled(stream.request.id);
+    return didWork;
+}
+std::unique_ptr<juce::AudioFormatReader> Deck::openReader(const Track& track) {
+    const juce::File file{juce::String(track.path)};
+    if (!file.hasFileExtension("wav;wave;aif;aiff;aifc;mp3;flac"))
+        throw std::invalid_argument("Deck supports AIFF, WAV, MP3 and FLAC files");
+    if (!std::filesystem::is_regular_file(file.getFullPathName().toStdString()))
+        throw std::invalid_argument("Deck audio must be a regular file");
+    std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+    if (!reader) throw std::runtime_error("Unable to decode deck audio: " + file.getFullPathName().toStdString());
+    if (reader->numChannels < 1 || reader->numChannels > 2)
+        throw std::invalid_argument("Deck audio must be mono or stereo");
+    if (!std::isfinite(reader->sampleRate) || reader->sampleRate < 8000 ||
+        reader->sampleRate > 768000 || reader->lengthInSamples <= 0)
+        throw std::invalid_argument("Invalid deck audio rate or empty audio");
+    return reader;
+}
+bool Deck::analyze(Track& track, juce::AudioFormatReader& reader, std::uint64_t id, BeatAnalysis& grid) {
+    {
+        std::lock_guard<std::mutex> lock(controlMutex);
+        if (cancelled(id)) return false;
+        analyzingTrackId = track.id;
+    }
+    // The same bounded, cancellable QM task serves selected and unvisited
+    // entries. Its reader is private; this worker keeps ALL playable rings fed.
+    std::atomic<bool> cancel{false};
+    try {
+        auto result = std::async(std::launch::async, [&] { return analyzeBeats(reader, cancel, track.bpmHint); });
+        while (result.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
+            if (cancelled(id)) cancel.store(true, std::memory_order_relaxed);
+            feedStreams();
+        }
+        grid = result.get();
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(controlMutex);
+        analyzingTrackId.clear();
+        throw;
+    }
+    std::lock_guard<std::mutex> lock(controlMutex);
+    analyzingTrackId.clear();
+    return !cancelled(id);
+}
+bool Deck::ensureGrid(Track& track, std::uint64_t id, juce::AudioFormatReader* reader) {
+    if (cancelled(id)) return false;
+    auto source = std::make_shared<BeatAnalysisCache>(track.path, track.bpmHint);
+    const bool forced = track.analysis->force.load(std::memory_order_acquire);
+    if (forced) source->erase();
+    if (forced || !track.gridSource || !source->matches(*track.gridSource)) {
+        track.grid.reset();
+        track.gridSource.reset();
+        track.analysis->bpm.store(-1, std::memory_order_release);
+    }
+    if (!track.grid) {
+        auto grid = forced ? std::optional<BeatAnalysis>{} : source->load();
+        if (!grid) {
+            // Background cache hits never open or decode the source audio.
+            auto ownedReader = reader ? nullptr : openReader(track);
+            BeatAnalysis analyzed;
+            if (!analyze(track, reader ? *reader : *ownedReader, id, analyzed)) return false;
+            source->store(analyzed);
+            grid = analyzed;
+        }
+        track.grid = grid;
+        track.gridSource = std::move(source);
+    }
+    // Serialize publication with reanalysis invalidation. A cancelled result
+    // may remain a reusable grid, but cannot overwrite a newer pending display.
+    std::lock_guard<std::mutex> lock(controlMutex);
+    if (cancelled(id)) return false;
+    track.analysis->bpm.store(track.grid->bpm, std::memory_order_release);
+    track.analysis->force.store(false, std::memory_order_release);
+    return true;
+}
+void Deck::unavailable(Track& track, std::uint64_t id) {
+    std::lock_guard<std::mutex> lock(controlMutex);
+    if (cancelled(id)) return;
+    track.grid.reset();
+    track.gridSource.reset();
+    track.analysis->bpm.store(0, std::memory_order_release);
+    track.analysis->force.store(false, std::memory_order_release);
 }
 void Deck::publishGrid(const Stream& stream) noexcept {
     detectedBpm.store(stream.grid.bpm, std::memory_order_relaxed);
@@ -333,38 +417,10 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
     stream.failed.store(false);
     stream.read.store(0);
     stream.written.store(0);
-    const juce::File file{juce::String(track.path)};
-    if (!file.hasFileExtension("wav;wave;aif;aiff;aifc;mp3;flac"))
-        throw std::invalid_argument("Deck supports AIFF, WAV, MP3 and FLAC files");
-    if (!std::filesystem::is_regular_file(file.getFullPathName().toStdString()))
-        throw std::invalid_argument("Deck audio must be a regular file");
-    // Capture identity for every preparation, even seeks. In-memory reuse is
-    // valid only for exactly the source revision that produced the cached grid.
-    auto source = std::make_shared<BeatAnalysisCache>(track.path, track.bpmHint);
-    stream.reader.reset(formats.createReaderFor(file));
-    if (!stream.reader) throw std::runtime_error("Unable to decode deck audio: " + file.getFullPathName().toStdString());
-    if (stream.reader->numChannels < 1 || stream.reader->numChannels > 2)
-        throw std::invalid_argument("Deck audio must be mono or stereo");
+    stream.reader = openReader(track);
     stream.rate = stream.reader->sampleRate;
     stream.length = stream.reader->lengthInSamples;
-    if (!std::isfinite(stream.rate) || stream.rate < 8000 || stream.rate > 768000 || stream.length <= 0)
-        throw std::invalid_argument("Invalid deck audio rate or empty audio");
-    if (wanted.mode == reanalysis) {
-        source->erase();
-        track.grid.reset();
-        track.gridSource.reset();
-    }
-    if (!track.grid || !track.gridSource || !source->matches(*track.gridSource)) {
-        auto grid = wanted.mode == reanalysis ? std::optional<BeatAnalysis>{} : source->load();
-        if (!grid) {
-            BeatAnalysis analyzed;
-            if (!analyze(stream, analyzed, track.bpmHint)) return false;
-            source->store(analyzed);
-            grid = analyzed;
-        }
-        track.grid = grid;
-        track.gridSource = std::move(source);
-    }
+    if (!ensureGrid(track, wanted.id, stream.reader.get())) return false;
     stream.grid = *track.grid;
     stream.target = std::clamp(wanted.seconds * stream.rate, 0.0, static_cast<double>(stream.length));
     const auto targetFrame = static_cast<juce::int64>(std::floor(stream.target));
@@ -384,6 +440,7 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
 }
 void Deck::work() noexcept {
     std::uint64_t handled = 0;
+    std::size_t background = 0;
     while (!stopping.load(std::memory_order_acquire)) {
         bool didWork = false;
         for (auto& stream : streams) {
@@ -400,6 +457,7 @@ void Deck::work() noexcept {
         }
         const auto newest = latestRequest.load(std::memory_order_acquire);
         if (newest != handled) {
+            background = 0;
             Request wanted;
             { std::lock_guard<std::mutex> lock(controlMutex); wanted = requested; }
             if (wanted.id == finishedRequest.load(std::memory_order_acquire)) handled = wanted.id;
@@ -411,9 +469,11 @@ void Deck::work() noexcept {
                         stream.state.store(ready, std::memory_order_release);
                     else stream.state.store(retired, std::memory_order_release);
                 } catch (const std::exception& error) {
+                    unavailable(tracks[static_cast<std::size_t>(wanted.track - 1)], wanted.id);
                     setError(wanted.id, error.what());
                     stream.state.store(retired, std::memory_order_release);
                 } catch (...) {
+                    unavailable(tracks[static_cast<std::size_t>(wanted.track - 1)], wanted.id);
                     setError(wanted.id, "Unknown deck preparation failure");
                     stream.state.store(retired, std::memory_order_release);
                 }
@@ -422,16 +482,22 @@ void Deck::work() noexcept {
                 break;
             }
         }
-        for (auto& stream : streams) {
-            const auto state = stream.state.load(std::memory_order_acquire);
-            if (state != active && state != ready && state != held) continue;
-            try { didWork = fill(stream) || didWork; }
-            catch (const std::exception& error) {
-                stream.failed.store(true, std::memory_order_release);
-                setError(stream.request.id, error.what());
-            } catch (...) {
-                stream.failed.store(true, std::memory_order_release);
-                setError(stream.request.id, "Unknown deck read failure");
+        didWork = feedStreams() || didWork;
+        // First top up playback and prepare the newest selection/seek. A new
+        // request cancels background QM at its existing bounded checkpoints.
+        if (!didWork && latestRequest.load(std::memory_order_acquire) == handled) {
+            while (background < tracks.size() &&
+                   tracks[background].analysis->bpm.load(std::memory_order_acquire) >= 0)
+                ++background;
+            if (background < tracks.size()) {
+                auto& track = tracks[background];
+                try {
+                    if (ensureGrid(track, handled)) ++background;
+                } catch (...) {
+                    unavailable(track, handled);
+                    if (!cancelled(handled)) ++background;
+                }
+                didWork = true;
             }
         }
         if (!didWork) std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -646,6 +712,15 @@ DeckStatus Deck::status() const {
     result.bankId = bank;
     result.songStates.reserve(tracks.size());
     for (const auto& track : tracks) result.songStates.emplace(track.id, DeckSongState{});
+    result.songBpms.reserve(tracks.size());
+    {
+        std::lock_guard<std::mutex> lock(controlMutex);
+        result.analyzingTrackId = analyzingTrackId;
+        for (const auto& track : tracks) {
+            const auto bpm = track.analysis->bpm.load(std::memory_order_acquire);
+            result.songBpms.emplace(track.id, bpm < 0 ? std::nullopt : std::optional<double>{bpm});
+        }
+    }
     // With catalog edits serialized by the control owner, only a render commit
     // can change this identity/duration tuple. The render thread never waits
     // for snapshot readers; readers retry on the control thread.
