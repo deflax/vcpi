@@ -57,6 +57,7 @@ class NativeDeckTests(unittest.TestCase):
         ids = range(1, len(paths) + 1) if ids is None else ids
         return json.dumps({
             "version": 1, "id": "test-bank", "bank_path": "session:test-bank",
+            "sync_filter": False,  # Manual tone fixtures deliberately have no beat grid.
             "tracks": [{"id": f"track-{i}", "path": str(path), "title": f"Title {i}"}
                        for i, path in zip(ids, paths)], **initial})
 

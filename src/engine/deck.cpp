@@ -50,6 +50,11 @@ void Deck::SongMemory::store(const DeckSongState& state) noexcept {
 }
 Deck::Catalog Deck::parseCatalog(const juce::var& parsed) {
     Catalog result{parsed["id"].toString().toStdString(), parsed["bank_path"].toString().toStdString(), {}};
+    if (parsed.hasProperty("sync_filter")) {
+        if (!parsed["sync_filter"].isBool())
+            throw std::invalid_argument("Deck sync_filter must be a boolean");
+        result.syncFilter = static_cast<bool>(parsed["sync_filter"]);
+    }
     const auto* entries = parsed["tracks"].getArray();
     if (result.bank.empty() || entries == nullptr || entries->isEmpty())
         throw std::invalid_argument("Deck requires a resolved nonempty playlist catalog");
@@ -103,11 +108,21 @@ Deck::Deck(const std::string& catalog, double rate)
     bank = std::move(resolved.bank);
     locator = std::move(resolved.locator);
     tracks = std::move(resolved.tracks);
+    syncFilter = resolved.syncFilter;
     const auto initial = resolved.initialTrack;
-    const auto initialState = tracks[static_cast<std::size_t>(initial - 1)].memory->load();
+    auto initialState = tracks[static_cast<std::size_t>(initial - 1)].memory->load();
     for (auto& stream : streams)
         for (auto& channel : stream.ring) channel.resize(capacity + mirror);
     requested = {0, static_cast<int>(initial), initialState.position, restore, initialState};
+    formats.registerFormat(new juce::WavAudioFormat(), true);
+    formats.registerFormat(new juce::AiffAudioFormat(), false);
+    formats.registerFormat(new juce::MP3AudioFormat(), false);
+    formats.registerFormat(new juce::FlacAudioFormat(), false);
+    // Nothing is published and no thread exists until the first reader and its
+    // bounded read-ahead have succeeded. A throwing constructor cannot leak a worker.
+    prepareCatalog(streams[0], requested, tracks, syncFilter);
+    requested = streams[0].request;
+    initialState = requested.song;
     requestedTrack.store(requested.track);
     appliedTrack.store(requested.track);
     pitchTarget.store(initialState.pitch);
@@ -115,13 +130,6 @@ Deck::Deck(const std::string& catalog, double rate)
     pitch = initialState.pitch;
     syncEnabled.store(initialState.sync);
     playing.store(initialState.play);
-    formats.registerFormat(new juce::WavAudioFormat(), true);
-    formats.registerFormat(new juce::AiffAudioFormat(), false);
-    formats.registerFormat(new juce::MP3AudioFormat(), false);
-    formats.registerFormat(new juce::FlacAudioFormat(), false);
-    // Nothing is published and no thread exists until the first reader and its
-    // bounded read-ahead have succeeded. A throwing constructor cannot leak a worker.
-    prepare(streams[0], requested, tracks[static_cast<std::size_t>(requested.track - 1)]);
     streams[0].state.store(active);
     cursor = streams[0].target;
     cueSeconds.store(std::min(initialState.cue, static_cast<double>(streams[0].length) / streams[0].rate));
@@ -158,6 +166,7 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
     for (std::size_t i = 0; i < tracks.size(); ++i) {
         if (remap[i] == 0) continue;
         auto& replacementTrack = replacement.tracks[static_cast<std::size_t>(remap[i] - 1)];
+        replacementTrack.memory->store(tracks[i].memory->load());
         if (replacementTrack.bpmHint != tracks[i].bpmHint) continue;
         replacementTrack.analysis->force.store(tracks[i].analysis->force.load());
         if (!tracks[i].gridSource ||
@@ -179,8 +188,11 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
         oldTrack = appliedTrack.load(std::memory_order_relaxed);
         newTrack = remap[static_cast<std::size_t>(oldTrack - 1)];
         refreshActive = newTrack != 0 &&
-            tracks[static_cast<std::size_t>(oldTrack - 1)].bpmHint !=
-                replacement.tracks[static_cast<std::size_t>(newTrack - 1)].bpmHint;
+            (tracks[static_cast<std::size_t>(oldTrack - 1)].bpmHint !=
+                 replacement.tracks[static_cast<std::size_t>(newTrack - 1)].bpmHint ||
+             (replacement.syncFilter &&
+              (!syncFilter || !replacement.tracks[static_cast<std::size_t>(newTrack - 1)].grid ||
+               streams[current].grid.bpm <= 0)));
         if (refreshActive)
             activeSong = {cursor / streams[current].rate, cueSeconds.load(std::memory_order_relaxed),
                           pitchTarget.load(std::memory_order_relaxed), phaseOffset.load(std::memory_order_relaxed),
@@ -206,12 +218,13 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
             auto& next = replacement.tracks[static_cast<std::size_t>(newTrack - 1)];
             // Cancelled pending selections cannot mutate inactive memory.
             const auto old = oldEntries.find(next.id);
-            const auto song = refreshActive ? activeSong : old == oldEntries.end()
+            auto song = refreshActive ? activeSong : old == oldEntries.end()
                 ? next.memory->load() : tracks[old->second].memory->load();
+            if (replacement.syncFilter && !refreshActive && replacement.bank == bank) song.play = false;
             // A hint change refreshes analysis, not the song's performance controls.
             const Request wanted{id, newTrack, song.position, refreshActive ? seek : selection, song};
-            if (!prepare(streams[prepared], wanted, next))
-                throw std::runtime_error("Deck playlist replacement was cancelled");
+            prepareCatalog(streams[prepared], wanted, replacement.tracks, replacement.syncFilter);
+            newTrack = streams[prepared].request.track;
         }
         {
             ControlOwnership lock(ownership);
@@ -224,6 +237,7 @@ void Deck::updateCatalog(const std::string& catalog, Ownership& ownership) {
             bank.swap(replacement.bank);
             locator.swap(replacement.locator);
             tracks.swap(replacement.tracks);
+            syncFilter = replacement.syncFilter;
             requested = {id, newTrack, 0, selection};
             requestedTrack.store(newTrack, std::memory_order_release);
             if (prepared >= 0) {
@@ -412,7 +426,29 @@ void Deck::publishGrid(const Stream& stream) noexcept {
     syncActive.store(false, std::memory_order_relaxed);
     beatPhaseError.store(0, std::memory_order_relaxed);
 }
-bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
+void Deck::prepareCatalog(Stream& stream, Request wanted, std::vector<Track>& entries, bool filter) {
+    const int initial = wanted.track;
+    const int count = static_cast<int>(entries.size());
+    for (int offset = 0; offset < (filter ? count : 1); ++offset) {
+        wanted.track = (initial - 1 + offset) % count + 1;
+        auto& track = entries[static_cast<std::size_t>(wanted.track - 1)];
+        if (offset != 0) {
+            wanted.song = track.memory->load();
+            wanted.song.play = false;
+            wanted.seconds = wanted.song.position;
+            wanted.mode = selection;
+        }
+        try {
+            if (prepare(stream, wanted, track, filter)) return;
+            throw std::runtime_error("Deck playlist preparation was cancelled");
+        } catch (const std::exception&) {
+            if (!filter || cancelled(wanted.id)) throw;
+            unavailable(track, wanted.id);
+        }
+    }
+    throw std::runtime_error("No sync-ready playlist entries: no readable audio with a reliable beat grid");
+}
+bool Deck::prepare(Stream& stream, const Request& wanted, Track& track, bool requireGrid) {
     stream.request = wanted;
     stream.failed.store(false);
     stream.read.store(0);
@@ -422,6 +458,8 @@ bool Deck::prepare(Stream& stream, const Request& wanted, Track& track) {
     stream.length = stream.reader->lengthInSamples;
     if (!ensureGrid(track, wanted.id, stream.reader.get())) return false;
     stream.grid = *track.grid;
+    if (requireGrid && stream.grid.bpm <= 0)
+        throw std::runtime_error("Deck playlist entry is not sync-ready: no reliable beat grid");
     stream.target = std::clamp(wanted.seconds * stream.rate, 0.0, static_cast<double>(stream.length));
     const auto targetFrame = static_cast<juce::int64>(std::floor(stream.target));
     stream.nextSource = targetFrame - history / 2;
@@ -465,7 +503,8 @@ void Deck::work() noexcept {
                 if (stream.state.load(std::memory_order_acquire) != free) continue;
                 stream.state.store(preparing, std::memory_order_release);
                 try {
-                    if (prepare(stream, wanted, tracks[static_cast<std::size_t>(wanted.track - 1)]))
+                    if (prepare(stream, wanted, tracks[static_cast<std::size_t>(wanted.track - 1)],
+                                syncFilter && wanted.mode == selection))
                         stream.state.store(ready, std::memory_order_release);
                     else stream.state.store(retired, std::memory_order_release);
                 } catch (const std::exception& error) {
@@ -710,6 +749,7 @@ void Deck::command(const std::string& action, double value) {
 DeckStatus Deck::status() const {
     DeckStatus result;
     result.bankId = bank;
+    result.syncFilter = syncFilter;
     result.songStates.reserve(tracks.size());
     for (const auto& track : tracks) result.songStates.emplace(track.id, DeckSongState{});
     result.songBpms.reserve(tracks.size());

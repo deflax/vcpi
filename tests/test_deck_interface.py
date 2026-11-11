@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 from rich.console import Console
 
-from vcpi.controllers.akai_midimix import KNOB_CCS, MUTE_NOTES, MidiMixController
+from vcpi.controllers.akai_midimix import FADER_CCS, KNOB_CCS, MUTE_NOTES, MidiMixController
 from vcpi.controllers.midi_input import MidiInputController
 from vcpi.audio_state import ParameterSnapshot, PluginSnapshot, apply_deck_status
 from vcpi.commands.cli import HostCLI
@@ -40,6 +40,7 @@ def deck_track(generation=7):
         "request_id": 4, "state": "loading", "play": False,
         "position": 12.5, "duration": 100, "cue": 2.0, "pitch": -1.25,
         "nudge": 0, "sync": False, "phase_offset": 0.25, "error": "",
+        "sync_filter": False,
         "tracks": [{"id": str(i), "title": f"Title {i}", "path": f"/music/{i}.wav"}
                    for i in range(257)],
     }
@@ -67,7 +68,9 @@ class DeckCLITests(unittest.TestCase):
     def test_malformed_analysis_hint_options_do_not_replace_loaded_deck(self):
         for suffix in ("--bpm-hint", "--bpm-hint nope",
                        "--bpm-hint --name DnB", "--bpm-hint 174 --bpm-hint 83",
-                       "--bpm-hint 174 extra", "--bpm-hint 174 --unknown 1"):
+                       "--bpm-hint 174 extra", "--bpm-hint 174 --unknown 1",
+                       "--no-sync-filter --no-sync-filter", "--no-sync-filter false",
+                       "--bpm-hint --no-sync-filter 174"):
             with self.subTest(suffix=suffix):
                 self.output.seek(0)
                 self.output.truncate()
@@ -189,6 +192,78 @@ class DeckMidiTests(unittest.TestCase):
 
     def send(self, status, data1, data2):
         self.controller.on_midi(([status, data1, data2], 0.0))
+
+    def filtered_track(self):
+        track = self.engine.tracks[0]
+        track.deck.pop("sync_filter")
+        # Original indexes 2, 5 and 257 are ready; the rest are pending,
+        # unavailable, or absent from the cached analysis map.
+        track.deck["song_bpms"] = {"0": None, "1": 120.0, "2": 0.0,
+                                   "4": 128.0, "256": 90.0}
+        return track
+
+    def test_generic_selection_scales_across_ready_original_indexes(self):
+        track = self.filtered_track()
+        for value in (0, 31, 32, 63, 64, 95, 96, 127):
+            self.send(0xB0, 21, value)
+        self.assertEqual(self.engine.commands, [
+            (0, "index", index, 7) for index in (2, 2, 5, 5, 5, 5, 257, 257)])
+        self.assertEqual(track.plugin.parameters["index"].range, (1, 257))
+        track.deck["song_bpms"]["1"] = None
+        self.send(0xB0, 21, 0)
+        self.assertEqual(self.engine.commands[-1], (0, "index", 5, 7))
+        track.deck["sync_filter"] = False
+        for value in (0, 64, 127):
+            self.send(0xB0, 21, value)
+        self.assertEqual(self.engine.commands[-3:], [
+            (0, "index", index, 7) for index in (1, 130, 257)])
+
+    def test_generic_empty_selection_keeps_transport_and_pitch_available(self):
+        track = self.filtered_track()
+        track.deck["song_bpms"] = {"0": None, "1": 0.0}
+        for value in (0, 64, 127):
+            self.send(0xB0, 21, value)
+        self.assertEqual(self.engine.commands, [])
+        self.send(0xB0, 20, 127)
+        self.send(0x90, 60, 127)
+        self.assertEqual(self.engine.commands, [
+            (0, "pitch", 16.0, 7), (0, "play_toggle", 0, 7)])
+
+    def test_midimix_selection_scales_across_ready_original_indexes(self):
+        track = self.filtered_track()
+        controller = MidiMixController(self.engine)
+        self.addCleanup(controller.close)
+        for value in (0, 31, 32, 63, 64, 95, 96, 127):
+            controller.on_midi(([0xB0, KNOB_CCS[0][0], value], 0.0))
+        self.assertEqual(self.engine.commands, [
+            (0, "index", index, 7) for index in (2, 2, 5, 5, 5, 5, 257, 257)])
+        binding = next(binding for binding in controller.control_bindings()
+                       if binding.control == "Track 1 knob 1")
+        self.assertEqual(binding.range, "1 .. 257")
+        track.deck["song_bpms"]["1"] = 0.0
+        controller.on_midi(([0xB0, KNOB_CCS[0][0], 0], 0.0))
+        self.assertEqual(self.engine.commands[-1], (0, "index", 5, 7))
+        track.deck["sync_filter"] = False
+        for value in (0, 64, 127):
+            controller.on_midi(([0xB0, KNOB_CCS[0][0], value], 0.0))
+        self.assertEqual(self.engine.commands[-3:], [
+            (0, "index", index, 7) for index in (1, 130, 257)])
+
+    def test_midimix_empty_selection_does_not_filter_mixer_changes(self):
+        track = self.filtered_track()
+        track.deck["song_bpms"] = {"0": None, "1": 0.0}
+        controller = MidiMixController(self.engine)
+        self.addCleanup(controller.close)
+        for value in (0, 64, 127):
+            controller.on_midi(([0xB0, KNOB_CCS[0][0], value], 0.0))
+        self.assertEqual(self.engine.commands, [])
+        controller.on_midi(([0xB0, FADER_CCS[0], 127], 0.0))
+        controller.on_midi(([0x90, MUTE_NOTES[0], 127], 0.0))
+        controller.on_midi(([0xB0, KNOB_CCS[0][1], 127], 0.0))
+        self.assertEqual(self.engine.commands, [
+            (0, "track", {"generation": 7, "gain": 1.0}),
+            (0, "track", {"generation": 7, "muted": True}),
+            (0, "seek", 100, 7)])
 
     def test_channel_filter_release_and_velocity_zero_isolate_decks(self):
         self.send(0x92, 64, 127)  # unrouted channel

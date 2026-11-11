@@ -49,6 +49,22 @@ class DeckSessionTests(unittest.TestCase):
         self.hosts.append(host)
         return host
 
+    def pulse_song(self, bpm=120):
+        rate = 16000
+        audio = np.zeros(rate * 40)
+        t = np.arange(int(0.025 * rate)) / rate
+        pulse = 0.7 * np.exp(-t * 180) * np.cos(2 * np.pi * 800 * t)
+        for beat in np.arange(0.137, 40 - 0.025, 60 / bpm):
+            begin = round(beat * rate)
+            audio[begin:begin + len(pulse)] += pulse
+        song = self.root / "pulse.wav"
+        with wave.open(str(song), "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(rate)
+            stream.writeframes((audio * 32767).astype("<i2").tobytes())
+        return song
+
     def await_status(self, host, index, predicate, timeout=5):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -58,9 +74,96 @@ class DeckSessionTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"deck status did not converge: {host.engine.tracks[index].deck}")
 
+    def test_sync_filter_default_and_optout_survive_both_hops_and_session_restore(self):
+        self.pulse_song()
+        host = self.host()
+        restored = self.host()
+        for enabled in (True, False, True):
+            with self.subTest(sync_filter=enabled):
+                options = {} if enabled else {"sync_filter": False}
+                track = host.load_deck(0, str(self.root), **options)
+                self.assertIs(track.deck["sync_filter"], enabled)
+                self.assertEqual([Path(entry["path"]).name for entry in track.deck["tracks"]],
+                                 ["first.wav", "pulse.wav", "second.wav"])
+                self.assertEqual(track.deck["index"], 2 if enabled else 1)
+                self.assertFalse(track.deck["play"])
+                if enabled:
+                    self.assertGreater(track.deck["song_bpms"][track.deck["track_id"]], 0)
+                host.save_session()
+                data = json.loads(self.session.read_text())
+                saved = data["tracks"][0]["deck"]
+                self.assertEqual(data["version"], 3)
+                self.assertIs(saved["sync_filter"], enabled)
+                for field in ("song_bpms", "analyzing_track_id", "bpm", "beat_confidence"):
+                    self.assertNotIn(field, saved)
+                restored.restore_session(start_audio=False)
+                self.assertIs(restored.engine.tracks[0].deck["sync_filter"], enabled)
+                self.assertEqual(restored.engine.tracks[0].deck["track_id"], saved["track_id"])
+                if enabled:
+                    del saved["sync_filter"]
+                    self.session.write_text(json.dumps(data))
+                    restored.restore_session(start_audio=False)
+                    self.assertIs(restored.engine.tracks[0].deck["sync_filter"], True)
+                    self.assertIs(snapshot(restored)["tracks"][0]["deck"]["sync_filter"], True)
+
+    def test_invalid_sync_filter_rejected_before_host_or_session_mutation(self):
+        song = self.pulse_song()
+        host = self.host()
+        host.load_deck(0, str(song), "Original")
+        host.engine.set_parameter(0, "play", True)
+        host.engine.set_track_state(0, gain=0.375, muted=True)
+        host.save_session()
+        before = snapshot(host)
+        deck = before["tracks"][0]["deck"]
+        previous = host.engine.tracks[0]
+        for invalid in (None, 0, 1, "true", "false", [], {}):
+            with self.subTest(sync_filter=invalid):
+                with patch.object(host.engine, "request") as request, \
+                        patch.object(host, "_clear_deck_holds") as clear_holds:
+                    with self.assertRaisesRegex(ValueError, "sync_filter"):
+                        host.load_deck(0, str(song), "Replacement", sync_filter=invalid)
+                    with self.assertRaisesRegex(ValueError, "sync_filter"):
+                        host.restore_deck(0, {**deck, "sync_filter": invalid}, "Replacement")
+                    request.assert_not_called()
+                    clear_holds.assert_not_called()
+                malformed = {**before, "bpm": 135, "focus": 2, "master_gain": 0.1,
+                             "tracks": [{**before["tracks"][0],
+                                         "deck": {**deck, "sync_filter": invalid}}]}
+                self.session.write_text(json.dumps(malformed))
+                with patch.object(host, "stop_audio") as stop:
+                    with self.assertRaisesRegex(ValueError, "sync_filter"):
+                        host.restore_session(start_audio=False)
+                    stop.assert_not_called()
+                self.assertEqual(snapshot(host), before)
+                current = host.engine.tracks[0]
+                self.assertEqual((current.worker_pid, current.generation),
+                                 (previous.worker_pid, previous.generation))
+
+    def test_no_sync_ready_replacement_preserves_loaded_source_and_playback(self):
+        song = self.pulse_song()
+        host = self.host()
+        host.load_deck(0, str(song), "Original")
+        host.engine.set_parameter(0, "sync", False)
+        host.engine.set_parameter(0, "play", True)
+        host.engine.set_track_state(0, gain=0.375, muted=True)
+        host.engine.sync_state()
+        before = snapshot(host)
+        previous = host.engine.tracks[0]
+        deck = before["tracks"][0]["deck"]
+        with self.assertRaisesRegex((ValueError, RuntimeError), "No sync-ready playlist entries"):
+            host.load_deck(0, str(self.root / "first.wav"), "Replacement", bpm_hint=120)
+        self.assertEqual(snapshot(host), before)
+        with self.assertRaisesRegex((ValueError, RuntimeError), "No sync-ready playlist entries"):
+            host.restore_deck(0, {**deck, "tracks": self.entries, "track_id": "first",
+                                  "song_states": {}}, "Replacement")
+        self.assertEqual(snapshot(host), before)
+        current = host.engine.tracks[0]
+        self.assertEqual((current.worker_pid, current.generation),
+                         (previous.worker_pid, previous.generation))
+
     def test_inline_playlist_restores_live_position_and_play_without_manifest(self):
         host = self.host()
-        host.load_deck(0, str(self.root), "A")
+        host.load_deck(0, str(self.root), "A", sync_filter=False)
         entries = [dict(entry) for entry in host.engine.tracks[0].deck["tracks"]]
         selected = entries[1]["id"]
         host.restore_deck(0, {
@@ -85,6 +188,7 @@ class DeckSessionTests(unittest.TestCase):
         self.assertEqual(entry["deck"]["cue"], 0.25)
         self.assertEqual(entry["deck"]["pitch"], -1.25)
         self.assertFalse(entry["deck"]["sync"])
+        self.assertIs(entry["deck"]["sync_filter"], False)
         self.assertEqual(entry["deck"]["phase_offset"], -0.375)
         self.assertTrue(entry["deck"]["play"])
         self.assertAlmostEqual(entry["deck"]["position"], 0.75)
@@ -101,6 +205,7 @@ class DeckSessionTests(unittest.TestCase):
         status = self.await_status(restored, 0, lambda state: state.get("track_id") == selected)
         self.assertTrue(status["play"])
         self.assertFalse(status["sync"])
+        self.assertIs(status["sync_filter"], False)
         self.assertFalse(track.plugin.values["sync"])
         self.assertEqual(status["nudge"], 0)
         self.assertAlmostEqual(status["pitch"], -1.25)
@@ -113,7 +218,7 @@ class DeckSessionTests(unittest.TestCase):
 
     def test_mixed_bpm_hints_roundtrip_in_format_three(self):
         host = self.host()
-        host.load_deck(0, str(self.root), bpm_hint=174)
+        host.load_deck(0, str(self.root), bpm_hint=174, sync_filter=False)
         deck = snapshot(host)["tracks"][0]["deck"]
         entries = deck["tracks"]
         self.assertEqual([entry["bpm_hint"] for entry in entries], [174, 174])
@@ -134,19 +239,7 @@ class DeckSessionTests(unittest.TestCase):
         self.assertEqual(snapshot(restored)["tracks"][0]["deck"]["tracks"], entries)
 
     def test_unvisited_song_bpms_reach_host_cache_and_stay_out_of_sessions(self):
-        rate = 16000
-        audio = np.zeros(rate * 40)
-        t = np.arange(int(0.025 * rate)) / rate
-        pulse = 0.7 * np.exp(-t * 180) * np.cos(2 * np.pi * 800 * t)
-        for beat in np.arange(0.137, 40 - 0.025, 60 / 83):
-            begin = round(beat * rate)
-            audio[begin:begin + len(pulse)] += pulse
-        song = self.root / "pulse.wav"
-        with wave.open(str(song), "wb") as stream:
-            stream.setnchannels(1)
-            stream.setsampwidth(2)
-            stream.setframerate(rate)
-            stream.writeframes((audio * 32767).astype("<i2").tobytes())
+        song = self.pulse_song(83)
         entries = [
             dict(self.entries[0]),
             {"id": "slow", "path": str(song), "title": "Slow", "bpm_hint": 83},
@@ -158,6 +251,7 @@ class DeckSessionTests(unittest.TestCase):
             "bank_id": "analysis", "bank_path": "session:analysis", "track_id": "first",
             "tracks": entries, "cue": 0.1, "pitch": 2, "position": 0.25,
             "play": False, "sync": False, "phase_offset": 0.125, "song_states": {},
+            "sync_filter": False,
         })
         track = host.engine.tracks[0]
         identity = (track.worker_pid, track.generation)
@@ -199,7 +293,8 @@ class DeckSessionTests(unittest.TestCase):
 
     def test_malformed_bpm_hints_preserve_existing_deck_on_load_and_restore(self):
         host = self.host()
-        host.load_deck(0, str(self.root / "first.wav"), "Original", bpm_hint=174)
+        host.load_deck(0, str(self.root / "first.wav"), "Original", bpm_hint=174,
+                       sync_filter=False)
         self.await_status(host, 0, lambda state: state.get("state") == "ready")
         host.engine.set_track_state(0, gain=0.375, muted=True)
         previous = host.engine.tracks[0]
@@ -225,7 +320,7 @@ class DeckSessionTests(unittest.TestCase):
 
     def test_synced_session_restores_selected_song_phase_offset(self):
         host = self.host()
-        host.load_deck(0, str(self.root))
+        host.load_deck(0, str(self.root), sync_filter=False)
         selected = host.engine.tracks[0].deck["tracks"][1]["id"]
         # Restore the desired selection directly: stopped output cannot commit a queued switch.
         host.restore_deck(0, {**host.engine.tracks[0].deck, "track_id": selected})
@@ -245,7 +340,7 @@ class DeckSessionTests(unittest.TestCase):
 
     def test_all_song_states_roundtrip_with_selected_live_overlay(self):
         host = self.host()
-        host.load_deck(0, str(self.root))
+        host.load_deck(0, str(self.root), sync_filter=False)
         deck = host.engine.tracks[0].deck
         first, second = (entry["id"] for entry in deck["tracks"])
         states = {
@@ -289,6 +384,7 @@ class DeckSessionTests(unittest.TestCase):
                         "title": str(index)} for index, identity in enumerate(identities)],
             "cue": 0, "pitch": 0, "position": 0, "play": False,
             "sync": True, "phase_offset": 0, "song_states": {},
+            "sync_filter": False,
         })
         host.engine.set_parameter(0, "phase_offset", 0.25)
         status = self.await_status(
@@ -314,7 +410,7 @@ class DeckSessionTests(unittest.TestCase):
 
     def test_invalid_phase_offset_restore_preserves_existing_deck(self):
         host = self.host()
-        host.load_deck(0, str(self.root / "first.wav"))
+        host.load_deck(0, str(self.root / "first.wav"), sync_filter=False)
         host.engine.set_parameter(0, "phase_offset", 0.25)
         host.engine.set_parameter(0, "nudge", 0.75)
         self.await_status(host, 0, lambda state: state.get("state") == "ready")
@@ -336,7 +432,7 @@ class DeckSessionTests(unittest.TestCase):
         deck = {"bank_path": "session:live-set", "bank_id": "live-set",
                 "tracks": self.entries, "track_id": "first", "cue": 0, "pitch": 0,
                 "position": 0, "play": False, "sync": True, "phase_offset": 0,
-                "song_states": {}}
+                "song_states": {}, "sync_filter": False}
         for fields in (
                 {"track_id": "removed"},
                 {"bank_id": ""},
@@ -362,7 +458,7 @@ class DeckSessionTests(unittest.TestCase):
         bank.write_text(json.dumps({"version": 1, "id": "live-set", "tracks": self.entries}))
         deck = {"bank_path": str(bank), "bank_id": "live-set", "track_id": "first",
                 "cue": 0, "pitch": 0, "position": 0, "play": False,
-                "sync": True, "phase_offset": 0, "song_states": {}}
+                "sync": True, "phase_offset": 0, "song_states": {}, "sync_filter": False}
         self.session.write_text(json.dumps({
             "version": 3, "tracks": [
                 {"kind": "deck", "name": "Manifest", "path": str(bank), "deck": deck},
@@ -386,7 +482,7 @@ class DeckSessionTests(unittest.TestCase):
 
     def test_snapshot_persists_committed_selection_not_requested(self):
         host = self.host()
-        host.load_deck(0, str(self.root / "first.wav"))
+        host.load_deck(0, str(self.root / "first.wav"), sync_filter=False)
         selected = host.engine.tracks[0].deck["track_id"]
         with host.engine.state_lock:
             host.engine.tracks[0].deck.update(requested_track_id="second", state="loading")
@@ -398,8 +494,8 @@ class DeckSessionTests(unittest.TestCase):
     @unittest.skipUnless(HAS_MIDO, "mido required for routed MIDI")
     def test_real_routed_midi_disconnect_unroute_and_replacement_clear_nudge(self):
         host = self.host()
-        host.load_deck(0, str(self.root / "first.wav"))
-        host.load_deck(1, str(self.root / "first.wav"))
+        host.load_deck(0, str(self.root / "first.wav"), sync_filter=False)
+        host.load_deck(1, str(self.root / "first.wav"), sync_filter=False)
         host.route(0, 0)
         host.route(1, 1)
         controller = MidiInputController(host.engine)
@@ -429,7 +525,7 @@ class DeckSessionTests(unittest.TestCase):
         send([0x90, 63, 127])
         old_generation = host.engine.tracks[0].generation
         host.remove_instrument(0)
-        host.load_deck(0, str(self.root / "first.wav"))
+        host.load_deck(0, str(self.root / "first.wav"), sync_filter=False)
         self.assertNotEqual(host.engine.tracks[0].generation, old_generation)
         self.assertEqual(host.engine.tracks[0].deck["nudge"], 0)
         send([0x90, 64, 127])
@@ -442,7 +538,7 @@ class DeckSessionTests(unittest.TestCase):
     @unittest.skipUnless(HAS_MIDO, "mido required for controller MIDI")
     def test_generic_reroute_preserves_dedicated_controller_nudge(self):
         host = self.host()
-        host.load_deck(0, str(self.root / "first.wav"))
+        host.load_deck(0, str(self.root / "first.wav"), sync_filter=False)
         profile = host.beatstep.profile
         status = (0x90 if profile.pad_type == "note" else 0xB0) | profile.control_channel
         host.beatstep.on_midi(([status, profile.pad_numbers[4], 127], 0))
@@ -477,13 +573,16 @@ class DeckSessionTests(unittest.TestCase):
                 server._drain_commands()
                 return "\n".join(_read_response_lines(reader))
 
-            self.assertIn("track 1 = A", command(f'track 1 deck "{self.root / "first.wav"}" --name A'))
+            self.assertIn("track 1 = A", command(
+                f'track 1 deck "{self.root / "first.wav"}" --no-sync-filter --name A'))
             first = host.engine.tracks[0]
             generation, pid = first.generation, first.worker_pid
             first_id = first.deck["track_id"]
             self.assertFalse(first.deck["play"])
+            self.assertIs(first.deck["sync_filter"], False)
             self.assertNotIn("Error:", command("set 1 play true"))
-            self.assertNotIn("Error:", command(f'track 1 deck "{self.root / "second.wav"}"'))
+            self.assertNotIn("Error:", command(
+                f'track 1 deck "{self.root / "second.wav"}" --no-sync-filter'))
             track = host.engine.tracks[0]
             self.assertEqual((track.generation, track.worker_pid), (generation, pid))
             self.assertEqual(track.name, "A")
@@ -492,7 +591,8 @@ class DeckSessionTests(unittest.TestCase):
             self.assertEqual(len(track.deck["tracks"]), 1)
             self.assertEqual(track.plugin.parameters["index"].range, (1, 1))
             self.assertEqual(list(track.plugin.parameters)[:3], ["index", "seek", "nudge"])
-            self.assertNotIn("Error:", command(f'track 1 deck "{self.root}" --name Renamed'))
+            self.assertNotIn("Error:", command(
+                f'track 1 deck "{self.root}" --name Renamed --no-sync-filter'))
             first_id = host.engine.tracks[0].deck["track_id"]
             self.assertEqual(host.engine.tracks[0].name, "Renamed")
             self.assertIn("pitch =", command("set 1 pitch -1.25"))

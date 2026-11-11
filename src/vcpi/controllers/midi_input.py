@@ -11,6 +11,7 @@ import logging
 from threading import RLock
 from typing import Optional
 
+from vcpi.deck_bank import selectable_indexes
 from vcpi.deps import HAS_MIDO, mido
 from vcpi.midi import MidiInPort
 
@@ -111,9 +112,9 @@ class MidiInputController:
                     track_index, "pitch", -16.0 + 32.0 * msg.value / 127.0,
                     generation=generation)
             elif msg.control == DECK_SELECT_CC:
-                count = len(track.deck.get("tracks", []))
-                if count:
-                    selection = 1 + (msg.value * (count - 1) + 63) // 127
+                indexes = selectable_indexes(track.deck)
+                if indexes:
+                    selection = indexes[(msg.value * (len(indexes) - 1) + 63) // 127]
                     self._engine.enqueue_param_change(
                         track_index, "index", selection, generation=generation)
 

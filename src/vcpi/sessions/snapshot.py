@@ -65,6 +65,7 @@ def _snapshot_cached(host: VcpiCore) -> dict:
                 "bank_id": status["bank_id"],
                 "tracks": [dict(entry) for entry in status["tracks"]],
                 "track_id": status["track_id"],
+                "sync_filter": status.get("sync_filter", True),
                 **active_state,
                 "song_states": song_states,
             }

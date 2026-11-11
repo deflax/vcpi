@@ -212,7 +212,7 @@ class FlowTests(unittest.TestCase):
             ["Playlist 1 (current)", "Playing", "166 BPM"],
             ["Playlist 2 (requested)", "Next", "analyzing"],
             ["Playlist 3", "Slow", "83 BPM"],
-            ["Playlist 4", "Silent", "unavailable"],
+            ["Playlist 4", "Silent", "unavailable; excluded"],
             ["Playlist 5", "Waiting", "pending analysis"],
         ])
         # A prepared/requested entry does not become current until commit.
@@ -223,6 +223,10 @@ class FlowTests(unittest.TestCase):
         rows = [row for row in self.rows("track1") if row[0].startswith("Playlist ")]
         self.assertEqual(rows[0][0], "Playlist 1")
         self.assertEqual(rows[1], ["Playlist 2 (current)", "Next", "174 BPM"])
+        self.track.deck["sync_filter"] = False
+        rows = {row[0]: row for row in self.rows("track1")}
+        self.assertEqual(rows["Deck selection filter"][1], "off")
+        self.assertEqual(rows["Playlist 4"][2], "unavailable")
 
     def test_output_eligibility_tracks_independent_blockers(self):
         self.assertEqual(self.track_state(), "eligible")

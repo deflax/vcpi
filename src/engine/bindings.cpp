@@ -76,6 +76,7 @@ py::dict deckDict(const DeckStatus& info) {
     result["beat_offset"] = info.beatOffset;
     result["beat_confidence"] = info.beatConfidence;
     result["sync"] = info.sync;
+    result["sync_filter"] = info.syncFilter;
     result["sync_active"] = info.syncActive;
     result["sync_error"] = info.syncError;
     result["playback_speed"] = info.playbackSpeed;

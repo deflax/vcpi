@@ -11,12 +11,14 @@ The profile also accepts Gate notes and explicitly selected relative encodings.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from itertools import islice
 import logging
 import math
 from threading import RLock
 
+from vcpi.deck_bank import selectable_indexes
 from vcpi.deps import HAS_MIDO, mido
 from vcpi.midi import MidiInPort
 from vcpi.controllers.bindings import (
@@ -466,11 +468,15 @@ class BeatStepProController:
             if not delta:
                 return
             if track.source_type == "deck":
-                count = len(track.deck.get("tracks", ()))
-                if count:
+                indexes = selectable_indexes(track.deck)
+                if indexes:
                     observed = int(track.plugin.values.get("index", 1))
                     current = self._current(index, track, "index", observed)
-                    selected = max(1, min(count, current + delta))
+                    # If current became unavailable, the first step takes the
+                    # nearest eligible entry in the requested direction.
+                    position = (bisect_right(indexes, current) - 1 if delta > 0
+                                else bisect_left(indexes, current))
+                    selected = indexes[max(0, min(len(indexes) - 1, position + delta))]
                     if selected != current:
                         self._set(index, track, "index", selected, observed)
             else:

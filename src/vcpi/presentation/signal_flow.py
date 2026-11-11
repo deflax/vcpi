@@ -325,6 +325,9 @@ def _build_flow_snapshot(host, engine, details):
                 detected = (f"{_value(bpm)} BPM" if bpm is not None and bpm > 0 else
                             "analyzing" if deck.get("state") in {"loading", "analyzing"} else "unavailable")
                 track_row("Detected BPM", detected, "source grid, not global tempo")
+                sync_filter = deck.get("sync_filter", True)
+                track_row("Deck selection filter", "sync-ready only" if sync_filter else "off",
+                          "pending/unavailable entries skipped" if sync_filter else "manual selections allowed")
                 track_row("Deck sync", f"requested {_value(deck.get('sync', 'not cached'))}; "
                           f"active {_value(deck.get('sync_active', 'not cached'))}")
                 track_row("Deck pitch", f"{_value(deck.get('pitch', 'not cached'))} %",
@@ -347,6 +350,8 @@ def _build_flow_snapshot(host, engine, details):
                     else:
                         analysis = ("analyzing" if song_id == deck.get("analyzing_track_id")
                                     else "pending analysis")
+                    if sync_filter and song_bpm == 0:
+                        analysis += "; excluded"
                     if details:
                         analysis += f"; {song_id} — {entry.get('path', 'not cached')}"
                     title = entry.get("title") or Path(entry.get("path", "")).name or song_id

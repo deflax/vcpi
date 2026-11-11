@@ -145,6 +145,9 @@ def deck(ctx, track_num, parts, text):
             else:
                 raise ValueError("expected reanalyze, seek <seconds>, cue [set], or phase reset")
         else:
+            if tokens.count("--no-sync-filter") > 1:
+                raise ValueError("--no-sync-filter may only be supplied once")
+            sync_filter = "--no-sync-filter" not in tokens
             bpm_hint = None
             if "--bpm-hint" in tokens:
                 if tokens.count("--bpm-hint") != 1:
@@ -157,9 +160,11 @@ def deck(ctx, track_num, parts, text):
                 except ValueError:
                     raise ValueError("--bpm-hint requires an expected median BPM (60–200)") from None
                 tokens = tokens[:marker] + tokens[marker + 2:]
+            tokens = [token for token in tokens if token != "--no-sync-filter"]
             sources, name = source_args(tokens, 1)
             track = ctx.host.load_deck(
-                idx, str(Path(sources[0]).expanduser()), name, bpm_hint=bpm_hint)
+                idx, str(Path(sources[0]).expanduser()), name,
+                bpm_hint=bpm_hint, sync_filter=sync_filter)
             ctx.emit(f"  track {track_num} = {track.name}")
             ctx.emit(f"  Use show {track_num} for playback state or "
                      f"show {track_num} --details for the playlist.")

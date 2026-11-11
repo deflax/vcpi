@@ -46,7 +46,7 @@ class NativeDeckCacheTests(unittest.TestCase):
         if bpm_hint is not None:
             entry["bpm_hint"] = bpm_hint
         return json.dumps({"version": 1, "id": "cache-test", "bank_path": "session:cache-test",
-                           "tracks": [entry]})
+                           "sync_filter": False, "tracks": [entry]})
 
     def load(self, song=None, bpm_hint=None):
         plugin = self.backend.Plugin(self.catalog(song or self.song, bpm_hint), 48000, 512, "deck")
@@ -91,6 +91,31 @@ print(json.dumps(plugin.deck_status()))
         self.assertEqual(status["bpm"], data["bpm"])
         self.assertEqual(status["beat_offset"], data["offset"])
         self.assertEqual(status["beat_confidence"], data["confidence"])
+
+    def test_sync_filter_does_not_change_analysis_cache_identity_or_contents(self):
+        self.load()
+        entry, data = self.entry()
+        catalog = json.loads(self.catalog(self.song))
+        catalog["sync_filter"] = True
+        unavailable = entry.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, "No sync-ready playlist entries"):
+            self.backend.Plugin(json.dumps(catalog), 48000, 512, "deck")
+        self.assertEqual(self.entries(), [entry])
+        self.assertEqual(entry.read_bytes(), unavailable)
+        seeded = self.seed_valid_grid(entry, data)
+        ready = entry.read_bytes()
+        plugin = self.backend.Plugin(json.dumps(catalog), 48000, 512, "deck")
+        self.assertTrue(plugin.deck_status()["sync_filter"])
+        self.assert_grid(plugin.deck_status(), seeded)
+        catalog["sync_filter"] = False
+        plugin.update_deck_catalog(json.dumps(catalog))
+        self.assertFalse(plugin.deck_status()["sync_filter"])
+        catalog["sync_filter"] = True
+        plugin.update_deck_catalog(json.dumps(catalog))
+        self.assertTrue(plugin.deck_status()["sync_filter"])
+        self.assert_grid(plugin.deck_status(), seeded)
+        self.assertEqual(self.entries(), [entry])
+        self.assertEqual(entry.read_bytes(), ready)
 
     def live_deck(self):
         plugin = self.backend.Plugin(self.catalog(self.song), 48000, 512, "deck")

@@ -27,7 +27,7 @@ struct DeckStatus {
     std::uint64_t requestId = 0;
     bool loading = false, ready = true, buffering = false, ended = false, play = false;
     double position = 0, duration = 0, cue = 0, pitch = 0, nudge = 0, phaseOffset = 0;
-    bool sync = true, syncActive = false;
+    bool sync = true, syncActive = false, syncFilter = true;
     double bpm = 0, beatOffset = 0, beatConfidence = 0, playbackSpeed = 1, beatPhaseError = 0;
     std::unordered_map<std::string, DeckSongState> songStates;
     std::unordered_map<std::string, std::optional<double>> songBpms;
@@ -85,6 +85,7 @@ private:
         std::string bank, locator;
         std::vector<Track> tracks;
         int initialTrack = 1;
+        bool syncFilter = true;
     };
     static Catalog parseCatalog(const juce::var& catalog);
     struct Request {
@@ -107,7 +108,8 @@ private:
         std::atomic<bool> failed{false};
     };
     void request(int track, double seconds, Mode mode);
-    bool prepare(Stream& stream, const Request& request, Track& track);
+    bool prepare(Stream& stream, const Request& request, Track& track, bool requireGrid = false);
+    void prepareCatalog(Stream& stream, Request request, std::vector<Track>& entries, bool filter);
     bool fill(Stream& stream);
     bool feedStreams();
     std::unique_ptr<juce::AudioFormatReader> openReader(const Track& track);
@@ -124,6 +126,7 @@ private:
     const double outputRate, rampStep, pitchStep, nudgeStep;
     std::string bank, locator;
     std::vector<Track> tracks;
+    bool syncFilter = true; // Control-owned; worker changes only while joined.
     std::array<Stream, 3> streams;
     juce::AudioBuffer<float> decode{2, decodeFrames};
     juce::AudioFormatManager formats;

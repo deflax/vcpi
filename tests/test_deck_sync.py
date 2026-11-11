@@ -46,14 +46,17 @@ class NativeDeckSyncTests(unittest.TestCase):
             output.writeframes((audio * 32767).astype("<i2").tobytes())
         return path
 
-    def deck(self, paths, bpm_hint=None, **initial):
+    def catalog(self, paths, bpm_hint=None, **initial):
         entries = [{"id": str(i), "title": path.stem, "path": str(path)}
                    for i, path in enumerate(paths)]
         if bpm_hint is not None:
             for entry in entries:
                 entry["bpm_hint"] = bpm_hint
-        catalog = {"id": "sync-bank", "bank_path": str(self.root / "bank.json"),
-                   "tracks": entries, **initial}
+        return {"id": "sync-bank", "bank_path": str(self.root / "bank.json"),
+                "tracks": entries, **initial}
+
+    def deck(self, paths, bpm_hint=None, **initial):
+        catalog = self.catalog(paths, bpm_hint, **initial)
         plugin = self.backend.Plugin(json.dumps(catalog), self.rate, self.frames, "deck")
         transport = self.backend.Transport(str(self.root / f"{len(self.runners)}.mmap"), self.frames, True)
         runner = self.backend.TrackRunner(transport, plugin, self.rate, self.frames)
@@ -94,6 +97,180 @@ class NativeDeckSyncTests(unittest.TestCase):
                 return status
             self.assertLess(time.monotonic(), deadline, status)
             time.sleep(0.001)
+
+    def test_filter_defaults_on_and_fallback_restores_state_without_autoplay(self):
+        paths = [self.root / "missing.wav", self.percussion("silent", bpm=0),
+                 self.percussion("ready")]
+        songs = {"2": dict(position=2, cue=0.5, pitch=3, phase_offset=0.125, sync=False, play=True)}
+        plugin, runner = self.deck(paths, bpm_hint=120, song_states=songs, play=True)
+        status = plugin.deck_status()
+        self.assertTrue(status["sync_filter"])
+        self.assertEqual((status["index"], status["requested_index"], status["track_id"]), (3, 3, "2"))
+        self.assertEqual(plugin.parameter("index")["range"], (1, 3))
+        self.assertEqual((status["position"], status["cue"], status["pitch"], status["phase_offset"]),
+                         (2, 0.5, 3, 0.125))
+        self.assertFalse(status["play"])
+        self.assertFalse(status["sync"])
+        self.assertEqual(status["song_bpms"]["0"], 0)
+        self.assertEqual(status["song_bpms"]["1"], 0)
+        self.assertGreater(status["song_bpms"]["2"], 0)
+        np.testing.assert_array_equal(runner.render_once(), 0)
+
+    def test_initial_filter_wraps_without_reordering_entries(self):
+        paths = [self.percussion("ready"), self.percussion("silent", bpm=0),
+                 self.root / "missing.wav"]
+        plugin, _ = self.deck(paths, initial_track=2)
+        self.assertEqual(plugin.deck_status()["index"], 1)
+        self.assertEqual(set(plugin.deck_status()["song_states"]), {"0", "1", "2"})
+        self.assertEqual(plugin.parameter("index")["range"], (1, 3))
+
+    def test_no_sync_ready_entries_fail_even_with_hint_but_optout_loads(self):
+        path = self.percussion("silent", bpm=0)
+        for paths in ([path], [self.root / "missing.wav", path]):
+            with self.subTest(paths=paths):
+                with self.assertRaisesRegex(RuntimeError, "No sync-ready playlist entries"):
+                    self.deck(paths, bpm_hint=120)
+        plugin, _ = self.deck([path], bpm_hint=120, sync_filter=False)
+        self.assertFalse(plugin.deck_status()["sync_filter"])
+        self.assertEqual(plugin.deck_status()["bpm"], 0)
+
+    def test_sync_filter_requires_strict_boolean_on_load_and_update(self):
+        path = self.percussion("ready")
+        plugin, _ = self.deck([path], play=True)
+        for value in (None, 0, 1, "true", "false", [], {}):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "sync_filter.*boolean"):
+                    self.deck([path], sync_filter=value)
+                before = plugin.deck_status()
+                with self.assertRaisesRegex(ValueError, "sync_filter.*boolean"):
+                    plugin.update_deck_catalog(json.dumps(self.catalog([path], sync_filter=value)))
+                self.assertEqual(plugin.deck_status(), before)
+
+    def test_filtered_explicit_selection_rejects_unreliable_and_unreadable_without_stopping(self):
+        paths = [self.percussion("ready"), self.percussion("silent", bpm=0),
+                 self.root / "missing.wav", self.percussion("other", bpm=100)]
+        deck = self.deck(paths, play=True)
+        plugin, runner = deck
+        plugin.set_parameter("sync", False)
+        for index in (2, 3):
+            before = plugin.deck_status()
+            plugin.set_parameter("index", index)
+            status = self.settle_request(deck)
+            self.assertEqual((status["index"], status["track_id"]), (1, "0"))
+            self.assertEqual(status["requested_index"], index)
+            self.assertTrue(status["play"])
+            self.assertTrue(status["error"])
+            self.assertGreaterEqual(status["position"], before["position"])
+            self.assertEqual(status["song_states"][str(index - 1)]["position"], 0)
+        analyzed = self.settle_analysis(plugin)
+        self.assertEqual(analyzed["index"], 1)
+        self.assertTrue(analyzed["play"])
+        plugin.set_parameter("index", 4)
+        status = self.settle_request(deck)
+        self.assertEqual(status["index"], 4)
+        self.assertFalse(status["play"])
+        self.assertEqual(status["error"], "")
+        plugin.deck_command("seek", 1.5)
+        self.assertAlmostEqual(self.settle_request(deck)["position"], 1.5)
+        plugin.deck_command("cue_set")
+        plugin.set_parameter("sync", False)
+        plugin.set_parameter("play", True)
+        runner.render_once()
+        self.assertTrue(plugin.deck_status()["play"])
+        plugin.deck_command("cue")
+        self.assertAlmostEqual(self.settle_request(deck)["position"], 1.5)
+        plugin.deck_command("restore", 2)
+        self.assertAlmostEqual(self.settle_request(deck)["position"], 2)
+
+    def test_enabling_filter_falls_back_paused_and_disabling_restores_manual_selection(self):
+        paths = [self.percussion("silent", bpm=0), self.percussion("ready")]
+        songs = {"1": dict(position=2, cue=0.5, play=True)}
+        deck = self.deck(paths, sync_filter=False, song_states=songs, play=True)
+        plugin, _ = deck
+        plugin.update_deck_catalog(json.dumps(self.catalog(paths)))
+        status = plugin.deck_status()
+        self.assertTrue(status["sync_filter"])
+        self.assertEqual((status["index"], status["position"], status["cue"], status["play"]),
+                         (2, 2, 0.5, False))
+        plugin.update_deck_catalog(json.dumps(self.catalog(paths, sync_filter=False)))
+        self.assertFalse(plugin.deck_status()["sync_filter"])
+        plugin.set_parameter("index", 1)
+        status = self.settle_request(deck)
+        self.assertEqual(status["index"], 1)
+        self.assertEqual(status["bpm"], 0)
+        self.assertTrue(status["play"])
+
+    def test_filter_catalog_removal_skips_unavailable_and_preserves_original_ordinals(self):
+        paths = [self.percussion("first"), self.percussion("silent", bpm=0),
+                 self.root / "missing.wav", self.percussion("last", bpm=100)]
+        plugin, _ = self.deck(paths, play=True, song_states={"3": dict(position=2, play=True)})
+        catalog = self.catalog(paths)
+        catalog["tracks"] = catalog["tracks"][1:]
+        plugin.update_deck_catalog(json.dumps(catalog))
+        status = plugin.deck_status()
+        self.assertEqual((status["track_id"], status["index"], status["position"], status["play"]),
+                         ("3", 3, 2, False))
+        self.assertEqual(set(status["song_bpms"]), {"1", "2", "3"})
+
+    def test_failed_filter_replacements_preserve_current_source_and_playback(self):
+        paths = [self.percussion("ready"), self.percussion("silent", bpm=0)]
+        plugin, runner = self.deck(paths, play=True)
+        self.render([(plugin, runner)], 0.1)
+        catalog = self.catalog(paths)
+        catalog["tracks"] = catalog["tracks"][1:]
+        for replacement in (catalog, {**catalog, "id": "different-bank"}):
+            before = plugin.deck_status()
+            with self.assertRaisesRegex(RuntimeError, "No sync-ready playlist entries"):
+                plugin.update_deck_catalog(json.dumps(replacement))
+            after = plugin.deck_status()
+            for key in ("bank_id", "track_id", "index", "position", "song_states", "play", "sync_filter", "bpm"):
+                self.assertEqual(after[key], before[key], key)
+            self.assertEqual(plugin.parameter("index")["range"], (1, 2))
+        runner.render_once()
+        self.assertTrue(plugin.deck_status()["play"])
+
+    def test_failed_filter_enable_preserves_optout_and_manual_playback(self):
+        path = self.percussion("silent", bpm=0)
+        plugin, _ = self.deck([path], sync_filter=False, play=True)
+        with self.assertRaisesRegex(RuntimeError, "No sync-ready playlist entries"):
+            plugin.update_deck_catalog(json.dumps(self.catalog([path])))
+        status = plugin.deck_status()
+        self.assertFalse(status["sync_filter"])
+        self.assertTrue(status["play"])
+        self.assertEqual(status["index"], 1)
+
+    def test_filtered_reanalysis_publishes_lost_grid_without_switching_active_entry(self):
+        path = self.percussion("changing")
+        deck = self.deck([path], play=True)
+        plugin, _ = deck
+        before = plugin.deck_status()
+        self.percussion("changing", bpm=0)
+        plugin.deck_command("reanalyze")
+        self.assertFalse(plugin.deck_status()["play"])
+        after = self.settle_request(deck)
+        self.assertEqual(after["error"], "")
+        self.assertFalse(after["play"])
+        self.assertEqual(after["index"], before["index"])
+        self.assertEqual(after["bpm"], 0)
+        self.assertEqual(after["song_bpms"]["0"], 0)
+        plugin.set_parameter("play", True)
+        self.assertTrue(plugin.deck_status()["play"])
+        plugin.deck_command("seek", 1)
+        sought = self.settle_request(deck)
+        self.assertEqual(sought["error"], "")
+        self.assertTrue(sought["play"])
+        self.assertGreaterEqual(sought["position"], 1)
+
+    def test_filtered_hint_change_rejects_lost_grid_and_preserves_active_source(self):
+        path = self.percussion("changing")
+        plugin, _ = self.deck([path], play=True)
+        before = plugin.deck_status()
+        self.percussion("changing", bpm=0)
+        with self.assertRaisesRegex(RuntimeError, "No sync-ready playlist entries"):
+            plugin.update_deck_catalog(json.dumps(self.catalog([path], bpm_hint=120)))
+        after = plugin.deck_status()
+        for key in ("track_id", "position", "play", "bpm", "song_states", "sync_filter"):
+            self.assertEqual(after[key], before[key], key)
 
     def test_unvisited_playlist_bpms_complete_without_render_or_selection(self):
         paths = [self.percussion(f"background-{bpm}", bpm=bpm) for bpm in (120, 90, 150)]
@@ -349,7 +526,7 @@ class NativeDeckSyncTests(unittest.TestCase):
                     output.setsampwidth(2)
                     output.setframerate(self.rate)
                     output.writeframes((audio * 32767).astype("<i2").tobytes())
-                deck = self.deck([path])
+                deck = self.deck([path], sync_filter=accepted)
                 plugin, _ = deck
                 status = plugin.deck_status()
                 if not accepted:
@@ -379,7 +556,7 @@ class NativeDeckSyncTests(unittest.TestCase):
             output.setsampwidth(2)
             output.setframerate(self.rate)
             output.writeframes((audio * 32767).astype("<i2").tobytes())
-        plugin, _ = self.deck([path])
+        plugin, _ = self.deck([path], sync_filter=False)
         status = plugin.deck_status()
         self.assertEqual(status["bpm"], 0)
         self.assertEqual(status["beat_confidence"], 0)
@@ -528,7 +705,7 @@ class NativeDeckSyncTests(unittest.TestCase):
     def test_silence_and_missing_clock_keep_manual_cursor(self):
         for name, bpm in (("silence", 0), ("no-clock", 120)):
             with self.subTest(name=name):
-                deck = self.deck([self.percussion(name, bpm)])
+                deck = self.deck([self.percussion(name, bpm)], sync_filter=bool(bpm))
                 plugin, _ = deck
                 if not bpm:
                     self.clock([deck], 120)

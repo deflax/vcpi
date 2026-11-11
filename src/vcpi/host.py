@@ -230,13 +230,16 @@ class VcpiCore:
         return self._loaded_track(track_index)
 
     def load_deck(self, track_index: int, audio_path: str,
-                  name: Optional[str] = None, *, bpm_hint=None) -> InstrumentTrack:
+                  name: Optional[str] = None, *, bpm_hint=None,
+                  sync_filter=True) -> InstrumentTrack:
         """Replace the playlist and its song memory, retaining mixer and inserts."""
         from uuid import uuid4
         from vcpi.deck_bank import AUDIO_SUFFIXES, audio_entry, make_catalog
 
         if not 0 <= track_index < NUM_TRACKS:
             raise ValueError(f"track must be 1-{NUM_TRACKS}")
+        if type(sync_filter) is not bool:
+            raise ValueError("deck sync_filter must be a boolean")
         path = Path(audio_path).expanduser().resolve()
         if path.is_dir():
             paths = sorted(
@@ -257,7 +260,7 @@ class VcpiCore:
         if bpm_hint is not None:
             for entry in entries:
                 entry["bpm_hint"] = bpm_hint
-        catalog = make_catalog(uuid4().hex, entries)
+        catalog = make_catalog(uuid4().hex, entries, sync_filter=sync_filter)
         track = self.engine.tracks[track_index]
         self._clear_deck_holds(track_index=track_index)
         if track is not None and track.source_type == "deck":
@@ -283,7 +286,8 @@ class VcpiCore:
                         phase_offset=deck["phase_offset"], position=deck["position"],
                         play=deck["play"], song_states=deck["song_states"])
         catalog = make_catalog(deck["bank_id"], deck["tracks"],
-                               bank_path=deck.get("bank_path"), **settings)
+                               bank_path=deck.get("bank_path"),
+                               sync_filter=deck.get("sync_filter", True), **settings)
         self._clear_deck_holds(track_index=track_index)
         self.engine.request("load_deck", track_index=track_index, catalog=catalog, name=name)
         return self._loaded_track(track_index)

@@ -52,7 +52,7 @@ class DeckOwnerTests(unittest.TestCase):
 
     def worker(self, **restore):
         worker = TrackWorker(44100, 64, 0, "load_deck", {
-            "catalog": make_catalog("set", self.entries, **restore)})
+            "catalog": make_catalog("set", self.entries, sync_filter=False, **restore)})
         engine = AudioEngine(buffer_size=64)
         engine.publish_track(0, worker.track)
 
@@ -168,7 +168,7 @@ class DeckOwnerTests(unittest.TestCase):
         nested.mkdir()
         (nested / "hidden.wav").write_bytes(self.wav.read_bytes())
 
-        track = host.load_deck(0, str(folder), "Directory deck", bpm_hint=174)
+        track = host.load_deck(0, str(folder), "Directory deck", bpm_hint=174, sync_filter=False)
         original = [dict(entry) for entry in track.deck["tracks"]]
         self.assertEqual([entry["path"] for entry in original],
                          [str(folder / "a.wav"), str(folder / "b.WAV")])
@@ -182,7 +182,7 @@ class DeckOwnerTests(unittest.TestCase):
         engine.set_parameter(0, "play", True)
         engine.set_track_state(0, gain=0.375, muted=True)
         (folder / "c.wav").write_bytes(self.wav.read_bytes())
-        updated = host.load_deck(0, str(folder))
+        updated = host.load_deck(0, str(folder), sync_filter=False)
         self.assertEqual([entry["path"] for entry in updated.deck["tracks"]],
                          [str(folder / name) for name in ("a.wav", "b.WAV", "c.wav")])
         self.assertTrue(all("bpm_hint" not in entry for entry in updated.deck["tracks"]))
@@ -197,7 +197,8 @@ class DeckOwnerTests(unittest.TestCase):
         self.assertEqual(updated.gain, 0.375)
         self.assertTrue(updated.muted)
         self.assertEqual(updated.name, "Directory deck")
-        renamed = host.load_deck(0, str(folder / "a.wav"), "Renamed", bpm_hint=87.25)
+        renamed = host.load_deck(0, str(folder / "a.wav"), "Renamed", bpm_hint=87.25,
+                                 sync_filter=False)
         self.assertEqual(renamed.name, "Renamed")
         self.assertEqual([entry["path"] for entry in renamed.deck["tracks"]], [str(folder / "a.wav")])
         self.assertEqual(renamed.deck["tracks"][0]["bpm_hint"], 87.25)
@@ -273,16 +274,18 @@ class DeckOwnerTests(unittest.TestCase):
 
     def test_large_catalog_stages_across_both_framed_hops(self):
         engine = self.remote()
-        catalog = make_catalog("set", self.playlist_entries(1800), track_id="1800")
+        catalog = make_catalog("set", self.playlist_entries(1800), track_id="1800",
+                               sync_filter=False)
         self.assertGreater(len(catalog.encode()), 65536)
         engine.request("load_deck", track_index=0, catalog=catalog)
         track = engine.tracks[0]
         self.assertEqual(track.deck["track_id"], "1800")
+        self.assertIs(track.deck["sync_filter"], False)
         self.assertEqual(len(track.deck["tracks"]), 1801)
         self.assertFalse(track.deck["play"])
         engine.set_parameter(0, "play", True)
         engine.request("update_deck_catalog", track_index=0,
-                       catalog=make_catalog("set", self.playlist_entries(1900)))
+                       catalog=make_catalog("set", self.playlist_entries(1900), sync_filter=False))
         updated = engine.tracks[0]
         self.assertEqual((updated.worker_pid, updated.generation), (track.worker_pid, track.generation))
         self.assertEqual(updated.plugin.token, track.plugin.token)
@@ -299,14 +302,14 @@ class DeckOwnerTests(unittest.TestCase):
         worker.request("set_parameter", name="nudge", value=1)
         before = worker.request("sync_state")["state"]
         entries = before["deck"]["tracks"]
-        worker.request("update_deck_catalog", catalog=make_catalog("set", entries[1:]))
+        worker.request("update_deck_catalog", catalog=make_catalog("set", entries[1:], sync_filter=False))
         track = worker.track
         for key in ("track_id", "cue", "position", "play", "pitch", "nudge"):
             self.assertEqual(track.deck[key], before["deck"][key])
         self.assertEqual(track.plugin.token, before["plugin"].token)
         self.assertEqual((track.gain, track.muted, track.solo), (0.375, True, True))
         self.assertEqual(track.plugin.values["index"], 1)
-        worker.request("update_deck_catalog", catalog=make_catalog("set", entries[2:]))
+        worker.request("update_deck_catalog", catalog=make_catalog("set", entries[2:], sync_filter=False))
         self.assertEqual(track.deck["track_id"], "3")
         self.assertFalse(track.deck["play"])
         self.assertEqual(track.deck["position"], 0)
@@ -344,11 +347,13 @@ class DeckOwnerTests(unittest.TestCase):
 
     def test_failed_initial_load_retains_previous_source_and_generation(self):
         engine = self.remote()
-        engine.request("load_deck", track_index=0, catalog=make_catalog("set", self.entries))
+        engine.request("load_deck", track_index=0,
+                       catalog=make_catalog("set", self.entries, sync_filter=False))
         previous = engine.tracks[0]
         with self.assertRaises((RuntimeError, ValueError, FileNotFoundError)):
             engine.request("load_deck", track_index=0,
-                           catalog=make_catalog("set", self.entries, track_id="missing"))
+                           catalog=make_catalog("set", self.entries, track_id="missing",
+                                                sync_filter=False))
         self.assertEqual(engine.tracks[0].worker_pid, previous.worker_pid)
         self.assertEqual(engine.tracks[0].generation, previous.generation)
         engine.set_track_state(0, gain=0.5)
@@ -356,7 +361,8 @@ class DeckOwnerTests(unittest.TestCase):
 
     def test_cached_status_updates_while_stopped_and_route_removal_clears_nudge(self):
         engine = self.remote()
-        engine.request("load_deck", track_index=0, catalog=make_catalog("set", self.entries))
+        engine.request("load_deck", track_index=0,
+                       catalog=make_catalog("set", self.entries, sync_filter=False))
         original = engine.tracks[0]
         engine.route(2, 0)
         engine.set_parameter(0, "play", True)
@@ -386,7 +392,7 @@ class DeckOwnerTests(unittest.TestCase):
         worker.request("set_parameter", name="index", value=2)
         self.await_status(worker, lambda s: s["track_id"] == "2", engine)
         entries = worker.track.deck["tracks"]
-        worker.request("update_deck_catalog", catalog=make_catalog("set", entries[1:]))
+        worker.request("update_deck_catalog", catalog=make_catalog("set", entries[1:], sync_filter=False))
         after = worker.request("sync_state")["state"]["effects"][0]
         self.assertEqual(after.token, before.token)
         self.assertEqual(after.native_state, before.native_state)
@@ -402,24 +408,26 @@ class DeckCacheTests(unittest.TestCase):
         engine.tracks = [None] * NUM_TRACKS
         track = InstrumentTrack("deck", "bank", PluginSnapshot(1),
                                 source_type="deck", generation=7,
-                                deck={"track_id": "new", "position": 0,
+                                deck={"track_id": "new", "position": 0, "sync_filter": True,
                                       "song_bpms": {"new": None}, "analyzing_track_id": "new"})
         engine.tracks[0] = track
         stale = {"track_id": "old", "song_bpms": {"old": 150.0},
-                 "analyzing_track_id": "old"}
+                 "analyzing_track_id": "old", "sync_filter": False}
         engine._apply_updates(3, 1, [("deck", 0, 7, stale)])
         engine._apply_updates(4, 2, [("deck", 0, 6, stale)])
         self.assertEqual(track.deck["track_id"], "new")
         self.assertEqual(track.deck["song_bpms"], {"new": None})
         self.assertEqual(track.deck["analyzing_track_id"], "new")
+        self.assertIs(track.deck["sync_filter"], True)
         bpms = {"new": 0.0, "pending": None, "known": 123.5}
         engine._apply_updates(4, 3, [("deck", 0, 7, {
             "position": 2, "pitch": -2, "song_bpms": bpms,
-            "analyzing_track_id": "pending"})])
+            "analyzing_track_id": "pending", "sync_filter": False})])
         self.assertEqual(track.deck["position"], 2)
         self.assertEqual(track.plugin.values["pitch"], -2)
         self.assertEqual(track.deck["song_bpms"], bpms)
         self.assertEqual(track.deck["analyzing_track_id"], "pending")
+        self.assertIs(track.deck["sync_filter"], False)
         self.assertNotIn("song_bpms", track.plugin.values)
         engine._apply_updates(4, 4, [("deck", 0, 7, {
             "song_bpms": {"new": 120.0}, "analyzing_track_id": ""})])

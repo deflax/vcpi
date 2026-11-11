@@ -17,7 +17,7 @@ from vcpi.timeline import MusicalTimeline
 def deck(generation=7):
     plugin = PluginSnapshot(1, values={"index": 1})
     track = InstrumentTrack("Deck", "", plugin, source_type="deck", generation=generation)
-    track.deck = {"sync": False, "pitch": 0.0, "position": 12.0,
+    track.deck = {"sync_filter": False, "sync": False, "pitch": 0.0, "position": 12.0,
                   "duration": 127.0, "tracks": [{"id": str(n)} for n in range(4)]}
     return track
 
@@ -545,3 +545,92 @@ class BeatStepProTests(unittest.TestCase):
         self.assertEqual(self.engine.midi[-1][0], 2)
         with self.assertRaises(ValueError):
             BeatStepProProfile(control_channel=0)
+
+    def filtered_track(self):
+        track = self.engine.tracks[0]
+        track.deck.pop("sync_filter", None)
+        track.deck["tracks"] = [{"id": str(n)} for n in range(8)]
+        track.deck["song_bpms"] = {
+            "0": None, "1": 120.0, "2": 0.0, "3": 128.0, "6": 90.0,
+        }
+        track.plugin.values["index"] = 1
+        return track
+
+    def test_filtered_relative_steps_accumulate_across_gaps_and_clamp(self):
+        for mode, positive, negative in (
+                ("twos_complement", 1, 127), ("offset", 65, 63),
+                ("sign_magnitude", 1, 65)):
+            with self.subTest(mode=mode):
+                track = self.filtered_track()
+                self.configure(rotary_modes=(mode,) * 16)
+                self.engine.commands.clear()
+                for value in (positive,) * 4 + (negative,) * 4:
+                    self.rotary(8, value)
+                self.assertEqual(self.engine.commands, [
+                    (0, "index", index, None, 7) for index in (2, 4, 7, 4, 2)])
+                self.assertEqual(track.plugin.values["index"], 1)
+                binding = next(binding for binding in self.controller.control_bindings()
+                               if binding.control == "Rotary 9")
+                self.assertEqual(binding.range, "1 .. 8")
+
+    def test_filtered_absolute_delta_steps_count_eligible_entries(self):
+        track = self.filtered_track()
+        self.configure(rotary_modes=("absolute",) * 16)
+        self.rotary(8, 64)
+        self.assertEqual(self.engine.commands, [])
+        for value in (65, 66, 68, 67, 65, 0):
+            self.rotary(8, value)
+        self.assertEqual(self.engine.commands, [
+            (0, "index", index, None, 7) for index in (2, 4, 7, 4, 2)])
+        self.assertEqual(track.plugin.values["index"], 1)
+
+    def test_filtered_steps_start_from_unavailable_current_index(self):
+        for current, delta, expected in (
+                (3, 1, 4), (3, -1, 2), (0, 1, 2), (9, -1, 7),
+                (3, 2, 7), (6, -2, 2)):
+            with self.subTest(current=current, delta=delta):
+                track = self.filtered_track()
+                track.plugin.values["index"] = current
+                self.configure(rotary_modes=("offset",) * 16)
+                self.engine.commands.clear()
+                self.rotary(8, 64 + delta)
+                self.assertEqual(self.engine.commands, [(0, "index", expected, None, 7)])
+
+    def test_filtered_steps_follow_updated_analysis_and_optimistic_index(self):
+        track = self.filtered_track()
+        self.rotary(8, 2)
+        self.assertEqual(self.engine.commands, [(0, "index", 4, None, 7)])
+        track.deck["song_bpms"]["3"] = None
+        self.rotary(8, 1)
+        self.assertEqual(self.engine.commands[-1], (0, "index", 7, None, 7))
+        track.deck["song_bpms"]["6"] = 0.0
+        self.rotary(8, 127)
+        self.assertEqual(self.engine.commands[-1], (0, "index", 2, None, 7))
+        self.assertEqual(track.plugin.values["index"], 1)
+        track.deck["song_bpms"]["4"] = 125.0
+        count = len(self.engine.commands)
+        self.controller.control_bindings()
+        self.assertEqual(len(self.engine.commands), count)
+        self.rotary(8, 1)
+        self.assertEqual(self.engine.commands[-1], (0, "index", 5, None, 7))
+
+    def test_filtered_empty_selection_leaves_gain_transport_and_seek_available(self):
+        track = self.filtered_track()
+        track.deck["song_bpms"] = {"0": None, "1": 0.0}
+        for value in (1, 127, 10):
+            self.rotary(8, value)
+        self.assertEqual(self.engine.commands, [])
+        self.rotary(0, 127)
+        self.tap_pad(0)
+        self.rotary(2, 127)
+        self.assertEqual(self.engine.commands, [
+            (0, "mixer", {"gain": 1.0}, None, 7),
+            (0, "play_toggle", 0, None, 7), (0, "seek", 127.0, None, 7)])
+
+    def test_filter_optout_steps_include_pending_failed_and_missing_entries(self):
+        track = self.filtered_track()
+        track.deck["sync_filter"] = False
+        for _ in range(7):
+            self.rotary(8, 1)
+        self.assertEqual(self.engine.commands, [
+            (0, "index", index, None, 7) for index in range(2, 9)])

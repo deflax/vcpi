@@ -143,6 +143,12 @@ playlists. Load an audio file with `track 1 deck song.wav`, or a directory with
 `track 1 deck "/music/Live Set"` to load its supported audio files in filename
 order without scanning subdirectories. Repeat either command to replace the
 whole playlist and reset song memory; mixer, routing and inserts are retained.
+Deck selection defaults to sync-ready audio: loading skips entries without a
+reliable beat grid, and controllers skip pending/unavailable entries while
+keeping original playlist indexes. Add `--no-sync-filter` to load short loops,
+ambient audio or other material for manual playback; the choice is saved with
+the deck. A filtered path with no reliable entries reports an error without
+replacing an existing source.
 Add `--bpm-hint 174` when loading a path to supply its expected median tempo.
 The optional 60–200 BPM hint guides analysis and half/double-time selection,
 without forcing every song to that exact BPM; it is saved with each playlist

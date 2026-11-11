@@ -34,7 +34,8 @@ class DeckFormatTests(unittest.TestCase):
                     asset = root / ("encoded." + extension)
                     subprocess.run(["ffmpeg", "-v", "error", "-i", str(original),
                                     "-y", str(asset)], check=True, capture_output=True)
-                    catalog = {"id": "formats", "tracks": [{"id": extension, "path": str(asset)}]}
+                    catalog = {"id": "formats", "sync_filter": False,
+                               "tracks": [{"id": extension, "path": str(asset)}]}
                     plugin = backend.Plugin(json.dumps(catalog), rate, 512, "deck")
                     transport = backend.Transport(str(root / (extension + ".mmap")), 512, True)
                     runner = backend.TrackRunner(transport, plugin, rate, 512)

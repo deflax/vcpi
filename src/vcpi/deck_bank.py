@@ -55,8 +55,10 @@ def _song_state(*, cue, pitch, sync, phase_offset, position=None, play=False):
 
 def make_catalog(identity, tracks, *, bank_path=None, track_id=None,
                  cue=0, pitch=0, sync=True, phase_offset=0,
-                 position=None, play=False, song_states=None):
+                 position=None, play=False, song_states=None, sync_filter=True):
     """Encode a bounded playlist and durable song state."""
+    if type(sync_filter) is not bool:
+        raise ValueError("deck sync_filter must be a boolean")
     identity = _text(identity, "playlist ID")
     if not isinstance(tracks, list) or not tracks:
         raise ValueError("deck playlist must contain at least one track")
@@ -102,8 +104,18 @@ def make_catalog(identity, tracks, *, bank_path=None, track_id=None,
     catalog = {"version": 1, "id": identity,
                "bank_path": _text(bank_path or f"session:{identity}", "playlist locator"),
                "tracks": entries, "initial_track": initial, **initial_state,
-               "song_states": states}
+               "song_states": states, "sync_filter": sync_filter}
     return validate_catalog(json.dumps(catalog, ensure_ascii=False, separators=(",", ":")))
+
+
+def selectable_indexes(deck):
+    """Return original one-based indexes selectable from cached analysis only."""
+    tracks = deck.get("tracks", ())
+    if not deck.get("sync_filter", True):
+        return list(range(1, len(tracks) + 1))
+    bpms = deck.get("song_bpms", {})
+    return [index for index, entry in enumerate(tracks, 1)
+            if (bpms.get(entry["id"]) or 0) > 0]
 
 
 def validate_catalog(catalog):

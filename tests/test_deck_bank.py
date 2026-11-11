@@ -10,6 +10,7 @@ from vcpi.audio.protocol import CONTROL_LIMIT, STATE_LIMIT, UPDATE_LIMIT
 from vcpi.deck_bank import (
     CATALOG_LIMIT, audio_entry, deck_status_frames, encode_deck_message,
     encode_deck_status, encode_deck_update, make_catalog, receive_deck_status,
+    selectable_indexes,
 )
 from vcpi.state_transport import receive_frame, send_frame
 
@@ -27,6 +28,7 @@ class DeckBankTests(unittest.TestCase):
         self.assertEqual(catalog["version"], 1)
         self.assertEqual(catalog["tracks"][0]["path"], str(self.root / "missing.wav"))
         self.assertEqual(catalog["initial_track"], 1)
+        self.assertIs(catalog["sync_filter"], True)
         self.assertTrue(catalog["sync"])
         self.assertEqual(catalog["phase_offset"], 0)
         self.assertFalse(Path(catalog["tracks"][0]["path"]).exists())
@@ -43,6 +45,29 @@ class DeckBankTests(unittest.TestCase):
         self.assertEqual(catalog["phase_offset"], -0.25)
         with self.assertRaisesRegex(ValueError, "not found"):
             make_catalog("set", tracks, track_id="removed")
+
+    def test_sync_filter_accepts_only_booleans(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                catalog = json.loads(make_catalog("set", self.tracks, sync_filter=enabled))
+                self.assertIs(catalog["sync_filter"], enabled)
+        for invalid in (None, 0, 1, "true", "false", [], {}):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "sync_filter"):
+                make_catalog("set", self.tracks, sync_filter=invalid)
+
+    def test_selectable_indexes_keep_original_positions_and_ignore_hints(self):
+        tracks = [{"id": identity, "bpm_hint": 120}
+                  for identity in ("pending", "ready", "missing", "unavailable", "ready-too")]
+        deck = {"tracks": tracks,
+                "song_bpms": {"pending": None, "ready": 120, "unavailable": 0,
+                              "ready-too": 83}}
+        self.assertEqual(selectable_indexes(deck), [2, 5])
+        self.assertEqual(selectable_indexes({**deck, "sync_filter": True}), [2, 5])
+        self.assertEqual(selectable_indexes({**deck, "sync_filter": False}), [1, 2, 3, 4, 5])
+        self.assertEqual(selectable_indexes({"tracks": tracks}), [])
+        self.assertEqual(selectable_indexes({}), [])
+        self.assertEqual([entry["id"] for entry in tracks],
+                         ["pending", "ready", "missing", "unavailable", "ready-too"])
 
     def test_invalid_playlist_identity_and_entries(self):
         with self.assertRaises(ValueError):

@@ -143,7 +143,7 @@ class NativeTransportTests(unittest.TestCase):
             sample.writeframes(struct.pack("<h", 4096) * 44100)
         catalog = make_catalog("wakeup-test", [
             {"id": "tone", "path": str(sample_path), "title": "Tone"},
-        ], play=True, sync=False)
+        ], play=True, sync=False, sync_filter=False)
         plugin = backend.Plugin(catalog, 44100, 64, "deck")
         engine = backend.Engine(44100, 64)
         self.addCleanup(engine.shutdown)
@@ -207,7 +207,7 @@ class SpawnedTrackTests(unittest.TestCase):
             sample.writeframes(struct.pack("<h", 4096) * 4096)
         self.catalog = make_catalog("process-test", [
             {"id": "audio", "path": str(self.sample), "title": "Audio"},
-        ], play=True, sync=False)
+        ], play=True, sync=False, sync_filter=False)
 
     def worker(self, **kwargs):
         worker = TrackWorker(44100, 64, 2, "load_deck",
@@ -473,7 +473,7 @@ class SpawnedTrackTests(unittest.TestCase):
     def test_invalid_load_preserves_native_validation_error(self):
         catalog = make_catalog("missing", [
             {"id": "missing", "path": str(self.root / "missing.wav"), "title": "Missing"},
-        ])
+        ], sync_filter=False)
         with self.assertRaisesRegex(ValueError, "regular file"):
             TrackWorker(44100, 64, 2, "load_deck", {"catalog": catalog})
 

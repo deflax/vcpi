@@ -15,6 +15,7 @@ from vcpi import midi
 from vcpi.models import NUM_TRACKS
 from vcpi.sequencer import NUM_SEQ_BANKS
 from vcpi.presentation.show_request import SHOW_CONTROLLERS, SHOW_TARGETS, resolve_show
+from vcpi.deck_bank import selectable_indexes
 
 
 from . import assets
@@ -328,12 +329,20 @@ def _complete_track(ctx):
             if args[2:] == ["phase"]:
                 return choices(("reset",))
             if len(args) >= 3 and args[2] not in ("reanalyze", "seek", "cue", "phase"):
-                flags = ("--name", "--bpm-hint")
-                options = args[3:]
-                if (len(options) % 2 or any(flag not in flags for flag in options[::2])
-                        or len(set(options[::2])) != len(options[::2])):
-                    return empty
-                return choices(flag for flag in flags if flag not in options[::2])
+                flags = ("--name", "--bpm-hint", "--no-sync-filter")
+                options, used, offset = args[3:], set(), 0
+                while offset < len(options):
+                    flag = options[offset]
+                    if flag not in flags or flag in used:
+                        return empty
+                    used.add(flag)
+                    if flag == "--no-sync-filter":
+                        offset += 1
+                    else:
+                        if offset + 1 >= len(options) or options[offset + 1].startswith("--"):
+                            return empty
+                        offset += 2
+                return choices(flag for flag in flags if flag not in used)
             return empty
         if mode == "vcv":
             if len(args) == 2:
@@ -396,8 +405,7 @@ def _complete_parameters(ctx):
                         and fx_index is None):
                     track = ctx.host.engine.tracks[track_index]
                     if track.source_type == "deck":
-                        return choices(str(index) for index in
-                                       range(1, len(track.deck.get("tracks", [])) + 1))
+                        return choices(str(index) for index in selectable_indexes(track.deck))
                 if parameter.kind == "bool":
                     return choices(("true", "false"))
                 if parameter.kind == "enum":

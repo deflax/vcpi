@@ -29,7 +29,7 @@ class TrackSessionTests(unittest.TestCase):
             path = root / "session.json"
             host = VcpiCore(session_path=str(path))
             try:
-                host.load_deck(1, str(sample), "Bass")
+                host.load_deck(1, str(sample), "Bass", sync_filter=False)
                 host.engine.set_track_state(1, gain=0.35, muted=True, solo=True)
                 host.route(3, 1)
                 host.sequencer.set_bank(0, ["C4", "E4"], velocity=73)

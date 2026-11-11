@@ -367,14 +367,32 @@ class CompletionTests(unittest.TestCase):
 
     def test_deck_analysis_hint_completion_tracks_remaining_options(self):
         path = 'track 1 deck "/music/Live Set"'
-        self.assertEqual(self.matches(path + " "), ["--bpm-hint", "--name"])
+        self.assertEqual(self.matches(path + " "), ["--bpm-hint", "--name", "--no-sync-filter"])
         self.assertEqual(self.matches(path + " --b"), ["--bpm-hint"])
         for option in ("--bpm-hint", "--name"):
             self.assertEqual(self.matches(path + f" {option} "), [])
-        self.assertEqual(self.matches(path + " --bpm-hint 174 "), ["--name"])
-        self.assertEqual(self.matches(path + ' --name "DnB Set" '), ["--bpm-hint"])
-        self.assertEqual(self.matches(path + ' --name "DnB Set" --bpm-hint 174 '), [])
+        self.assertEqual(self.matches(path + " --bpm-hint 174 "), ["--name", "--no-sync-filter"])
+        self.assertEqual(self.matches(path + ' --name "DnB Set" '), ["--bpm-hint", "--no-sync-filter"])
+        self.assertEqual(self.matches(path + ' --name "DnB Set" --bpm-hint 174 '), ["--no-sync-filter"])
         self.assertEqual(self.matches(path + " --bpm-hint 174 --bpm-hint 83 "), [])
+        self.assertEqual(self.matches(path + " --no-sync-filter "), ["--bpm-hint", "--name"])
+        self.assertEqual(self.matches(path + " --no-sync-filter --bpm-hint 174 "), ["--name"])
+        self.assertEqual(self.matches(path + " --no-sync-filter --no-sync-filter "), [])
+        self.assertEqual(self.matches(path + ' --name DnB --no-sync-filter --bpm-hint 174 '), [])
+
+    def test_deck_index_completion_skips_unready_entries_unless_filter_disabled(self):
+        self.track.source_type = "deck"
+        self.track.plugin.parameters["index"] = ParameterSnapshot(kind="int", range=(1, 4))
+        self.track.deck = {
+            "tracks": [{"id": str(i)} for i in range(1, 5)],
+            "song_bpms": {"1": 120.0, "2": None, "3": 0, "4": 166.0},
+        }
+        self.assertEqual(self.matches("set 1 index "), ["1", "4"])
+        self.track.deck["sync_filter"] = False
+        self.assertEqual(self.matches("set 1 index "), ["1", "2", "3", "4"])
+        self.track.deck["sync_filter"] = True
+        self.track.deck["song_bpms"] = {}
+        self.assertEqual(self.matches("set 1 index "), [])
 
     def test_nested_help_and_option_insertions_match_grammar(self):
         for before, match, expected in (

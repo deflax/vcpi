@@ -59,7 +59,7 @@ class NativeAudioTests(unittest.TestCase):
     def plugin(self):
         catalog = make_catalog("test-deck", [
             {"id": "audio", "path": str(self.sample), "title": "Audio"},
-        ], play=True, sync=False)
+        ], play=True, sync=False, sync_filter=False)
         plugin = NativePlugin(catalog, 44100, 64, "deck")
         object.__setattr__(plugin, "_vcpi_path", "session:test-deck")
         return plugin

@@ -63,7 +63,7 @@ class AudioProcessTests(unittest.TestCase):
     def load_track(self, index, name):
         catalog = make_catalog("process-test", [
             {"id": "audio", "path": str(self.sample), "title": "Audio"},
-        ], sync=False)
+        ], sync=False, sync_filter=False)
         # Exercise replacement of the worker, not an in-place playlist edit.
         self.host.engine.request("load_deck", track_index=index, catalog=catalog, name=name)
         return self.host.engine.tracks[index]

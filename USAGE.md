@@ -523,12 +523,38 @@ Each deck owns an ordered playlist saved inside the session; no separate JSON
 bank file is required. `track <n> deck <path>` replaces the entire playlist and
 resets its remembered song state, even when loading the same path again. It
 retains the track's mixer settings, routing, inserts and existing name unless
-`--name` is supplied. A new list starts on its first song, paused at zero.
+`--name` is supplied. A new list starts paused at zero on its first sync-ready
+entry by default, or its first entry with `--no-sync-filter`.
 
 Use `track 1 deck "/music/Live Set"` to load a directory's supported WAV, AIFF,
 MP3 and FLAC files in filename order. Subdirectories and unsupported files are
 ignored; a directory with no supported audio files reports an error. Symlinks
 resolving to the same file produce only one entry within the new list.
+
+**Sync-ready filtering is enabled by default.** Loading scans from the initial
+entry for a readable file with a reliable detected beat grid. Unreadable files
+and rejected grids are skipped; if none qualify, loading reports an error and
+retains any existing source. Entries are never removed or renumbered.
+
+```text
+track 1 deck "/music/DnB" --bpm-hint 174
+track 2 deck "/music/Loops" --no-sync-filter
+```
+
+Use `--no-sync-filter` for short loops, ambient audio, or manual beatmatching.
+It disables selection filtering, not the separate playback `sync` control.
+The filter choice is saved with the deck and restored with the session;
+omitting the setting means filtering is on.
+
+With filtering enabled, MIDI Mix, BeatStep Pro, generic MIDI selection and
+index completion offer only entries whose analysis has completed successfully.
+Pending entries become selectable as background analysis finishes. Explicit
+`set <track> index <n>` may prioritize analysis of a pending entry, but an
+unreliable result is rejected before switching and the current audio continues.
+`show <track>` displays the filter mode and marks unavailable entries excluded.
+Filtering does not change play/pause, seek, cue, or reanalysis behavior for the
+already-loaded entry. In particular, reanalysis still pauses immediately and
+can publish an unavailable grid without automatically changing selection.
 
 If you know the collection's approximate median tempo, supply an optional hint:
 
@@ -544,7 +570,7 @@ prefers the half/double-time interpretation proportionally closest to the hint,
 within the supported 60–200 BPM range. A song near 166 can therefore remain
 166 with a hint of 174, rather than being forced to 174 or reported as 83.
 The hint does not change the shared playback tempo. Omit it for automatic
-analysis. `--name` and `--bpm-hint` may appear in either order.
+analysis. `--name`, `--bpm-hint` and `--no-sync-filter` may appear in any order.
 
 Hints are retained per song in session playlists and reused for reanalysis.
 Hinted and unhinted cache entries are separate, so loading the same audio with
@@ -605,7 +631,7 @@ and `set <track> nudge 0`. Sync and manual speed changes still change pitch.
 | `show 1 --details` | Full cached deck diagnostics, requested versus applied selection, detected grid and playlist paths |
 | `track 1 deck reanalyze` | Pause at the current position, discard this song's cached grid and run detection again |
 | `set 1 index 2` | Request playlist entry 2 on mixer track 1; acknowledgement means accepted, not loaded |
-| `track 1 deck <audio-file|directory> [--bpm-hint <bpm>] [--name <label>]` | Replace the playlist, optionally supplying its expected median tempo; retain mixer, routing and inserts |
+| `track 1 deck <audio-file|directory> [--bpm-hint <bpm>] [--no-sync-filter] [--name <label>]` | Replace the playlist; default sync-ready selection, optional manual-audio opt-out and expected median tempo; retain mixer, routing and inserts |
 | `track 1 clear` | Remove the whole deck |
 | `set 1 seek 90` | Set position in source seconds, bounded to duration; retain play/pause state |
 | `set 1 play true` / `set 1 play false` | Resume / pause, preserving source position |

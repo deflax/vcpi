@@ -5,8 +5,8 @@ Saved state includes:
     enabled, muted, solo, insert effect paths/names, and opaque native VST3 state
   - Master effects: paths, names, and opaque native VST3 state
   - Decks: inline playlist with optional per-entry BPM hints, stable active ID,
-    position/play and durable per-song cue, pitch, sync and phase correction;
-    no transient nudge or VST chunk
+    position/play, sync-ready filtering and durable per-song cue, pitch, sync
+    and phase correction; no derived analysis, transient nudge or VST chunk
   - Shared track focus (one-based)
   - Master gain
   - MIDI channel -> track routing
@@ -77,6 +77,11 @@ def restore(host: VcpiCore, path: Optional[Path] = None, *,
     clock_source = data.get("clock_source", "auto")
     if "clock_source" not in skip_settings and clock_source not in ("auto", "internal", "link", "beatstep"):
         raise ValueError("clock_source must be auto, internal, link, or beatstep")
+    for track in data.get("tracks", []):
+        if track is not None and track.get("kind") == "deck":
+            deck = track.get("deck", {})
+            if isinstance(deck, dict) and type(deck.get("sync_filter", True)) is not bool:
+                raise ValueError("deck sync_filter must be a boolean")
 
     # Native loading and every restored control happen while audio is paused.
     was_running = host.engine.running

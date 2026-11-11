@@ -7,6 +7,7 @@ from itertools import islice
 from threading import RLock
 from typing import Optional
 
+from vcpi.deck_bank import selectable_indexes
 from vcpi.midi import MidiInPort, MidiOutPort
 from vcpi.controllers.bindings import (
     ControlBinding, cached_value, input_availability, parameter_bounds,
@@ -308,7 +309,12 @@ class MidiMixController:
 
         param_name, (lo, hi) = params[knob_idx]
         parameter = track.plugin.parameters[param_name]
-        if parameter.kind == "bool":
+        if track.source_type == "deck" and param_name == "index":
+            indexes = selectable_indexes(track.deck)
+            if not indexes:
+                return
+            mapped = indexes[round(value / 127.0 * (len(indexes) - 1))]
+        elif parameter.kind == "bool":
             mapped = value >= 64
         elif parameter.kind == "enum":
             if not parameter.valid_values:
